@@ -375,9 +375,9 @@ export function createApplicationGateway(
           password: nextConnection.password,
         }),
         options.resourceBasePath,
+        hello?.auth?.recoveryScope ?? nextClient.offlineRecoveryScope,
       );
     };
-    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -624,6 +624,7 @@ export function createApplicationGateway(
         listeners: eventListeners,
       }),
     });
+    updateAvatarContext();
     client = nextClient;
     setConnectionSnapshot({
       client: nextClient,

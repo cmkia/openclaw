@@ -90,7 +90,20 @@ it("keeps display data without persisting authority, executable plugins, or watc
 });
 
 it("excludes incognito roots and descendants and restores no live mutation facts", () => {
-  const row = displayRow("agent:main:visible", "Project", true);
+  const actor = {
+    type: "human" as const,
+    id: "operator",
+    identity: { type: "profile" as const, id: "operator" },
+    avatarUrl: "/api/users/operator/avatar?v=photo",
+  };
+  const participant = { identity: { type: "profile" as const, id: "contributor" } };
+  const row = {
+    ...displayRow("agent:main:visible", "Project", true),
+    owner: { actor, assignedBy: actor, assignedAt: 1 },
+    archivedBy: actor,
+    participants: [participant, participant],
+    participantCount: 2,
+  };
   const privateRow = { ...row, key: "agent:main:private", incognito: true };
   const captured = snapshotSessions(
     [
@@ -103,8 +116,13 @@ it("excludes incognito roots and descendants and restores no live mutation facts
   expect(captured[0]?.children).toEqual([]);
   expect(captured[0]?.snapshotSubtitle).toBeUndefined();
   expect(JSON.stringify(captured)).not.toContain("Private child approval details");
-  const restored = restoreSnapshotSession(captured[0]!, row.key);
+  const admitted = parseSidebarSnapshot({ ...model, sessions: captured })!;
+  const restored = restoreSnapshotSession(admitted.sessions[0]!, row.key);
   expect(restored).toMatchObject({ visuallyActive: true, pinnable: false });
+  expect(restored.owner).toEqual({ actor, assignedAt: 1 });
+  expect(restored.archivedBy).toEqual(actor);
+  expect(restored.participants).toEqual([participant]);
+  expect(restored.participantCount).toBe(2);
   expect([restored.sharingRole, restored.activeRunIds]).toEqual([undefined, undefined]);
 });
 

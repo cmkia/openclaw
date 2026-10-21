@@ -441,28 +441,55 @@ it("retains the workspace name DOM across unrelated sidebar publications and ren
   expect(name()?.textContent).toBe("Harbor renamed");
 });
 
-it("keeps the rendered preview slot after caching without restoring live run authority", () => {
+it("keeps the rendered preview and participant avatars after caching without restoring live authority", () => {
   const { host, container, dom } = createHost("chip");
   host.sessionsShowPreview = true;
   const session = projectSidebarSession({
     key: "agent:main:thread",
     lastMessagePreview: "The report is ready for review.",
+    owner: {
+      actor: {
+        type: "human",
+        id: "ada",
+        label: "Ada",
+        identity: { type: "profile", id: "ada" },
+        avatarUrl: "/api/users/ada/avatar?v=photo",
+      },
+      assignedAt: 1,
+    },
+    participants: [
+      {
+        identity: { type: "profile", id: "bea" },
+        label: "Bea",
+        avatarUrl: "/api/users/bea/avatar?v=photo",
+      },
+    ],
+    participantCount: 1,
   });
   const [current, setCurrent] = createSignal(session);
   const update = mountObservedHost(host, container, (observedHost) => (
     <RecentSession host={observedHost} session={current()} />
   ));
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
+  const avatars = dom.all(".session-owner-stack img");
+  expect(avatars).toHaveLength(2);
   const [cached] = snapshotSessions([session], (row) => ({
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   }));
-  host.sidebarSnapshot = parseSidebarSnapshot({ ...emptySnapshot, sessions: [cached] });
+  const model = parseSidebarSnapshot({
+    ...emptySnapshot,
+    ownershipAvatars: true,
+    sessions: [cached],
+  });
+  host.sessionOwnershipVisibility = { filters: false, avatars: false };
+  host.restoreSidebarSnapshot(model!);
   expect(host.sidebarSnapshot).not.toBeNull();
   const restored = restoreSnapshotSession(host.sidebarSnapshot!.sessions[0]!, session.key);
   setCurrent(restored);
   update();
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   expect(dom.query(".sidebar-recent-session--single-line")).toBeNull();
+  expect(dom.all(".session-owner-stack img")).toEqual(avatars);
   expect([restored.hasActiveRun, restored.attention]).toEqual([false, { kind: "none" }]);
   expect(
     dom.all("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled"),

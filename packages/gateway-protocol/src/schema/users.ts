@@ -62,6 +62,7 @@ export const UserProfileSchema = closedObject({
   id: UserProfileIdSchema,
   displayName: Type.Union([UserProfileDisplayNameSchema, Type.Null()]),
   avatarMime: Type.Union([UserProfileAvatarMimeSchema, Type.Null()]),
+  avatarRevision: Type.Optional(NonEmptyString),
   mergedInto: Type.Union([UserProfileIdSchema, Type.Null()]),
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),

@@ -117,8 +117,54 @@ it.each(["profile", "agent"] as const)(
   },
 );
 
+it.each(["account", "host"] as const)(
+  "retains hello's same-account image but clears it on %s replacement",
+  async (replacement) => {
+    const { fetchAvatar, revoke } = mockImages(["blob:account-a", "blob:account-b"], "saved-token");
+    setAvatarGatewayOrigin(gateway, ["saved-token"], "", "account-a");
+    const view = mountImage(profile());
+    await view.loaded("blob:account-a");
+    view.image()!.dispatchEvent(new Event("load"));
+    flush();
+
+    setAvatarGatewayOrigin(gateway, ["device-token", "saved-token"], "", "account-a");
+    flush();
+    expect(view.image()?.getAttribute("src")).toBe("blob:account-a");
+    expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(revoke).not.toHaveBeenCalled();
+
+    const response = createDeferred<Response>();
+    fetchAvatar.mockReturnValueOnce(response.promise);
+    setAvatarGatewayOrigin(
+      replacement === "host" ? "https://other-gateway.example.test" : gateway,
+      ["device-token", "saved-token"],
+      "",
+      replacement === "account" ? "account-b" : "account-a",
+    );
+    flush();
+    expect(view.image()?.getAttribute("src")).toBeNull();
+    expect(view.frame()?.getAttribute("data-avatar-state")).toBe("pending");
+    expect(revoke).toHaveBeenCalledWith("blob:account-a");
+    response.resolve(imageResponse());
+    await view.loaded("blob:account-b");
+  },
+);
+
 it("preserves the image across authenticated revision updates", async () => {
   const { fetchAvatar } = mockImages(["blob:v1", "blob:v2"]);
+  const replacement = createDeferred<Response>();
+  const decoded = createDeferred<void>();
+  fetchAvatar
+    .mockImplementationOnce(async () => imageResponse())
+    .mockImplementationOnce(() => replacement.promise);
+  vi.stubGlobal(
+    "Image",
+    class {
+      src = "";
+      decode = () => decoded.promise;
+    },
+  );
   const identity = profile();
   const view = mountImage(identity);
   expect(view.frame()?.classList.contains("is-pending")).toBe(true);
@@ -135,8 +181,15 @@ it("preserves the image across authenticated revision updates", async () => {
     expect.objectContaining({ headers: { Authorization: "Bearer avatar-token" } }),
   );
   image.dispatchEvent(new Event("load"));
+  flush();
   view.update(profile(2));
-  expect(view.frame()?.classList.contains("is-pending")).toBe(true);
+  expect(image.getAttribute("src")).toBe("blob:v1");
+  expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
+  replacement.resolve(imageResponse());
+  await replacement.promise;
+  await Promise.resolve();
+  expect(image.getAttribute("src")).toBe("blob:v1");
+  decoded.resolve();
   await view.loaded("blob:v2");
   image.dispatchEvent(new Event("load"));
   flush();

@@ -1,5 +1,5 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe() {
+export function warmReloadProbe(connectNotBeforeMs = 0) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
@@ -20,6 +20,7 @@ export function warmReloadProbe() {
     orderHash: number;
     headers: string[];
     avatars: string[];
+    avatarStates: Array<Array<{ state: string; src: string | null }>>;
     retained: number;
   }> = [];
   let cachedSidebarRows: Element[] = [];
@@ -155,7 +156,7 @@ export function warmReloadProbe() {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
             pending.set(frame.id, frame.method);
-            if (frame.method === "connect") {
+            if (frame.method === "connect" && performance.now() >= connectNotBeforeMs) {
               mark("connectSent");
             } else if (milestones.hello !== undefined) {
               mark("firstPostHelloRpc");
@@ -276,6 +277,23 @@ export function warmReloadProbe() {
         avatars: sidebarRows.map((row) =>
           [...row.querySelectorAll("img")].map((img) => img.getAttribute("src") ?? "").join("|"),
         ),
+        avatarStates: sidebarRows.map((row) => {
+          const avatars = row.querySelectorAll(".sidebar-session-indicator [data-avatar-state]");
+          return avatars.length
+            ? [...avatars].map((avatar) => {
+                const image = avatar.querySelector("img");
+                return {
+                  state:
+                    avatar.getAttribute("data-avatar-state") === "loaded" && image?.naturalWidth
+                      ? "image"
+                      : avatar.querySelector(".identity-avatar__agent-face, .identity-avatar__text")
+                        ? "icon"
+                        : "initials",
+                  src: image?.getAttribute("src") ?? null,
+                };
+              })
+            : [{ state: "icon", src: null }];
+        }),
         retained: cachedSidebarRows.filter((row) => row.isConnected).length,
       });
     }

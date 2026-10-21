@@ -14,6 +14,7 @@ const photo = {
   id: "photo",
   displayName: "Photo Person",
   hasAvatar: true,
+  avatarRevision: "photo-content-png",
   updatedAt: 7,
   createdAt: 1,
   avatarMime: null,
@@ -101,14 +102,24 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
     profiles: [
       photo,
       { ...photo, id: "absent", hasAvatar: false },
-      { ...photo, id: "gravatar", hasAvatar: false, emails: ["vince@example.com"] },
+      {
+        ...photo,
+        id: "gravatar",
+        hasAvatar: false,
+        emails: ["vince@example.com"],
+        avatarRevision: "7",
+      },
       { ...photo, id: "old", mergedInto: "photo", hasAvatar: false },
       { ...photo, id: "cycle", mergedInto: "cycle" },
     ],
   });
   await directory.load();
-  expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
-  expect(profileAvatarUrl(directory.get("old"))).toBe("/api/users/photo/avatar?v=7");
+  expect(profileAvatarUrl(directory.get("photo"))).toBe(
+    "/api/users/photo/avatar?v=photo-content-png",
+  );
+  expect(profileAvatarUrl(directory.get("old"))).toBe(
+    "/api/users/photo/avatar?v=photo-content-png",
+  );
   expect(profileAvatarUrl(directory.get("absent"))).toBeUndefined();
   expect(profileAvatarUrl(directory.get("gravatar"))).toBe("/api/users/gravatar/avatar?v=7");
   expect(profileAvatarUrl(directory.get("unknown"))).toBeUndefined();
@@ -129,7 +140,9 @@ it("retires directory facts and ignores pending replies when the connection is r
     client: createTestGatewayClient(async () => ({ profiles: [{ ...photo, updatedAt: 8 }] })),
   });
   await directory.load();
-  expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=8");
+  expect(profileAvatarUrl(directory.get("photo"))).toBe(
+    "/api/users/photo/avatar?v=photo-content-png",
+  );
   stop();
   expect(directory.get("photo")).toBeUndefined();
 });
@@ -145,5 +158,7 @@ it("waits for roster access while a profile-only guest stays on known identity",
   publish({ hello: rosterHello() });
   await directory.load();
   expect(request).toHaveBeenCalledTimes(1);
-  expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
+  expect(profileAvatarUrl(directory.get("photo"))).toBe(
+    "/api/users/photo/avatar?v=photo-content-png",
+  );
 });

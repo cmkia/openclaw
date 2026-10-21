@@ -98,6 +98,7 @@ function selectUserProfileListItemById(
         "id",
         "display_name",
         "avatar_mime",
+        "avatar_sha256",
         "merged_into",
         ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
         "created_at",
@@ -111,9 +112,9 @@ function selectUserProfileListItemById(
   }
   return {
     ...toUserProfile(profile),
+    ...projectUserProfileDisplay(profile),
     emails: selectUserProfileEmails(db, profileId),
     githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
-    hasAvatar: profile.has_avatar === 1,
   };
 }
 

@@ -1,3 +1,4 @@
+import { isSessionParticipantIdentity } from "../../../packages/gateway-protocol/src/compiled/sender-identity.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
@@ -14,6 +15,14 @@ const userFields = {
   identity: json.optional(identity),
 };
 const user = json.object(userFields);
+const participantIdentity = json.checked(isSessionParticipantIdentity);
+const actor = json.object({
+  type: json.enumeration(["human", "agent", "system"]),
+  id: optionalText,
+  label: optionalText,
+  avatarUrl: optionalText,
+  identity: json.optional(participantIdentity),
+});
 const sessionFields = {
   key: json.refine(text, (key) => !isIncognitoSessionKey(key)),
   label: text,
@@ -32,6 +41,15 @@ const sessionFields = {
   isChild: json.boolean,
   category: optionalText,
   boardFace: json.optional(json.enumeration(["chat", "dashboard"])),
+  owner: json.optional(json.object({ actor, assignedAt: json.optional(json.number) })),
+  archivedBy: json.optional(actor),
+  participants: json.optional(
+    json.array(
+      json.object({ identity: participantIdentity, label: optionalText, avatarUrl: optionalText }),
+      1,
+    ),
+  ),
+  participantCount: json.optional(json.number),
   incognito: json.optional(json.literal(false)),
 };
 export type SidebarSnapshotSession = json.SnapshotObject<typeof sessionFields> & {
@@ -53,6 +71,7 @@ export const sidebarSnapshotSchema = json.object({
   }),
   roster: json.nullable(bootRosterSchema),
   mode: json.enumeration(["chip", "roster"]),
+  ownershipAvatars: json.optional(json.boolean),
   navigationView: json.enumeration(["pages", "sessions", "online"]),
   pages: json.array(session),
   pageScopeId: json.nullable(text),

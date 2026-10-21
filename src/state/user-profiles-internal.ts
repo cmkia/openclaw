@@ -104,11 +104,11 @@ export function projectUserProfileListItem(
 ) {
   return {
     ...toUserProfile(row),
+    ...projectUserProfileDisplay(row),
     emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
       Buffer.compare(Buffer.from(left), Buffer.from(right)),
     ),
     githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
-    hasAvatar: row.has_avatar === 1,
   };
 }
 

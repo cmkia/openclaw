@@ -859,7 +859,9 @@ try {
           : "chip",
     },
   );
-  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const warmProbes = values["warm-reload"]
+    ? `\n(${warmReloadProbe.toString()})(${connectNotBeforeMs});`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";

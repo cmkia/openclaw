@@ -23,14 +23,15 @@ describe("sharing identity display", () => {
         {
           id: "profile-1",
           label: "new-name@example.test",
-          updatedAt: 2,
-          hasAvatar: false,
+          avatarRevision: "profile-image-png",
+          hasAvatar: true,
         },
       ],
     });
     expect(identities.find((item) => item.id === "profile-1")).toMatchObject({
       label: "new-name@example.test",
       identity: { type: "profile", id: "profile-1" },
+      avatarUrl: "/api/users/profile-1/avatar?v=profile-image-png",
     });
     expect(identities.find((item) => item.id === "agent-1")).toMatchObject({
       identity: { type: "agent", id: "agent-1" },

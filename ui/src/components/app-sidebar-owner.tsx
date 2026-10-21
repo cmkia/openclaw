@@ -100,6 +100,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
     this.sidebarSnapshot = model;
+    this.sessionOwnershipVisibility = { filters: false, avatars: model.ownershipAvatars ?? false };
     this.navigationView = model.navigationView;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
     const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];

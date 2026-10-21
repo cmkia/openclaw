@@ -7,6 +7,8 @@ import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 let appGatewayOrigin: string | null = null;
 let appGatewayResourceBasePath = "";
 let appGatewayAuthTokens: readonly string[] = [];
+let appGatewayRecoveryScope: string | undefined;
+let generation = 0;
 let gatewayRequests = new AbortController();
 // More than one cache is keyed by the Gateway HTTP context (avatars,
 // geolocation), so every subscriber must be notified on a switch. A single slot
@@ -20,6 +22,7 @@ export function readAvatarGatewayContext() {
     origin: appGatewayOrigin,
     resourceBasePath: appGatewayResourceBasePath,
     authTokens: appGatewayAuthTokens,
+    generation,
   };
 }
 
@@ -66,6 +69,7 @@ export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authTokens: readonly string[] = [],
   resourceBasePath = "",
+  recoveryScope?: string,
 ): void {
   const nextOrigin =
     gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
@@ -74,19 +78,23 @@ export function setAvatarGatewayOrigin(
   const documentOrigin = globalThis.location?.origin;
   const nextResourceBasePath =
     nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
-  if (
+  const changed =
     appGatewayOrigin !== nextOrigin ||
     appGatewayResourceBasePath !== nextResourceBasePath ||
-    appGatewayAuthTokens.length !== authTokens.length ||
-    appGatewayAuthTokens.some((token, index) => token !== authTokens[index])
-  ) {
+    appGatewayRecoveryScope !== recoveryScope ||
+    (!recoveryScope &&
+      (appGatewayAuthTokens.length !== authTokens.length ||
+        appGatewayAuthTokens.some((token, index) => token !== authTokens[index])));
+  appGatewayOrigin = nextOrigin;
+  appGatewayResourceBasePath = nextResourceBasePath;
+  appGatewayAuthTokens = [...authTokens];
+  appGatewayRecoveryScope = recoveryScope;
+  if (changed) {
     // A replaced credential context must not finish an old fetch or advance
     // its rejected credential to another saved secret.
     gatewayRequests.abort();
     gatewayRequests = new AbortController();
+    generation += 1;
     gatewayContextResets.publish();
   }
-  appGatewayOrigin = nextOrigin;
-  appGatewayResourceBasePath = nextResourceBasePath;
-  appGatewayAuthTokens = [...authTokens];
 }

@@ -37,6 +37,11 @@ export function snapshotSessions(
         category: row.category,
         archived: row.archived,
         boardFace: row.boardFace,
+        owner: row.owner && { actor: row.owner.actor, assignedAt: row.owner.assignedAt },
+        archivedBy: row.archivedBy,
+        // The compact stack shows one participant face and a count for the rest.
+        participants: row.participants?.slice(0, 1),
+        participantCount: row.participantCount ?? row.participants?.length,
         childrenDisplayMode: display?.childrenDisplayMode,
         // Parent attention can summarize private descendants even after their rows are omitted.
         snapshotSubtitle: containsIncognito(row.children) ? undefined : display?.snapshotSubtitle,

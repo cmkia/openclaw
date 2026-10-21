@@ -11,7 +11,7 @@ export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[numb
 
 export type UserProfile = Omit<
   UserProfileListItem,
-  "emails" | "githubIdentity" | "hasAvatar" | "effectiveRole" | "roleSource"
+  "emails" | "githubIdentity" | "hasAvatar" | "avatarRevision" | "effectiveRole" | "roleSource"
 >;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";

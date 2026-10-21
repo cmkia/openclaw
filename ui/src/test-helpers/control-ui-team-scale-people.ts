@@ -3,6 +3,10 @@ import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 
 export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
+export const TEAM_SCALE_AVATAR_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAALElEQVR4nO3NMQkAAAwDsEqv9Jko7AnkT9L+EIvFYrFYLBaLxWKxWCwWi3cOaSNAW3upfawAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function personId(index: number) {
   return `team-person-${String(index + 1).padStart(3, "0")}`;
@@ -20,7 +24,9 @@ export function createTeamScalePeople(
     self: index === 0,
     name: `Fixture person ${String(index + 1).padStart(3, "0")}`,
     email: `person-${index + 1}@example.test`,
-    ...(avatars ? { avatarUrl: `/api/users/${personId(index)}/avatar?v=${now}` } : {}),
+    ...(avatars
+      ? { avatarUrl: `/api/users/${personId(index)}/avatar?v=fixture-${index}-png` }
+      : {}),
     instanceId: index === 0 ? TEAM_SCALE_SELF_INSTANCE_ID : `team-client-${index + 1}`,
     mode: "webchat",
     platform: "MacIntel",
@@ -31,7 +37,7 @@ export function createTeamScalePeople(
     lastActivityAt: now - index * 1_000,
     lastInputSeconds: index,
   }));
-  const profiles: UserProfile[] = people.map((person) => ({
+  const profiles: UserProfile[] = people.map((person, index) => ({
     id: person.id,
     displayName: person.name ?? null,
     emails: person.email ? [person.email] : [],
@@ -41,16 +47,14 @@ export function createTeamScalePeople(
     mergedInto: null,
     createdAt: now - 86_400_000,
     updatedAt: now,
+    avatarRevision: `fixture-${index}-png`,
   }));
   const sharingPeople = options.sharing ? people.slice(34, 82) : [];
   const avatarAssets = new Map<string, { body: Buffer; contentType: string }>();
   if (options.sharing) {
     const asset = {
       contentType: "image/png",
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAALElEQVR4nO3NMQkAAAwDsEqv9Jko7AnkT9L+EIvFYrFYLBaLxWKxWCwWi3cOaSNAW3upfawAAAAASUVORK5CYII=",
-        "base64",
-      ),
+      body: TEAM_SCALE_AVATAR_PNG,
     };
     for (const profile of profiles.slice(34, 82)) {
       profile.hasAvatar = true;
@@ -72,7 +76,7 @@ export function createTeamScalePeople(
           type: "human",
           identity: person.identity,
           label: person.name,
-          avatarUrl: `/api/users/${person.id}/avatar?v=${now}`,
+          avatarUrl: person.avatarUrl,
         })),
       }
     : undefined;

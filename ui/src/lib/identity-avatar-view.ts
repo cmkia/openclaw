@@ -1,4 +1,5 @@
 import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
+import { readAvatarGatewayContext } from "./identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "./identity-avatar-loader.ts";
 import {
   resolveAvatar,
@@ -11,7 +12,12 @@ export type IdentityAvatarView = {
   fallback: Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
   imageUrl: string | Promise<string | null> | null;
   pending: boolean;
+  key?: string;
 };
+
+function avatarPresentationKey(url: string): string {
+  return `${readAvatarGatewayContext().generation}:${url.split("?")[0]}`;
+}
 
 /** Resolve one user identity consistently across the roster, profile, and chat. */
 export function resolveIdentityAvatarView(identity: IdentityAvatarInput): IdentityAvatarView {
@@ -22,6 +28,7 @@ export function resolveIdentityAvatarView(identity: IdentityAvatarInput): Identi
     fallback,
     imageUrl,
     pending: imageUrl !== null && typeof imageUrl !== "string",
+    key: avatar.kind === "profile" ? avatarPresentationKey(avatar.url) : undefined,
   };
 }
 
@@ -41,5 +48,6 @@ export function resolveAgentIdentityAvatarView(agent: AgentIdentity) {
   return {
     imageUrl,
     pending: agent.pending ?? imageUrl !== null,
+    key: agent.avatar ? avatarPresentationKey(agent.avatar) : undefined,
   };
 }

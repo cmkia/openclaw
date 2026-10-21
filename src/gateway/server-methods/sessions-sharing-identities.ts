@@ -42,7 +42,7 @@ export function knownSessionIdentities(params: {
       identity: { type: "profile", id: profile.id },
       label: profile.label,
       ...(profile.hasAvatar
-        ? { avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt) }
+        ? { avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.avatarRevision) }
         : {}),
     });
   }

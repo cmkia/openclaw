@@ -6,6 +6,7 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   userProfileDisplaySelection,
+  projectUserProfileDisplay,
   userProfilesDb,
   toUserProfile,
 } from "./user-profiles-internal.js";
@@ -57,9 +58,9 @@ export function readUserProfileSnapshotSync(options: OpenClawStateDatabaseOption
       return {
         profiles: profiles.map((profile) =>
           Object.assign(toUserProfile(profile), {
+            ...projectUserProfileDisplay(profile),
             emails: emailsByProfile.get(profile.id) ?? [],
             githubIdentity: githubIdentities.get(profile.id) ?? null,
-            hasAvatar: profile.has_avatar === 1,
           }),
         ),
       };

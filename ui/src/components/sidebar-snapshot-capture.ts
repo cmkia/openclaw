@@ -112,6 +112,7 @@ export function captureSidebarSnapshotModel(
     },
     roster: bootRoster,
     mode: host.sidebarAgentsMode,
+    ownershipAvatars: host.sessionOwnershipVisibility.avatars,
     navigationView: host.navigationView,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>

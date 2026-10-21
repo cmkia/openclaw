@@ -21,6 +21,7 @@ import {
 } from "./control-ui-team-scale-inventory.ts";
 import {
   createTeamScalePeople,
+  TEAM_SCALE_AVATAR_PNG,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
 import {
@@ -153,11 +154,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     }
     if (options.sidebarLiveChurn || options.sidebarAvatars) {
       assets.set(`/api/users/${person.id}/avatar`, {
-        contentType: "image/svg+xml",
-        body:
-          index % 6 === 2
-            ? "synthetic invalid image"
-            : `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="hsl(${(index * 37) % 360} 55% 45%)"/><text x="20" y="26" fill="white" text-anchor="middle" font-size="17">${index + 1}</text></svg>`,
+        contentType: "image/png",
+        body: index % 6 === 2 ? "synthetic invalid image" : TEAM_SCALE_AVATAR_PNG,
         ...(index % 6 === 1 ? { status: 404 } : {}),
         ...(index % 6 === 3 ? { delayMs: 600 } : {}),
       });

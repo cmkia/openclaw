@@ -197,7 +197,7 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
       )[0] ||
       profile.id,
     hasAvatar: profile.has_avatar === 1,
-    updatedAt: profile.updated_at,
+    avatarRevision: projectUserProfileDisplay(profile).avatarRevision,
   }));
 }
 
