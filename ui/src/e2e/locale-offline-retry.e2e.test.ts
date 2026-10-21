@@ -97,9 +97,11 @@ suite.define(() => {
           await picker.locator('[role="option"][data-value="system"]').textContent(),
         ).toContain("Svenska");
       }
-      await page.screenshot({
-        path: path.join(artifacts, `${scenario.name}-picker-${stage}-reload.png`),
-      });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          path: path.join(artifacts, `${scenario.name}-picker-${stage}-reload.png`),
+        });
+      }
     }
     const browserState = {
       ...(await page.evaluate(() => ({
