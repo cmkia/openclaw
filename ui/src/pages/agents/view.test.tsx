@@ -65,6 +65,7 @@ function renderFiles(
         return { ...createProps().readData(), ...this };
       },
       agentId: "alpha",
+      listRead: null,
       agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
