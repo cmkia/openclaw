@@ -195,7 +195,12 @@ it.each<HandoffCase>([
   ],
 ])(
   "Windows handoff repair census: %s",
-  (_name, facts, result, { sid = "S-1-5-21-100", legacy, parents, familyExited } = {}) => {
+  (
+    _name,
+    facts,
+    result,
+    { sid = "S-1-5-21-100", legacy, parents, familyExited }: NonNullable<HandoffCase[3]> = {},
+  ) => {
     const matching = result === "matching";
     const unverified = result === "unverified";
     windowsSid.mockReturnValue(sid ?? undefined);

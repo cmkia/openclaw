@@ -240,7 +240,7 @@ export function holdControlSessionPublication<Consumer>(options: {
     nativeHeld,
     state,
     release,
-    dispose() {
+    dispose: () => {
       options.signal.removeEventListener("abort", release);
       producerScope.disable();
       options.consumerScope.disable();

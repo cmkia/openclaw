@@ -149,7 +149,7 @@ describe("method scope resolution and authorization", () => {
     ["sessions.patch", { ...guarded, permissionMode: "full" }, "operator.admin", "operator.write"],
   ] satisfies [string, unknown, string, string?][])(
     "%s (%j) requires %s",
-    (method, params, scope, denied) => expectAccess(scope, method, params, denied),
+    (method, params, scope, denied?: string) => expectAccess(scope, method, params, denied),
   );
 
   it("leaves node-only pending drain outside operator scopes", () => {

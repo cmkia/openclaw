@@ -566,7 +566,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     });
     interceptRegistryWrite(runId, (next) => {
       if (!next?.killIntent || heldClaim) {
-        return;
+        return undefined;
       }
       heldClaim = true;
       return async () => {

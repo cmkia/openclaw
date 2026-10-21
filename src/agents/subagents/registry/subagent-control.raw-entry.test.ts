@@ -532,6 +532,7 @@ it("keeps a watched registration current while the other raw owner commits", asy
       entered.resolve();
       return release.promise;
     }
+    return undefined;
   });
   const pending = send("main", "main-concurrent-turn");
   try {

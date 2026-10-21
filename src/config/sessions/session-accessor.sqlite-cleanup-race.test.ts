@@ -45,6 +45,7 @@ const hooks = vi.hoisted(() => ({
   synchronous: false,
   before: undefined as (() => Promise<void>) | undefined,
   after: undefined as (() => void | Promise<void>) | undefined,
+  afterSync: undefined as (() => void) | undefined,
   observe: undefined as ((sessionIds: string[]) => void) | undefined,
   publicationFailure: undefined as Error | undefined,
 }));
@@ -62,7 +63,7 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
       hooks.observe?.(args[0].map((plan) => plan.sessionId));
       const result = await actual.materializeSessionStateDeletePlans(...args);
       if (hooks.synchronous) {
-        hooks.after?.();
+        hooks.afterSync?.();
       } else {
         await hooks.after?.();
       }
@@ -419,7 +420,7 @@ describe("generation cleanup races", () => {
   });
 
   afterEach(() => {
-    hooks.after = undefined;
+    hooks.afterSync = undefined;
     hooks.observe = undefined;
   });
 
@@ -492,7 +493,7 @@ describe("generation cleanup races", () => {
       hooks.observe = (ids) => {
         [plannedId] = ids;
       };
-      hooks.after = () => {
+      hooks.afterSync = () => {
         if (injected || !plannedId || (changed === "new history") !== (plannedId === currentId)) {
           return;
         }
@@ -587,7 +588,7 @@ describe("generation cleanup races", () => {
     hooks.observe = ([sessionId]) => {
       materializingSessionId = sessionId;
     };
-    hooks.after = () => {
+    hooks.afterSync = () => {
       materializations += 1;
       if (materializations === 2) {
         const sessionId = expectDefined(materializingSessionId, "Expected planned history");
@@ -654,7 +655,7 @@ describe("cleanup reclamation", () => {
     storePath = path.join(tempDirs.make(), "agents/main/sessions/sessions.json");
   });
   afterEach(() => {
-    hooks.after = undefined;
+    hooks.afterSync = undefined;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -759,7 +760,7 @@ describe("cleanup reclamation", () => {
     assert.ok(expectedEntry, "expected guarded entry");
     const replacement = { ...expectedEntry, label: "concurrent replacement" };
     let materializations = 0;
-    hooks.after = () => {
+    hooks.afterSync = () => {
       if (++materializations === 2) {
         replaceEntrySync(current, replacement);
       }
@@ -833,7 +834,7 @@ describe("cleanup reclamation", () => {
     const samples: number[] = [];
     let previous = 0;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
-    hooks.after = () => {
+    hooks.afterSync = () => {
       previous = performance.now();
       heartbeat = setInterval(() => {
         const time = performance.now();
