@@ -424,7 +424,7 @@ function ChatAudioPlayerContent(
       const waveformRef = elementRef((waveform: HTMLDivElement) => {
         updateWaveformWidth(waveform.getBoundingClientRect().width);
         if (typeof ResizeObserver === "undefined") {
-          return;
+          return undefined;
         }
         let current: HTMLDivElement | null = waveform;
         const observer = new ResizeObserver(([entry]) => {
