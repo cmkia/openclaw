@@ -1,7 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import { withBrowserPage } from "../test-helpers/browser-page.ts";
+import { closeBrowserPage, withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -103,6 +103,28 @@ async function setFixture(page: Page, body: string, attributes = "", head = "") 
   );
 }
 
+async function withStylePage(context: BrowserContext, run: (page: Page) => Promise<void>) {
+  const page = context.pages()[0] ?? (await context.newPage());
+  const viewport = page.viewportSize();
+  let body: Promise<void> | undefined;
+  onTestFinished(async ({ task, signal }) => {
+    if (task.result?.state === "fail" || signal.aborted) {
+      // Closing interrupts timed-out Playwright work before another case can reuse the page.
+      await closeBrowserPage(page);
+      await body?.catch(() => {});
+      return;
+    }
+    await page.setContent("");
+    await page.emulateMedia({ reducedMotion: null });
+    if (viewport) {
+      await page.setViewportSize(viewport);
+    }
+  });
+  await page.mouse.move(0, 0);
+  body = run(page);
+  await body;
+}
+
 beforeAll(async () => {
   if (!chromiumAvailable) {
     return;
@@ -133,7 +155,7 @@ afterAll(async () => {
 
 describeBrowserLayout("form controls and app chrome styles", () => {
   it("removes the mask layer from layout when the value is revealed", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
+    await withStylePage(desktopContext, async (page) => {
       await setFixture(
         page,
         `<span
@@ -160,7 +182,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   });
 
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
+    await withStylePage(desktopContext, async (page) => {
       await setFixture(
         page,
         `<div class="settings-row__control">
@@ -193,7 +215,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     "preserves action fill and foreground contrast on hover in %s mode",
     async (theme) => {
       const primary = theme === "custom-light";
-      await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await withStylePage(desktopContext, async (page) => {
         await page.emulateMedia({ reducedMotion: "reduce" });
         await setFixture(
           page,
@@ -246,7 +268,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   it.each(["dark", "light"] as const)(
     "keeps disabled buttons visually settled on hover and press in %s mode",
     async (theme) => {
-      await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await withStylePage(desktopContext, async (page) => {
         await page.emulateMedia({ reducedMotion: "reduce" });
         await setFixture(
           page,
@@ -303,7 +325,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   );
 
   it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
+    await withStylePage(desktopContext, async (page) => {
       await page.setViewportSize({ width, height: 1000 });
       const description =
         "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
@@ -355,7 +377,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   });
 
   it("keeps paired selectors the same width across device labels and viewports", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
+    await withStylePage(desktopContext, async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
       await setFixture(page, mediaDeviceRowsHtml(), 'data-theme-mode="light"');
 
@@ -393,7 +415,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   });
 
   it("keeps mobile control sizes and themed select affordances", async () => {
-    await withBrowserPage(mobileContext.newPage(), async (page) => {
+    await withStylePage(mobileContext, async (page) => {
       await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
       const metrics = await page.evaluate(() => {
         const selectors = [
@@ -512,7 +534,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     "scales %s sidebar typography while preserving input sizes and bounded counts",
     async (mode) => {
       const mobile = mode === "mobile";
-      await withBrowserPage((mobile ? mobileContext : desktopContext).newPage(), async (page) => {
+      await withStylePage(mobile ? mobileContext : desktopContext, async (page) => {
         if (!mobile) {
           await page.setViewportSize({ width: 1200, height: 800 });
         }
@@ -659,7 +681,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   ])(
     "shows the mobile drawer command palette button only where nothing else carries it ($label)",
     async ({ nativeClass, merged, search }) => {
-      await withBrowserPage(mobileContext.newPage(), async (page) => {
+      await withStylePage(mobileContext, async (page) => {
         await setFixture(
           page,
           `<div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
@@ -698,7 +720,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   );
 
   it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
+    await withStylePage(desktopContext, async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
       await setFixture(
         page,
