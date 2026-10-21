@@ -162,14 +162,14 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toStrictEqual([`Test: ${expected}`]);
   });
 
-  it("surfaces secondary auth stabilization in default and verbose health output", () => {
-    const summary = createMultiAccountHealthSummary({
-      healthState: "healthy",
-      statusState: "unstable",
-    });
+  it.each([
+    [{ healthState: "healthy", statusState: "unstable" }, "auth stabilizing"],
+    [{ healthState: "blocked" }, "blocked"],
+  ] as const)("surfaces secondary %j in default and verbose health output", (account, expected) => {
+    const summary = createMultiAccountHealthSummary(account);
     for (const accountMode of ["default", "all"] as const) {
       expect(formatHealthChannelLines(summary, { accountMode })).toStrictEqual([
-        "Matrix: auth stabilizing",
+        `Matrix: ${expected}`,
       ]);
     }
   });

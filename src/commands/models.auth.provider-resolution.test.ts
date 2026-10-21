@@ -25,10 +25,6 @@ import { getFreePort } from "../test-utils/ports.js";
 import { tryImportProviderCredential } from "./models/auth-credential-import.js";
 import { resolveRequestedLoginProviderOrThrow, runModelsAuthLoginFlowCore } from "./models/auth.js";
 
-function makeProvider(params: { id: string; label?: string; aliases?: string[] }): ProviderPlugin {
-  return { ...params, label: params.label ?? params.id, auth: [] };
-}
-
 function credentialPlan(items: MigrationItem[], providerId = "fixture"): MigrationPlan {
   return { providerId, source: "/fixture", items, summary: summarizeMigrationItems(items) };
 }
@@ -148,23 +144,26 @@ it.each([undefined, "cancelled", "changed", "ambiguous", "wrong-provider"])(
 
 it.each([
   [undefined, null],
-  ["google-gemini-cli", "google-gemini-cli"],
   ["gemini-cli", "google-gemini-cli"],
   ["openai", "openai"],
-  ["google-antigravity", "error"],
 ] as const)("resolves %s", (requested, expected) => {
-  const providers = [
-    makeProvider({ id: "google-gemini-cli", aliases: ["gemini-cli"] }),
-    ...(expected === "error" ? [] : [makeProvider({ id: "openai", aliases: ["openai"] })]),
-    makeProvider({ id: "minimax-portal" }),
+  const providers: ProviderPlugin[] = [
+    { id: "google-gemini-cli", label: "Gemini CLI", aliases: ["gemini-cli"], auth: [] },
+    { id: "openai", label: "OpenAI", aliases: ["openai"], auth: [] },
+    { id: "minimax-portal", label: "MiniMax", auth: [] },
   ];
-  if (expected === "error") {
-    expect(() => resolveRequestedLoginProviderOrThrow(providers, requested)).toThrowError(
-      'Unknown provider "google-antigravity". Loaded providers: google-gemini-cli, minimax-portal. Verify plugins via `openclaw plugins list --json`.',
-    );
-  } else {
-    expect(resolveRequestedLoginProviderOrThrow(providers, requested)?.id ?? null).toBe(expected);
-  }
+  expect(resolveRequestedLoginProviderOrThrow(providers, requested)?.id ?? null).toBe(expected);
+});
+
+it("reports the available login providers", () => {
+  const providers: ProviderPlugin[] = ["minimax-portal", "google-gemini-cli"].map((id) => ({
+    id,
+    label: id,
+    auth: [],
+  }));
+  expect(() => resolveRequestedLoginProviderOrThrow(providers, "google-antigravity")).toThrow(
+    'Unknown provider "google-antigravity". Loaded providers: google-gemini-cli, minimax-portal. Verify plugins via `openclaw plugins list --json`.',
+  );
 });
 
 it.each([

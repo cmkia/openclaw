@@ -12,7 +12,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import * as gatewayLocks from "../infra/gateway-lock.js";
-import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -236,38 +235,17 @@ describe("cleanup path removals", () => {
     ).resolves.toBe(false);
   });
 
-  it("keeps the canonical state lock visible until state removal completes", async () => {
-    const { stateDir, env, remove } = await cleanupFixture();
-    const markerPath = path.join(stateDir, "keep.txt");
-    await fs.writeFile(markerPath, "remove me");
-    const pause = pauseRemovalAt(markerPath);
-
-    try {
-      const cleanup = remove();
-      await pause.started;
-
-      await expect(
-        gatewayLocks.acquireGatewayLock({
-          allowInTests: true,
-          env,
-          pollIntervalMs: 2,
-          timeoutMs: 15,
-        }),
-      ).rejects.toBeInstanceOf(gatewayLocks.GatewayLockError);
-
-      pause.resume();
-      await expect(cleanup).resolves.toBe(true);
-      await expect(fs.access(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      pause.resume();
-      pause.restore();
-    }
-  });
-
-  it.each(["shared", "separate"] as const)(
-    "retains current and published Gateway exclusion through linked-path cleanup (%s lock directory)",
-    async (layout) => {
-      const { stateDir, configPath, env, remove } = await cleanupFixture(true, "{}\n");
+  it.each([
+    ["shared", "state"],
+    ["shared", "linked"],
+    ["separate", "linked"],
+  ] as const)(
+    "retains current and published Gateway exclusion with %s locks during %s cleanup",
+    async (layout, phase) => {
+      const { stateDir, configPath, env, remove } = await cleanupFixture(
+        phase === "linked",
+        "{}\n",
+      );
       const markerPath = path.join(stateDir, "marker.txt");
       const lockDir =
         layout === "shared" ? resolveGatewayLockDir(stateDir) : path.join(stateDir, "custom-locks");
@@ -278,11 +256,20 @@ describe("cleanup path removals", () => {
         return cleanupLock;
       });
       await fs.writeFile(markerPath, "remove me");
-      const pause = pauseRemovalAt(configPath);
+      const pause = pauseRemovalAt(phase === "linked" ? configPath : markerPath);
 
       try {
         const cleanup = remove();
         await pause.started;
+
+        await expect(
+          gatewayLocks.acquireGatewayLock({
+            allowInTests: true,
+            env,
+            pollIntervalMs: 2,
+            timeoutMs: 15,
+          }),
+        ).rejects.toBeInstanceOf(gatewayLocks.GatewayLockError);
 
         const held = expectDefined(cleanupLock, "cleanup ownership");
         for (const lockPath of [held.lockPath, held.stateLockPath]) {
@@ -291,17 +278,13 @@ describe("cleanup path removals", () => {
           });
         }
         const stateLockPath = held.stateLockPath;
-        let legacyBlocked = false;
         let legacyDescriptor: number | undefined;
         try {
           // Published 2026.9.4 startup must exclusively create this same marker.
           fsSync.mkdirSync(path.dirname(stateLockPath), { recursive: true });
-          legacyDescriptor = fsSync.openSync(stateLockPath, "wx", 0o600);
-        } catch (error) {
-          if (!hasNodeErrorCode(error, "EEXIST")) {
-            throw error;
-          }
-          legacyBlocked = true;
+          expect(() => {
+            legacyDescriptor = fsSync.openSync(stateLockPath, "wx", 0o600);
+          }).toThrow(expect.objectContaining({ code: "EEXIST" }));
         } finally {
           if (legacyDescriptor !== undefined) {
             fsSync.closeSync(legacyDescriptor);
@@ -312,7 +295,6 @@ describe("cleanup path removals", () => {
         pause.resume();
         const [cleanupResult] = await Promise.allSettled([cleanup]);
 
-        expect(legacyBlocked).toBe(true);
         expect(lockAttempt).toBe("blocked");
         expect(cleanupResult).toEqual({ status: "fulfilled", value: true });
         await expect(fs.access(stateDir)).rejects.toMatchObject({ code: "ENOENT" });

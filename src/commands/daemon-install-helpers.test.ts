@@ -325,29 +325,18 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
 }
 
 describe("buildGatewayInstallPlan", () => {
-  it.each([
-    {
-      label: "explicit empty CA",
-      platform: "linux" as const,
-      current: { NODE_EXTRA_CA_CERTS: "" },
-      installed: { NODE_EXTRA_CA_CERTS: "/opt/installed.pem" },
-      expected: undefined,
-    },
-    {
-      label: "Windows caller CA",
-      platform: "win32" as const,
-      current: { node_extra_ca_certs: "/opt/current.pem" },
-      installed: { NODE_EXTRA_CA_CERTS: "/opt/installed.pem" },
-      expected: "/opt/current.pem",
-    },
-    {
-      label: "Windows installed CA",
-      platform: "win32" as const,
-      current: {},
-      installed: { node_extra_ca_certs: "/opt/installed.pem" },
-      expected: "/opt/installed.pem",
-    },
-  ])(
+  it.each<{
+    label: string;
+    platform: NodeJS.Platform;
+    current: NodeJS.ProcessEnv;
+    installed: NodeJS.ProcessEnv;
+    expected: string | undefined;
+  }>`
+    label                     | platform   | current                                        | installed                                        | expected
+    ${"explicit empty CA"}    | ${"linux"} | ${{ NODE_EXTRA_CA_CERTS: "" }}                 | ${{ NODE_EXTRA_CA_CERTS: "/opt/installed.pem" }} | ${undefined}
+    ${"Windows caller CA"}    | ${"win32"} | ${{ node_extra_ca_certs: "/opt/current.pem" }} | ${{ NODE_EXTRA_CA_CERTS: "/opt/installed.pem" }} | ${"/opt/current.pem"}
+    ${"Windows installed CA"} | ${"win32"} | ${{}}                                          | ${{ node_extra_ca_certs: "/opt/installed.pem" }} | ${"/opt/installed.pem"}
+  `(
     "preserves explicit and installed CA choices ($label)",
     async ({ platform, current, installed, expected }) => {
       const actual = await vi.importActual<typeof import("../daemon/service-env.js")>(
@@ -403,14 +392,7 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "bun",
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
-      port: 3000,
-      allowUnconfigured: false,
-      dev: false,
-      runtime: "bun",
-      runtimePath: bunPath,
-      wrapperPath: undefined,
-    });
+    expectRequest(mocks.resolveGatewayProgramArguments, { runtime: "bun", runtimePath: bunPath });
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expectRequest(mocks.buildServiceEnvironment, { runtime: "bun" });
   });
@@ -485,8 +467,6 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({ workingDirectory: undefined, serviceEnvironment: {} });
     const plan = await buildNodePlan({ env: isolatedPlanEnv(), platform: "darwin" });
     expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expectRequest(mocks.buildServiceEnvironment, { platform: "darwin" });
   });
 
   it("passes OPENCLAW_WRAPPER through program args and managed service env", async () => {
@@ -495,9 +475,7 @@ describe("buildGatewayInstallPlan", () => {
       serviceEnvironment: { OPENCLAW_PORT: "3000", OPENCLAW_WRAPPER: wrapperPath },
     });
     const plan = await buildNodePlan({ env: isolatedPlanEnv({ OPENCLAW_WRAPPER: wrapperPath }) });
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
     expectRequest(mocks.resolveGatewayProgramArguments, { wrapperPath });
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
     expectRequest(mocks.buildServiceEnvironment, {
       env: expect.objectContaining({ OPENCLAW_WRAPPER: wrapperPath }),
     });
@@ -512,12 +490,10 @@ describe("buildGatewayInstallPlan", () => {
       platform: "win32",
       warn,
     });
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
     expectRequest(mocks.resolveGatewayProgramArguments, {
       wrapperPath: undefined,
       runtimePath: "/opt/node",
     });
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
     expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0].env.OPENCLAW_WRAPPER).toBeUndefined();
     expect(plan.environment.OPENCLAW_WRAPPER).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(

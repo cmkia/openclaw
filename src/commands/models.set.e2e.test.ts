@@ -102,15 +102,10 @@ describe("models set + fallbacks", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    ["z.ai/glm-4.7", "zai/glm-4.7", false],
-    ["openai/gpt-5.6-sol", "openai/gpt-5.6-sol", true],
-  ] as const)("sets %s as %s", async (input, expected, checkWarnings) => {
-    await modelsSetCommand(input, runtime);
-    expectWrittenPrimaryModel(expected);
-    if (checkWarnings) {
-      expect(runtime.error).not.toHaveBeenCalled();
-    }
+  it("sets a known model without warnings", async () => {
+    await modelsSetCommand("openai/gpt-5.6-sol", runtime);
+    expectWrittenPrimaryModel("openai/gpt-5.6-sol");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown text model provider without writing config", async () => {

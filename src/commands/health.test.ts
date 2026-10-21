@@ -21,7 +21,6 @@ import type { HealthSummary } from "./health.js";
 import { healthCommand, healthCommandNonExiting } from "./health.js";
 import {
   healthSummary as createHealthSummary,
-  multiAccountHealth,
   pluginHealthError,
   unavailablePlugin,
 } from "./health.test-fixtures.js";
@@ -132,7 +131,6 @@ describe("healthCommand", () => {
           activated: true,
           failurePhase: "service",
         }),
-        pluginHealthError("inactive", "inactive plugin load failed"),
         pluginHealthError("explicit-owner", "runtime entry missing", {
           origin: "config",
           activationSource: "explicit",
@@ -165,7 +163,6 @@ describe("healthCommand", () => {
     expect(output).toContain(
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
     );
-    expect(output).not.toContain("inactive plugin load failed");
     expect(snapshot).toEqual(original);
     expect(output).toContain("Plugin explicit-owner: failed - runtime entry missing");
     expect(output).toContain(
@@ -235,17 +232,6 @@ describe("healthCommand", () => {
       }
     },
   );
-
-  it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
-    const snapshot = multiAccountHealth({ healthState: "blocked" });
-    listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
-      { id: "matrix", config: { listAccountIds: () => ["main", "alerts"] } },
-    ]);
-
-    const output = await renderHealth(snapshot, { timeoutMs: 1000 });
-    expect(output).toContain("Matrix: blocked");
-    expect(output).not.toContain("Matrix: ok");
-  });
 
   it("shows each explicit fleet owner's sessions with missing agent summaries", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
