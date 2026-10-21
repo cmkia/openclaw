@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
@@ -86,7 +87,7 @@ it.each(["admission", "rollback"] as const)(
         container.querySelector<HTMLElementTagNameMap["openclaw-chat-page"]>("openclaw-chat-page"),
         "chat page",
       );
-      await vi.waitFor(() => expect(page.textContent).toContain("Previous transcript"));
+      await waitForSolid(() => expect(page.textContent).toContain("Previous transcript"));
       const previousPane = expectDefined(
         page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
         "previous pane",
@@ -125,7 +126,7 @@ it.each(["admission", "rollback"] as const)(
       clear();
       await settleChatPage(page);
       await settleChatPage(page);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).toContain(
           outcome === "admission" ? "Hi, I’m New agent. Happy to help." : "Previous transcript",
         ),
