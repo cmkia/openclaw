@@ -401,7 +401,10 @@ async function importOwner<T>(root: string, relative: string): Promise<T> {
 
 async function childMain(fixturePath: string): Promise<void> {
   const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8")) as Fixture;
-  const inspector = fixture.samplingInterval > 0 ? new Session() : undefined;
+  // Checkpoint GC runs must also work without allocation sampling, whose
+  // start/stop cycle forces collections between measured operations.
+  const traceGc = fixture.scenario === "checkpoint" || fixture.samplingInterval > 0;
+  const inspector = traceGc ? new Session() : undefined;
   inspector?.connect();
   const markGc = (phase: string, profilePath?: string) => {
     if (inspector) {
@@ -655,7 +658,7 @@ async function childMain(fixturePath: string): Promise<void> {
       histogram.reset();
       stopIntervalDelay = startBenchmarkIntervalDelay();
       const stopDiagnostics = startGatewayBenchDiagnostics();
-      if (inspector) {
+      if (inspector && fixture.samplingInterval > 0) {
         await inspector.post("HeapProfiler.startSampling", {
           samplingInterval: fixture.samplingInterval,
           includeObjectsCollectedByMajorGC: true,
@@ -812,9 +815,10 @@ async function childMain(fixturePath: string): Promise<void> {
       const eventLoopUtilization = performance.eventLoopUtilization(utilization).utilization;
       const memoryAfter = process.memoryUsage();
       const collectedDiagnostics = stopDiagnostics();
-      const allocation = inspector
-        ? summarizeAllocation((await inspector.post("HeapProfiler.stopSampling")).profile)
-        : undefined;
+      const allocation =
+        inspector && fixture.samplingInterval > 0
+          ? summarizeAllocation((await inspector.post("HeapProfiler.stopSampling")).profile)
+          : undefined;
       // Give the histogram's already-due sample a turn before reading it.
       await delay(15);
       histogram.disable();
@@ -885,10 +889,11 @@ async function runSource(
   }
   const fixturePath = path.join(fixture.root, "fixture.json");
   await fs.writeFile(fixturePath, JSON.stringify(fixture));
+  const traceGc = fixture.scenario === "checkpoint" || fixture.samplingInterval > 0;
   const child = fork(fileURLToPath(import.meta.url), ["--worker", fixturePath], {
     cwd: fixture.source,
     execArgv: [
-      ...(fixture.samplingInterval > 0 ? ["--trace-gc-nvp"] : []),
+      ...(traceGc ? ["--trace-gc-nvp"] : []),
       "--import",
       path.join(fixture.source, "scripts/tsx.mjs"),
     ],
@@ -898,7 +903,7 @@ async function runSource(
   });
   let output = "";
   const tracePath = path.join(fixture.root, "gc-trace.log");
-  const trace = fixture.samplingInterval > 0 ? createWriteStream(tracePath) : undefined;
+  const trace = traceGc ? createWriteStream(tracePath) : undefined;
   for (const stream of [child.stdout, child.stderr]) {
     stream?.on("data", (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-16_384);

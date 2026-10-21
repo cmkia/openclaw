@@ -64,8 +64,8 @@ async function proveQueuedLocalWorkspaceCheckpoint(
     await release.promise;
   });
   await acquired.promise;
-  const readSnapshot = manifests.captureWorkspaceSnapshot;
-  const capture = vi.spyOn(manifests, "captureWorkspaceSnapshot");
+  const readSnapshot = manifests.captureWorkspaceManifestDocument;
+  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
   const first = projection.checkpoint();
   const second = projection.checkpoint();
   release.resolve();

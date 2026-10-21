@@ -126,6 +126,7 @@ function captureHashes(includeMemo = true) {
 type WorkspaceCaptureCommand =
   | "workspace.manifest.capture"
   | "workspace.manifest.snapshot"
+  | "workspace.manifest.document"
   | "workspace.manifest.reference";
 
 function captureWorkspace<Type extends WorkspaceCaptureCommand>(
@@ -137,6 +138,10 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
+    if (type === "workspace.manifest.document") {
+      const { manifestRef, rawManifest } = snapshot;
+      return { manifestRef, rawManifest };
+    }
     return type === "workspace.manifest.reference"
       ? snapshot.manifestRef
       : type === "workspace.manifest.snapshot"
@@ -168,6 +173,10 @@ export async function captureWorkspaceManifest(params: WorkspaceCaptureArguments
 
 export async function captureWorkspaceSnapshot(params: WorkspaceCaptureArguments) {
   return await captureWorkspace("workspace.manifest.snapshot", params);
+}
+
+export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
+  return await captureWorkspace("workspace.manifest.document", params);
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {

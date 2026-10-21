@@ -121,6 +121,7 @@ export async function executeWorkspaceManifestComputation(
     }
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
+    case "workspace.manifest.document":
     case "workspace.manifest.reference": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
@@ -132,6 +133,10 @@ export async function executeWorkspaceManifestComputation(
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
         }),
       );
+      if (command.type === "workspace.manifest.document") {
+        const { manifestRef, rawManifest } = result.value;
+        return { ...result, value: { manifestRef, rawManifest } };
+      }
       return command.type === "workspace.manifest.reference"
         ? { ...result, value: result.value.manifestRef }
         : command.type === "workspace.manifest.snapshot"
