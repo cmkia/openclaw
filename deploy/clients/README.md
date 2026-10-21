@@ -26,6 +26,11 @@ checks below before changing that pin.
   of TLS-ALPN-01, and keep its configuration in the proxy's deployment source.
   HTTP-01 needs public port 80; HTTP-to-HTTPS redirection is compatible. See
   [Traefik ACME](https://doc.traefik.io/traefik/v3.6/https/acme/).
+- If Cloudflare returns error 1010 for native API clients, add a Configuration
+  Rule scoped to the customer's two hostnames with Browser Integrity Check
+  disabled (`bic: false`). Keep Gateway authentication and pairing enabled.
+  [Cloudflare BIC](https://developers.cloudflare.com/waf/tools/browser-integrity-check/)
+  documents this per-host exception.
 - An authenticated OmniRoute administrator and working provider connections.
   OAuth accounts remain in OmniRoute; OpenClaw receives only its own scoped key.
 - Select chat models supporting Responses translation, tools, images as input,
@@ -105,9 +110,9 @@ their own configured route and OpenClaw capability; changing a chat combo into
 an audio model does not add that capability.
 
 Do not rename or share customer combos, and do not grant `combo/*` or allow-all
-model access to customer keys. Assign provider connections inside each combo
-when a customer has a dedicated account. Shared subscription accounts still
-share provider limits; per-customer keys do not create independent quotas.
+model access to customer keys. Shared subscription accounts still share provider
+limits; per-customer keys do not create independent quotas. Dedicated provider
+accounts need their connection selection verified separately for chat and images.
 
 ## Verify the deployment
 
