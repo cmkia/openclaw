@@ -35,6 +35,7 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         viewport: { width: 1440, height: 900 },
       });
       const page = await context.newPage();
+      await page.clock.install();
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
       const scope = {
         input: "A public repository",
@@ -215,6 +216,13 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         await page.getByRole("button", { name: "View on ClawHub" }).waitFor({ state: "visible" });
         expect(await page.locator(".claw-creator__notice").count()).toBe(0);
         await page.mouse.move(0, 0);
+        // Advance only the original eight-second dismissal budget before checking visibility.
+        await page.clock.runFor(8_000);
+        expect(
+          await page
+            .getByText("Submitted to ClawHub. Publication pending security review.")
+            .isVisible(),
+        ).toBe(false);
         await page
           .getByText("Submitted to ClawHub. Publication pending security review.")
           .waitFor({ state: "hidden", timeout: 8000 });
