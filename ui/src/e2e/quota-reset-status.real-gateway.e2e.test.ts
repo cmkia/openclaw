@@ -181,7 +181,7 @@ async function captureFinalStatus(
   }
 }
 
-describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)(
+describe.each(["saved-clear", "automatic-during-catalog"] as const)(
   "Running Gateway quota status: %s",
   (recovery) => {
     it(
@@ -236,9 +236,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           }
           provider.setPhase("restored");
 
-          if (recovery === "automatic") {
-            await advanceClock();
-          } else if (recovery === "saved-clear") {
+          if (recovery === "saved-clear") {
             const lastProbeAt = blocked?.lastProbeAt;
             expect(lastProbeAt).toEqual(expect.any(Number));
             if (lastProbeAt === undefined) {

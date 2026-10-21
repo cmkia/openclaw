@@ -197,25 +197,6 @@ async function readResolvedPrimaryHover(page: Page): Promise<number[]> {
   });
 }
 
-async function readThemeImportRaceState(page: Page) {
-  const importer = page.locator(".settings-theme-import");
-  const message = importer.locator(".settings-theme-import__message");
-  const settings = await readPersistedSettings(page);
-  return {
-    renderedThemeMode: await page.locator("html").getAttribute("data-theme"),
-    titleColor: await page
-      .locator(".page-title")
-      .evaluate((element) => getComputedStyle(element).color),
-    clawSelected: (await themeCard(page, "claw").getAttribute("aria-pressed")) === "true",
-    customThemeMetadataCount: await importer.locator(".settings-theme-import__meta").count(),
-    importUrl: await importer.locator("input").inputValue(),
-    message: (await message.count()) > 0 ? ((await message.textContent())?.trim() ?? "") : "",
-    importButtonDisabled: await importer.locator("button.primary").isDisabled(),
-    persistedTheme: settings.theme ?? null,
-    hasPersistedCustomTheme: settings.customTheme !== undefined,
-  };
-}
-
 async function captureViewport(page: Page, filename: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
@@ -606,7 +587,16 @@ suite.define(() => {
           importer.locator(".settings-theme-import__meta-value"),
           "Existing Test Theme",
         );
-        const beforeReplace = await readThemeImportRaceState(page);
+        const title = page.locator(".page-title");
+        const titleColor = () => title.evaluate((element) => getComputedStyle(element).color);
+        const expectClearedPreferences = () =>
+          expect
+            .poll(async () => {
+              const { customTheme, theme } = await readPersistedSettings(page);
+              return { customTheme, theme };
+            })
+            .toEqual({ customTheme: undefined, theme: "claw" });
+        const beforeColor = await titleColor();
         await captureViewport(page, "04-custom-theme-before-replace.png");
 
         await importField.fill("replacement");
@@ -618,41 +608,25 @@ suite.define(() => {
         await importer.locator("button.danger").click();
         await expectPressed(themeCard(page, "claw"));
         await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
-        const afterClear = await readThemeImportRaceState(page);
+        await expectAttribute(page.locator("html"), "data-theme", "dark");
+        await expect.poll(() => importField.inputValue()).toBe("replacement");
+        await expect.poll(() => importer.locator("button.primary").isDisabled()).toBe(false);
+        await expectClearedPreferences();
+        const clearedColor = await titleColor();
+        expect(clearedColor).not.toBe(beforeColor);
         await captureViewport(page, "05-custom-theme-cleared-with-replace-pending.png");
 
         releaseReplacement();
         await replacementResponse;
-        await expect
-          .poll(async () => {
-            const { customTheme, theme } = await readPersistedSettings(page);
-            return { customTheme, theme };
-          })
-          .toEqual({ customTheme: undefined, theme: "claw" });
+        await expectClearedPreferences();
         await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
         await expectText(importer.locator(".settings-theme-import__message"), "removed");
         await expect.poll(() => importer.getByRole("status").count()).toBe(1);
-        const afterDelayedResponse = await readThemeImportRaceState(page);
-        expect(beforeReplace).toMatchObject({
-          clawSelected: false,
-          customThemeMetadataCount: 1,
-          persistedTheme: "custom",
-          hasPersistedCustomTheme: true,
-        });
-        expect(afterClear).toMatchObject({
-          renderedThemeMode: "dark",
-          clawSelected: true,
-          customThemeMetadataCount: 0,
-          importUrl: "replacement",
-          importButtonDisabled: false,
-          persistedTheme: "claw",
-          hasPersistedCustomTheme: false,
-        });
-        expect(beforeReplace.titleColor).not.toBe(afterClear.titleColor);
-        expect(afterDelayedResponse).toEqual({
-          ...afterClear,
-          message: "Custom theme removed.",
-        });
+        await expectAttribute(page.locator("html"), "data-theme", "dark");
+        await expectPressed(themeCard(page, "claw"));
+        expect(await titleColor()).toBe(clearedColor);
+        expect(await importField.inputValue()).toBe("replacement");
+        expect(await importer.locator("button.primary").isDisabled()).toBe(false);
         await captureViewport(page, "06-custom-theme-clear-remains-final.png");
       } finally {
         releaseReplacement();

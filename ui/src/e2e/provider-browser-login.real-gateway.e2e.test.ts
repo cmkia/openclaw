@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
@@ -16,7 +15,6 @@ import {
   loginHistoryMarker,
   loginOrigin,
   loginSessionKey,
-  type ProviderBrowserLoginOptions,
   loginProvider,
   startProviderBrowserLoginFixture,
 } from "./provider-browser-login.test-support.ts";
@@ -58,11 +56,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   browserLaunchOptions: { args: browserArgs },
   async startServer() {
-    const optionsPath = process.env.OPENCLAW_UI_E2E_PROVIDER_LOGIN_OPTIONS;
-    const options: ProviderBrowserLoginOptions = optionsPath
-      ? (await import(pathToFileURL(optionsPath).href)).default
-      : {};
-    fixture = await startProviderBrowserLoginFixture(options);
+    fixture = await startProviderBrowserLoginFixture();
     try {
       readback = await connectReadbackClient();
     } catch (error) {

@@ -1,23 +1,20 @@
 import { copyFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page, Video } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type {
   AllowedApprovalSnapshot,
   PendingApprovalSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  controlUiE2eWaitTimeoutMs,
-  installMockGateway,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI standalone approval page",
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
@@ -34,8 +31,6 @@ type ApprovalSurface = {
   pageErrors: string[];
   rawVideoDir?: string;
 };
-
-const openContexts = new Set<BrowserContext>();
 
 function approvalPath(basePath: string): string {
   return `${basePath}/approve/${encodeURIComponent(APPROVAL_ID)}`;
@@ -101,7 +96,7 @@ async function createSurface(
     params.recordVideo && CAPTURE_UI_PROOF
       ? createControlUiE2eArtifactDir("mobile-raw", suite.artifactDir)
       : undefined;
-  const context = await suite.browser.newContext({
+  const context = await suite.newBrowserContext({
     colorScheme: "dark",
     hasTouch: viewport.width <= MOBILE_VIEWPORT.width,
     isMobile: viewport.width <= MOBILE_VIEWPORT.width,
@@ -111,9 +106,7 @@ async function createSurface(
     viewport,
     ...(rawVideoDir ? { recordVideo: { dir: rawVideoDir, size: viewport } } : {}),
   });
-  openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   await page.clock.setFixedTime(new Date(APPROVAL_NOW_MS));
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -129,8 +122,7 @@ async function createSurface(
 
 async function closeRecordedSurface(surface: ApprovalSurface, targetName: string): Promise<void> {
   const video: Video | null = surface.page.video();
-  openContexts.delete(surface.context);
-  await surface.context.close().catch(() => {});
+  await suite.closeBrowserContext(surface.context);
   if (!video || !surface.rawVideoDir) {
     return;
   }
@@ -230,11 +222,6 @@ async function expectMobilePendingLayout(page: Page): Promise<void> {
 }
 
 suite.define(() => {
-  afterEach(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-  });
-
   it("keeps one canonical winner across conflicting surfaces and terminal reload", async () => {
     const pending = pendingApproval("");
     const terminal: AllowedApprovalSnapshot = {
@@ -266,6 +253,8 @@ suite.define(() => {
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
+      await mobile.page.getByText(pending.presentation.commandText, { exact: true }).waitFor();
+      await mobile.page.getByText(pending.presentation.warningText, { exact: true }).waitFor();
       await captureProof(mobile.page, "after-pending-exec.png");
       await mobile.page.getByRole("button", { name: "Allow once" }).scrollIntoViewIfNeeded();
       await captureProof(mobile.page, "after-pending-exec-actions.png");
@@ -311,10 +300,20 @@ suite.define(() => {
       await captureProof(mobile.page, "after-competing-answer-terminal.png");
       await captureProof(desktop.page, "after-competing-answer-loser-desktop.png");
 
+      const refreshedPresentation = {
+        ...pending.presentation,
+        commandText: "printf 'fixture changed at the Gateway'",
+        warningText: "Changed warning from the live approval fixture.",
+      };
+      await mobile.gateway.setMethodResponse("approval.get", {
+        approval: { ...terminal, presentation: refreshedPresentation },
+      });
       const terminalReload = await mobile.page.reload();
       expect(terminalReload?.status()).toBe(200);
       await mobile.gateway.waitForRequest("approval.get");
       await mobile.page.getByRole("heading", { name: "Approved", exact: true }).waitFor();
+      await mobile.page.getByText(refreshedPresentation.commandText, { exact: true }).waitFor();
+      await mobile.page.getByText(refreshedPresentation.warningText, { exact: true }).waitFor();
       expect(await mobile.page.title()).toBe("Approved — OpenClaw");
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectStandaloneApprovalPage(mobile.page);
@@ -447,29 +446,6 @@ suite.define(() => {
     expect(await surface.page.evaluate((key) => localStorage.getItem(key), pageSettingsKey)).toBe(
       pageSettings,
     );
-    expect(surface.pageErrors).toEqual([]);
-  });
-
-  it("renders changed Gateway content after reload instead of a hard-coded fixture", async () => {
-    const pending = pendingApproval("");
-    const surface = await createSurface({ pending });
-    await visitApproval(surface);
-    const changed = {
-      ...pending,
-      presentation: {
-        ...pending.presentation,
-        commandText: "printf 'fixture changed at the Gateway'",
-        warningText: "Changed warning from the live approval fixture.",
-      },
-    } satisfies PendingApprovalSnapshot;
-    await surface.gateway.setMethodResponse("approval.get", { approval: changed });
-
-    await surface.page.reload();
-    await surface.gateway.waitForRequest("approval.get");
-    await surface.page.getByText("Changed warning from the live approval fixture.").waitFor();
-    await surface.page
-      .getByText("printf 'fixture changed at the Gateway'", { exact: true })
-      .waitFor();
     expect(surface.pageErrors).toEqual([]);
   });
 

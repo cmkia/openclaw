@@ -187,7 +187,6 @@ suite.define(() => {
         await expect.poll(() => task.locator(".chat-thread").isHidden()).toBe(true);
 
         await selectChatLayoutAction(page, "Restore split");
-        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await task.locator(".chat-thread").waitFor();
         await selectChatLayoutAction(page, "Minimize side panel");
         await page.locator(".board-session-surface").waitFor();

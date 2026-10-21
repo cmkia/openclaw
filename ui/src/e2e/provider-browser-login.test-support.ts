@@ -10,10 +10,7 @@ import {
   PROXY_FIXTURE_KEY,
 } from "../../../src/test-helpers/proxy-tls-fixture.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 
 export const loginProvider = "browser-login-fixture";
@@ -23,23 +20,9 @@ export const loginOrigin = "https://files.proxy.test";
 export const loginSessionKey = "agent:main:browser-login";
 export const loginHistoryMarker = "Existing fixture history.";
 
-type ProviderBrowserLoginBootstrap = (context: {
-  instance: OpenClawTestInstance;
-  startCandidate: () => Promise<void>;
-  seedConversation: () => Promise<void>;
-}) => Promise<void>;
-
-export type ProviderBrowserLoginOptions = {
-  cwd?: string;
-  entrypoint?: string[];
-  bootstrap?: ProviderBrowserLoginBootstrap;
-};
-
-export async function startProviderBrowserLoginFixture(options: ProviderBrowserLoginOptions = {}) {
+export async function startProviderBrowserLoginFixture() {
   const instance = await createOpenClawTestInstance({
     name: "provider-browser-login",
-    cwd: options.cwd,
-    entrypoint: options.entrypoint,
     env: {
       VITEST: "1",
       OPENCLAW_DISABLE_BONJOUR: "1",
@@ -274,12 +257,8 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
       });
       await call("chat.inject", { sessionKey: loginSessionKey, message: loginHistoryMarker });
     };
-    if (options.bootstrap) {
-      await options.bootstrap({ instance, startCandidate, seedConversation });
-    } else {
-      await startCandidate();
-      await seedConversation();
-    }
+    await startCandidate();
+    await seedConversation();
     return {
       instance,
       baseUrl: `${loginOrigin}/`,

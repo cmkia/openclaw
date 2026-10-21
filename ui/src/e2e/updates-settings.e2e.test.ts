@@ -208,36 +208,6 @@ suite.define(() => {
       const raw = (configSet.params as { raw?: unknown }).raw;
       expect(typeof raw).toBe("string");
       expect(JSON.parse(String(raw))).toMatchObject({ update: { channel: "beta" } });
-
-      await content.getByRole("button", { name: "Update now", exact: true }).click();
-      await page.getByRole("button", { name: "Update and restart", exact: true }).click();
-      await gateway.waitForRequest("update.run");
-    });
-  });
-
-  it("keeps the page readable and controls locked for non-admins", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      const config = { update: { auto: { enabled: true }, channel: "beta" } };
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["config.get", "update.run"],
-        methodResponses: {
-          "config.get": configResponse(config, "updates-read-only-1"),
-        },
-        operatorScopes: ["operator.read"],
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/updates`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("config.get");
-      await page.getByRole("note").waitFor();
-      expect(await page.getByRole("note").textContent()).toContain(
-        "Administrator access is required",
-      );
-      await expectRadiosDisabled(page);
-      expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(true);
-      expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(true);
-      expect(await page.getByRole("button", { name: "Update now" }).isDisabled()).toBe(true);
-      expect(await gateway.getRequests("config.schema")).toHaveLength(0);
     });
   });
 

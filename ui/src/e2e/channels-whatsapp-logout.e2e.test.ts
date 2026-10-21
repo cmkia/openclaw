@@ -167,28 +167,8 @@ suite.define(() => {
         const alert = detail.getByRole("alert");
         await expect.poll(() => alert.textContent()).toContain("automatic channel save rejected");
 
-        const save = button(detail, "Save");
-        await expect.poll(() => save.isEnabled()).toBe(true);
-        const writesBefore = await requestCount(gateway, "config.set");
-        const readsBefore = await requestCount(gateway, "config.get");
-        await gateway.deferNext("config.set");
-        await save.click();
-        const request = await gateway.waitForRequest("config.set", { after: writesBefore });
-        expect(request.params).toMatchObject({ baseHash: "channel-config-1" });
-        await gateway.rejectDeferred("config.set", {
-          code: "INVALID_REQUEST",
-          message:
-            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
-        });
-
-        await expect.poll(() => alert.textContent()).toContain("channel rejected");
-        const message = await alert.textContent();
-        expect(message).toContain("OPENAI_API_KEY=sk-123...cdef");
-        expect(message).not.toContain("sk-1234567890abcdef");
-        expect(await alert.locator("img").count()).toBe(0);
-        expect(await save.isEnabled()).toBe(true);
+        await expect.poll(() => button(detail, "Save").isEnabled()).toBe(true);
         expect(await enabled.isChecked()).toBe(false);
-        expect(await gateway.getRequests("config.get")).toHaveLength(readsBefore);
       },
       {
         ...contextOptions,

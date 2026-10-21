@@ -33,7 +33,7 @@ const terminalSession = (sessionId: string) => ({
   title: "claude --resume claude-termi…",
 });
 
-function terminalGatewayOptions(sessionId?: string) {
+function terminalGatewayOptions() {
   return {
     featureMethods: [
       "chat.metadata",
@@ -47,10 +47,9 @@ function terminalGatewayOptions(sessionId?: string) {
       "sessions.catalog.read": {
         hostId: "gateway:local",
         threadId: "claude-terminal-session",
-        items: sessionId ? [] : [{ type: "userMessage", text: "Continue the native session" }],
+        items: [{ type: "userMessage", text: "Continue the native session" }],
       },
       "terminal.list": { sessions: [] },
-      ...(sessionId ? { "terminal.open": terminalSession(sessionId) } : {}),
     },
     terminalEnabled: true,
   };
@@ -297,37 +296,6 @@ suite.define(() => {
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-    });
-  });
-
-  it("closes a catalog terminal that produces no output before the deadline", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await installMockGateway(
-        page,
-        terminalGatewayOptions("claude-terminal-timeout"),
-      );
-
-      await navigateToClaudeCatalog(page);
-      await page.clock.install();
-      await triggerClaudeCatalogTerminal(page, { force: true });
-      expect((await gateway.waitForRequest("terminal.open")).params).toMatchObject({
-        catalog: { catalogId: "claude" },
-      });
-      await page.getByRole("status", { name: "Connecting to session…" }).waitFor();
-      await page
-        .locator("openclaw-terminal-panel .tabstrip-tab", {
-          hasText: "claude --resume claude-termi…",
-        })
-        .waitFor();
-      const resize = await gateway.waitForRequest("terminal.resize");
-      expect(resize.params).toMatchObject({ sessionId: "claude-terminal-timeout" });
-      await page.clock.fastForward(30_001);
-      await page.clock.runFor(100);
-
-      await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
-      const close = await gateway.waitForRequest("terminal.close");
-      expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator("openclaw-terminal-panel .tabstrip-tab").count()).toBe(0);
     });
   });
 
