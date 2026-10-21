@@ -39,9 +39,33 @@ function buildProps(
     shortTermCount: 47,
     promotedCount: 12,
     phases: {
-      light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
-      deep: { enabled: true, cron: "30 * * * *", nextRunAtMs: Date.parse("2026-04-05T12:00:00Z") },
-      rem: { enabled: false, cron: "0 4 * * *" },
+      light: {
+        enabled: true,
+        cron: "0 * * * *",
+        limit: 20,
+        managedCronPresent: true,
+        lookbackDays: 2,
+        nextRunAtMs: Date.parse("2026-04-05T11:30:00Z"),
+      },
+      deep: {
+        enabled: true,
+        cron: "30 * * * *",
+        limit: 10,
+        managedCronPresent: true,
+        minScore: 0,
+        minRecallCount: 3,
+        minUniqueQueries: 3,
+        recencyHalfLifeDays: 14,
+        nextRunAtMs: Date.parse("2026-04-05T12:00:00Z"),
+      },
+      rem: {
+        enabled: false,
+        cron: "0 4 * * *",
+        limit: 10,
+        managedCronPresent: false,
+        lookbackDays: 7,
+        minPatternStrength: 0.75,
+      },
     },
     shortTermEntries: [
       {
