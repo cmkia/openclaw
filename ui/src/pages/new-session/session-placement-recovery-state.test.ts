@@ -144,6 +144,22 @@ describe("pending session placement recovery state", () => {
     },
   );
 
+  it.each([{ os: "x".repeat(65) }])("rejects invalid persisted placement options %#", (options) => {
+    expect(
+      writeSessionPlacementRecovery({
+        sessionKey: "agent:cloud:invalid-machine",
+        messageId: "message-invalid-machine",
+        message: "run remotely",
+        target: { kind: "profile", profileId: "aws", ...options },
+        agentId: "cloud",
+        gatewayUrl,
+        recoveryScope,
+        phase: "dispatching",
+      }),
+    ).toBe(false);
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it.each(["success", "before-write", "after-write"] as const)(
     "promotes the canonical key atomically (%s)",
     (outcome) => {

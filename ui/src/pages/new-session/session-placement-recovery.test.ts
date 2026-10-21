@@ -382,11 +382,6 @@ describe("session placement recovery", () => {
     expect(readRecovery()).toEqual(attachmentRecovery);
   });
 
-  it("rejects oversized persisted machine options", () => {
-    expect(write({ ...recovery, target: { ...recovery.target, os: "x".repeat(65) } })).toBe(false);
-    expect(sessionStorage.length).toBe(0);
-  });
-
   it.each([
     { projectId: "openclaw", worktree: true as const },
     { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
