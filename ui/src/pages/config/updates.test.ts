@@ -75,6 +75,7 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
 function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
   return {
     snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
     subscribe: () => () => undefined,
     set: vi.fn(),
     requestPermission: vi.fn(),

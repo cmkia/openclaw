@@ -376,6 +376,7 @@ describe("Talk device and voice wake settings", () => {
       }
       const nativeDeviceSettings = {
         snapshot,
+        initialSnapshot: Promise.resolve(snapshot),
         subscribe: () => () => undefined,
         set: vi.fn(),
         requestPermission: vi.fn(),
@@ -635,6 +636,7 @@ describe("Talk device and voice wake settings", () => {
     const listeners = new Set<() => void>();
     const nativeDeviceSettings = {
       snapshot,
+      initialSnapshot: Promise.resolve(snapshot),
       subscribe: (listener) => {
         const notify = () => listener(snapshot);
         listeners.add(notify);
@@ -723,6 +725,7 @@ describe("Talk device and voice wake settings", () => {
     const listeners = new Set<() => void>();
     const nativeDeviceSettings = {
       snapshot,
+      initialSnapshot: Promise.resolve(snapshot),
       subscribe: (listener) => {
         const notify = () => listener(snapshot);
         listeners.add(notify);

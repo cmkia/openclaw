@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Loading } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -306,15 +306,20 @@ export function DeviceTalk(props: {
   capability?: NativeDeviceSettingsCapability | null;
   snapshot?: NativeDeviceSettingsSnapshot | null;
 }) {
+  // The receipt only gates readiness; live owner publications stay outside this memo.
+  const initialSnapshot = createMemo(() => props.capability?.initialSnapshot ?? null);
   return (
     <>
       {props.capability && (
         <SettingsSection title={t(deviceSettingsGroupLabelKey(props.snapshot))}>
-          {props.snapshot?.voice ? (
-            <DeviceVoiceSettings capability={props.capability} snapshot={props.snapshot} />
-          ) : (
-            <SettingsRow title={t("common.loading")} />
-          )}
+          <Loading on={props.capability} fallback={<SettingsRow title={t("common.loading")} />}>
+            {(props.snapshot ?? initialSnapshot()) && (
+              <DeviceVoiceSettings
+                capability={props.capability}
+                snapshot={(props.snapshot ?? initialSnapshot())!}
+              />
+            )}
+          </Loading>
         </SettingsSection>
       )}
     </>
