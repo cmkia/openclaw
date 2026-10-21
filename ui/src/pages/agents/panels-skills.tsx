@@ -39,15 +39,15 @@ export function AgentSkills(params: AgentSkillsProps) {
       ? params.readData().agentSkillsReport
       : null,
   );
+  const report = createMemo(async () => {
+    const read = issued();
+    return read?.agentId === params.agentId ? read.result : cached();
+  });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
     <Show when={scope()} keyed>
       <Show when={issued() ?? scope()} keyed>
         {(_receipt) => {
-          const report = createMemo(async () => {
-            const read = issued();
-            return read?.agentId === params.agentId ? read.result : cached();
-          });
           return (
             <Errored
               fallback={(error) => (

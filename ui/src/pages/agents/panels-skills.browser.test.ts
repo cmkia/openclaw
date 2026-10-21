@@ -112,6 +112,42 @@ describe("agents skills panel (browser)", () => {
     },
   );
 
+  it.each(["agent", "connection"])(
+    "renders a replacement %s scope while the retired read stays pending",
+    async (replacement) => {
+      const retired = deferred<SkillStatusReport>();
+      const current = deferred<SkillStatusReport>();
+      const container = document.createElement("div");
+      const params = skillsParams([], {
+        agentSkillsRead: { agentId: "main", result: retired.promise },
+      });
+      const view = mountSolid(AgentSkills, params, container);
+      await waitForSolid(() => expect(container.textContent).toContain("Loading"));
+      const agentId = replacement === "agent" ? "other" : "main";
+      view.update({
+        ...params,
+        agentId,
+        readData: () => ({
+          ...params.readData(),
+          requestGeneration: 1,
+          agentSkillsAgentId: agentId,
+          agentSkillsRead: { agentId, result: current.promise },
+        }),
+      });
+      current.resolve({
+        workspaceDir: "/workspace/synthetic",
+        managedSkillsDir: "/skills/synthetic",
+        skills: [createSkill({ name: "Current scope skill" })],
+      });
+      await waitForSolid(() => expect(container.textContent).toContain("Current scope skill"));
+      retired.reject(new Error("Retired scope failure"));
+      await waitForSolid(() => {
+        expect(container.textContent).toContain("Current scope skill");
+        expect(container.textContent).not.toContain("Retired scope failure");
+      });
+    },
+  );
+
   it("keeps cached skills when a reload returns no report", async () => {
     const pending = deferred<SkillStatusReport | undefined>();
     const container = document.createElement("div");
