@@ -403,26 +403,6 @@ suite.define(() => {
                       .count(),
                   ).toBe(1);
                 }
-              } catch (error) {
-                console.error(
-                  "Task PR assertion diagnostics",
-                  JSON.stringify({
-                    stage,
-                    snapshots: snapshots.map((snapshot) => ({
-                      status: snapshot.status,
-                      branchRead: snapshot.branchRead,
-                      taskPullRequestCount: snapshot.taskPullRequestCount,
-                      taskPullRequests: Array.isArray(snapshot.taskPullRequests)
-                        ? snapshot.taskPullRequests.filter(isRecord).map((item) => ({
-                            number: item.number,
-                            enriched: isRecord(item.pullRequest),
-                          }))
-                        : [],
-                    })),
-                    githubRequests,
-                  }),
-                );
-                throw error;
               } finally {
                 // On red, show the same parent hovercard rather than a transient loading shell.
                 await activate();
