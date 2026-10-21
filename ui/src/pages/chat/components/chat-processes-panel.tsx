@@ -439,7 +439,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={data().rows.length}
             fallback={
               <Show
-                when={data().hasResult && !data().error && !data().loading}
+                when={data().hasResult}
                 fallback={
                   <Show
                     when={data().loading}

@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -289,12 +290,20 @@ export function createSessionManagedListRefresh(
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
           const startupPending = isAgentDatabaseInspectionPendingError(error);
+          const readAccessDenied =
+            error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
           if (startupPending) {
             entry.coordinator.scheduleRetry(
               resolveGatewayReadRetryDelayMs(error, entry.startupRetryAttempt++),
             );
           } else {
             entry.startupRetryAttempt = 0;
+            if (
+              !readAccessDenied &&
+              (!(error instanceof GatewayProtocolRequestError) || error.retryable)
+            ) {
+              entry.coordinator.scheduleFallback();
+            }
           }
           publishManagedList(
             entry,
@@ -303,6 +312,8 @@ export function createSessionManagedListRefresh(
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
               readSucceeded: false,
+              readAccessDenied,
+              ...(readAccessDenied ? { result: null, pagination: undefined } : {}),
               startupPending,
             },
             isCurrent,

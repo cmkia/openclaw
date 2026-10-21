@@ -1,12 +1,190 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([false, true])(
+    "recovers Details progress reads without generating progress (mobile=%s)",
+    async (mobile) => {
+      const context = await suite.newBrowserContext({
+        viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+        isMobile: mobile,
+        hasTouch: mobile,
+        reducedMotion: "reduce",
+      });
+      const page = await context.newPage();
+      const sessionKey = "agent:main:main";
+      const card = {
+        sessionKey,
+        revision: 1,
+        updatedAt: Date.now(),
+        steps: [
+          { step: "Review checkout error handling", status: "completed" },
+          { step: "Verify saved progress recovery", status: "in_progress" },
+          { step: "Confirm the review is ready", status: "pending" },
+        ],
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "example/preview-model",
+        models: [
+          {
+            id: "preview-model",
+            provider: "example",
+            name: "Preview model",
+            contextWindow: 128_000,
+          },
+        ],
+        sessions: [
+          {
+            key: sessionKey,
+            sessionId: "details-progress-read",
+            kind: "direct",
+            label: "Checkout recovery review",
+            displayName: "Checkout recovery review",
+            updatedAt: 1,
+            hasActiveRun: false,
+            model: "preview-model",
+            modelProvider: "example",
+            contextTokens: 128_000,
+            totalTokens: 24_800,
+          },
+        ],
+        historyMessages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Review how checkout changes and saved task progress recover after a temporary connection failure. Keep the last valid result visible.",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "I reviewed the checkout reader and its connection handling. The saved task plan records the completed review and the remaining recovery checks. I am checking that a failed read preserves the saved result without starting the task again.",
+              },
+            ],
+          },
+        ],
+        deferredMethods: ["progressCard.get"],
+        methodResponses: {
+          "progressCard.get": { card },
+          "cron.list": {
+            jobs: [],
+            snapshotRevision: "empty",
+            offset: 0,
+            limit: 50,
+            total: 0,
+            hasMore: false,
+            nextOffset: null,
+          },
+        },
+      });
+      const artifacts = createControlUiE2eArtifactDir(
+        `details-progress-read-${mobile ? "mobile" : "desktop"}`,
+      );
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("progressCard.get");
+        const details = await openChatDetails(page);
+        const progressSurface = mobile
+          ? details.locator(".chat-details-mobile-root")
+          : details.locator(".chat-details-desktop-body");
+        // The Details shell becomes visible before its lazy composition has mounted.
+        await progressSurface.waitFor();
+        await progressSurface.getByRole("meter", { name: "Context", exact: true }).waitFor();
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        await gateway.rejectDeferred("progressCard.get", { message: "Temporary read failure" });
+        await progressSurface
+          .getByRole("status", { name: "Loading session progress…", exact: true })
+          .waitFor({ state: "hidden" });
+        await page.screenshot({
+          path: path.join(artifacts, "first-read-failure.png"),
+          animations: "disabled",
+        });
+        expect(
+          await progressSurface
+            .getByText("Session progress is unavailable.", { exact: true })
+            .count(),
+        ).toBe(0);
+        expect(
+          await progressSurface.getByRole("button", { name: "Retry", exact: true }).count(),
+        ).toBe(0);
+        await gateway.deferNext("progressCard.get");
+        await page.clock.runFor(30_000);
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
+        await gateway.resolveDeferred("progressCard.get", { card: null });
+        expect(
+          await progressSurface.locator('[data-progress-card-placement="details"]').count(),
+        ).toBe(0);
+        expect(
+          await progressSurface
+            .getByRole("status", { name: "Loading session progress…", exact: true })
+            .count(),
+        ).toBe(0);
+        expect(
+          await progressSurface.getByRole("button", { name: "Retry", exact: true }).count(),
+        ).toBe(0);
+        await page.screenshot({
+          path: path.join(artifacts, "empty-read-recovered.png"),
+          animations: "disabled",
+        });
+        await gateway.deferNext("progressCard.get");
+        await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(3);
+        await gateway.rejectDeferred("progressCard.get", {
+          message: "Temporary read failure after invalidation",
+        });
+        await gateway.deferNext("progressCard.get");
+        await page.clock.runFor(30_000);
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(4);
+        await gateway.rejectDeferred("progressCard.get", {
+          message: "Still temporarily unavailable",
+        });
+        const retry = progressSurface
+          .getByRole("status")
+          .filter({ hasText: "task progress" })
+          .getByRole("button", { name: "Retry", exact: true });
+        await retry.waitFor();
+        await progressSurface
+          .getByText("Couldn't load task progress. Try again.", { exact: true })
+          .waitFor();
+        await page.screenshot({
+          path: path.join(artifacts, "persistent-read-failure.png"),
+          animations: "disabled",
+        });
+        await gateway.deferNext("progressCard.get");
+        await retry.click();
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(5);
+        await gateway.resolveDeferred("progressCard.get", { card });
+        // Commit the recovered card and its queued layout frames under the paused clock.
+        await page.clock.runFor(32);
+        await page.screenshot({
+          path: path.join(artifacts, "read-recovered.png"),
+          animations: "disabled",
+        });
+        await progressSurface
+          .getByText("Verify saved progress recovery", { exact: true })
+          .filter({ visible: true })
+          .first()
+          .waitFor();
+        expect(await retry.count()).toBe(0);
+        expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
+        expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
   it.each(["card", "empty", "error"] as const)(
     "keeps the same usable composer through initial history and %s progress",
     async (outcome) => {
@@ -176,7 +354,14 @@ suite.define(() => {
         } else {
           expect(await page.locator('[data-progress-card-placement="details"]').count()).toBe(0);
           if (outcome === "error") {
-            await page.getByText("Session progress is unavailable.", { exact: true }).waitFor();
+            expect(
+              await page.getByText("Session progress is unavailable.", { exact: true }).count(),
+            ).toBe(0);
+            expect(
+              await page
+                .getByText("Couldn't load task progress. Try again.", { exact: true })
+                .count(),
+            ).toBe(0);
           }
         }
         await closeChatDetails(page);

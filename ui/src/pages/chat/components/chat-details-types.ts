@@ -5,6 +5,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import type { SessionProgressCardError } from "../../../lib/session-progress-cards.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
 import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
@@ -96,7 +97,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     /** Stable per native resource identity; acquire only while Details is presented. */
     retainOutputs?: () => (() => void) | undefined;
     /** Details consumes the unfiltered progress projection, independently of Show in chat. */
-    progressCardError?: "access-denied" | "unavailable";
+    progressCardError?: SessionProgressCardError;
+    onRetryProgressCard?: () => void;
     showTaskProgress?: boolean;
     onShowTaskProgressChange?: (shown: boolean) => void;
     onSessionSelect?: (sessionKey: string) => void;

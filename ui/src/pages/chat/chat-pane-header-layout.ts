@@ -305,11 +305,14 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     : detailsOutputs.outputs.dashboard,
                 }
               : undefined,
-            progressCard: detailsProgress?.card ?? null,
+            progressCard:
+              detailsProgress?.card ??
+              (this.progressCardSnapshot.card === undefined ? undefined : null),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,
             progressCardError: this.detailsProgressCardError ?? undefined,
+            onRetryProgressCard: this.captureDetailsProgressReadRetry(),
             showTaskProgress: this.showTaskProgress,
             desktopPresentation: {
               peopleLabel: t("chat.mobileDetails.people"),

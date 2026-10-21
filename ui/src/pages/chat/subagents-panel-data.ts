@@ -220,7 +220,6 @@ export class SubagentsPanelData {
     if (!this.current(generation)) {
       return;
     }
-    this.metrics.clear();
     this.error = null;
     await this.readList();
   }
@@ -270,11 +269,12 @@ export class SubagentsPanelData {
       (pagination?.totalCount !== undefined && pagination.count < pagination.totalCount);
     this.loading = snapshot.loading || incomplete;
     this.error = snapshot.error;
-    if (snapshot.error) {
-      // Access loss must not leave previously readable child contents onscreen.
+    if (snapshot.readAccessDenied) {
       this.sessions = [];
       this.metrics.clear();
-    } else if (result && !incomplete) {
+      this.stopping.clear();
+      this.hasResult = false;
+    } else if (result && !incomplete && !snapshot.error && snapshot.readSucceeded !== false) {
       this.hasResult = true;
       const sampledAt = Date.now();
       const previous = new Map(this.sessions.map((row) => [row.key, row]));

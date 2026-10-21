@@ -35,6 +35,7 @@ import {
 import {
   MobileTaskProgressContent,
   MobileTaskProgressControls,
+  TaskProgressError,
   type MobileTaskProgressProps,
 } from "./chat-details-progress.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -288,13 +289,12 @@ function MobileRoot(
               />
             }
           >
-            <div class="chat-details-mobile-root__notice" role="status">
-              {t(
-                props.details.progressCardError === "access-denied"
-                  ? "sessionProgressCard.widgetAccessDenied"
-                  : "sessionProgressCard.widgetUnavailable",
-              )}
-            </div>
+            <TaskProgressError
+              class="chat-details-mobile-root__notice"
+              error={props.details.progressCardError}
+              hasCard={Boolean(props.details.progressCard)}
+              onRetry={props.details.onRetryProgressCard}
+            />
           </Show>
         ) : undefined
       }
@@ -478,6 +478,7 @@ function mobileProgressProps(
     card: details.progressCard,
     initialLoading: details.progressCardInitialLoading === true,
     error: details.progressCardError,
+    onRetry: details.onRetryProgressCard,
     presented,
     refreshAction: details.progressCardRefresh,
     onClearSavedProgressCard: details.onClearSavedProgressCard,

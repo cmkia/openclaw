@@ -1,6 +1,7 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 // @vitest-environment jsdom
 import { createSignal } from "solid-js";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
@@ -138,3 +139,64 @@ it("groups duplicate filenames by producer origin and keeps deferred schemas out
     ["client", null],
   ]);
 });
+
+it.each([false, true])(
+  "retains only an authorized compatible report during revalidation (denied=%s)",
+  async (denied) => {
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
+    const pending = createDeferredCore<ReturnType<typeof usage>>();
+    const replacement = createDeferredCore<ReturnType<typeof usage>>();
+    let reads = 0;
+    const request = createGatewayRequestMock(() =>
+      ++reads === 1 ? usage("current") : reads === 2 ? pending.promise : replacement.promise,
+    );
+    const { gateway, publish } = createApplicationGateway();
+    publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+    const [used, setUsed] = createSignal(50000);
+    const [session, setSession] = createSignal<GatewaySessionRow>({
+      key: "agent:main:current",
+      kind: "direct",
+      sessionId: "current",
+      model: "first",
+    });
+    const view = mountSolid(() => (
+      <ChatContextBreakdown gateway={gateway} session={session()} used={used()} limit={100000} />
+    ));
+    onTestFinished(view.unmount);
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
+    setUsed(51000);
+    flush();
+    expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
+    pending.reject(
+      denied
+        ? new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" })
+        : new Error("Temporary connection failure"),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(Boolean(view.container.querySelector(".chat-context__bar"))).toBe(!denied);
+    if (!denied) {
+      expect(view.container.textContent).toContain("Showing the last available report");
+    }
+    publish({ ...gateway.snapshot, phase: "reconnecting" });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(Boolean(view.container.querySelector(".chat-context__bar"))).toBe(!denied);
+    publish({ ...gateway.snapshot, phase: "connected" });
+    setSession({
+      key: "agent:main:current",
+      kind: "direct",
+      sessionId: "current",
+      model: "second",
+    });
+    flush();
+    expect(view.container.querySelector(".chat-context__bar")).toBeNull();
+    replacement.resolve(usage("current"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
+  },
+);

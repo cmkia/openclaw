@@ -235,3 +235,31 @@ it("keeps details process observation through refreshes and follows its presente
   expect(request.mock.calls).toEqual([mainRead, workerRead, mainRead]);
   expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
 });
+
+it.each([false, true])(
+  "keeps a confirmed empty Processes panel during revalidation and failure (mobile: %s)",
+  async (mobile) => {
+    const pending = createDeferred<SessionsProcessesListResult>();
+    let updating = false;
+    const { connection, mount } = mountProcesses(() =>
+      updating ? pending.promise : { ...completeList, processes: [] },
+    );
+    const panel = document.createElement("openclaw-chat-processes-panel");
+    panel.sessionKey = "agent:main:parent";
+    panel.mobile = mobile;
+    mount(panel);
+    await settle(panel, 0);
+    expect(panel.textContent).toContain("No processes");
+    updating = true;
+    connection.publishEvent("sessions.processes.changed", {
+      sessionKey: "agent:main:parent",
+      agentId: "main",
+    });
+    await panel.updateComplete;
+    expect(panel.textContent).toContain("No processes");
+    pending.reject(new Error("Worker reconnecting"));
+    await settle(panel, 0);
+    expect(panel.textContent).toContain("No processes");
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Worker reconnecting");
+  },
+);

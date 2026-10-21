@@ -356,7 +356,29 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   }
 
   protected get detailsProgressCardError() {
-    return this.progressCardSnapshot.error;
+    return this.progressCardSnapshot.persistentError;
+  }
+
+  protected captureDetailsProgressReadRetry() {
+    const target = this.initialProgressCardTarget();
+    const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
+    const scope = gatewayPresentationScope(gateway);
+    if (!target || !client || gateway.snapshot.phase !== "connected") {
+      return undefined;
+    }
+    return () => {
+      const current = this.initialProgressCardTarget();
+      if (
+        this.context.gateway === gateway &&
+        gateway.snapshot.client === client &&
+        gatewayPresentationScope(gateway) === scope &&
+        current?.sessionKey === target.sessionKey &&
+        current?.agentId === target.agentId
+      ) {
+        void this.progressCards.load(target).catch(() => undefined);
+      }
+    };
   }
 
   protected get progressCardPresentation() {

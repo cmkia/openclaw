@@ -1,11 +1,15 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
   installMockGateway,
+  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -399,6 +403,50 @@ suite.define(() => {
           .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
           .toContain("2 calls");
 
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        const panelQuery = {
+          spawnedBy: parent.key,
+          limit: 100,
+          includeGlobal: false,
+          includeUnknown: false,
+        };
+        expect((await gateway.getRequests("sessions.list", panelQuery)).length).toBeGreaterThan(0);
+        const beforeRead = await gateway.deferNext("sessions.list", panelQuery);
+        await gateway.emitGatewayEvent("sessions.changed", {
+          reason: "sharing",
+          sessionKey: parent.key,
+        });
+        await page.clock.runFor(5_000);
+        await gateway.waitForRequest("sessions.list", {
+          after: beforeRead,
+          match: panelQuery,
+        });
+        await gateway.rejectDeferred(
+          "sessions.list",
+          {
+            code: "UNAVAILABLE",
+            message: "Child list temporarily unavailable",
+            retryable: true,
+          },
+          { match: panelQuery },
+        );
+        await panel.getByText("Child list temporarily unavailable", { exact: false }).waitFor();
+        const retained = await takeControlUiScreenshotFrame(page, panel, [panel], {
+          elements: [panel],
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "subagents-read-failure.png"), retained.png);
+        await writeFile(
+          path.join(suite.artifactDir, "subagents-read-failure-panel.png"),
+          retained.elements[0]!.png,
+        );
+        expect(await panel.locator(".subagents-desktop__row").count()).toBe(5);
+        await panel.getByRole("button", { name: "Retry", exact: true }).click();
+        await panel
+          .getByText("Child list temporarily unavailable", { exact: false })
+          .waitFor({ state: "hidden" });
+        await page.clock.resume();
         const activity = {
           sessionKey: child.key,
           agentId: "main",

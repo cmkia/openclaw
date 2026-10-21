@@ -9,6 +9,7 @@ import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cro
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
+import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -45,6 +46,8 @@ export function createSessionAutomationInventory(
   let showError = false;
   let readAccess = false;
   let dirty = true;
+  let retryPending = false;
+  const retry = createGatewayRetryOwner();
   let active = true;
   let presentationScope = 0;
   const visible = (isPresented = presented()) =>
@@ -67,6 +70,8 @@ export function createSessionAutomationInventory(
   };
 
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    retry.reset();
+    retryPending = false;
     retireCronJobsRequest(cron);
     readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
       requireAdvertisement: false,
@@ -122,6 +127,8 @@ export function createSessionAutomationInventory(
     ) {
       return;
     }
+    retry.cancel();
+    retryPending = false;
     dirty = false;
     const pending = loadCompactCronJobsPage(current, { append, event });
     publish();
@@ -130,8 +137,19 @@ export function createSessionAutomationInventory(
       return;
     }
     // The loader pauses trailing reads while hidden; retain one visible catch-up.
-    dirty ||= !visible();
     showError = current.cronJobsError !== null;
+    dirty ||= !visible() || showError;
+    if (showError && visible() && !current.cronJobsReadDenied) {
+      retryPending = true;
+      retry.schedule(() => {
+        retryPending = false;
+        if (cron === current) {
+          void load();
+        }
+      });
+    } else if (!showError || current.cronJobsReadDenied) {
+      retry.reset();
+    }
     publish();
   }
 
@@ -162,7 +180,7 @@ export function createSessionAutomationInventory(
               reset(source, key, identity === nextIdentity && readAccess === nextReadAccess);
               identity = nextIdentity;
             }
-            if (dirty) {
+            if (dirty && !retryPending && !cron.cronJobsReadDenied) {
               void load();
             }
           });
@@ -177,6 +195,8 @@ export function createSessionAutomationInventory(
             unsubscribe();
             unsubscribeEvents();
             connection.dispose();
+            retry.reset();
+            retryPending = false;
             retireCronJobsRequest(cron);
           };
         });
@@ -184,10 +204,12 @@ export function createSessionAutomationInventory(
           <For each={[presented()]}>
             {(shown) => {
               onSettled(() => {
-                if (shown) {
+                if (shown && !cron.cronJobsReadDenied) {
                   void load({ isPresented: true });
                 }
                 return () => {
+                  retry.cancel();
+                  retryPending = false;
                   dirty = true;
                 };
               });
@@ -200,7 +222,10 @@ export function createSessionAutomationInventory(
   );
   onSettled(() => {
     const activate = () => {
-      if (dirty) {
+      if (!visible()) {
+        retry.cancel();
+        retryPending = false;
+      } else if (dirty && !cron.cronJobsReadDenied) {
         void load();
       }
     };
@@ -209,6 +234,7 @@ export function createSessionAutomationInventory(
     activate();
     return () => {
       active = false;
+      retry.reset();
       stopVisibility();
       stopFocus();
     };

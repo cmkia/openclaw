@@ -91,6 +91,8 @@ export type SessionListSnapshot = Pick<
 > & {
   /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
   readSucceeded?: boolean;
+  /** The latest read rejected this window's access; retained rows are no longer readable. */
+  readAccessDenied?: boolean;
   /** Accepted server-window membership before local visibility and generation filters. */
   pagination?: Pick<SessionsListResult, "totalCount" | "hasMore" | "nextOffset"> & {
     count: number;

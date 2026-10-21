@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -275,6 +276,128 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   await current.ready();
   expect(find<HTMLDetailsElement>("details")?.open).toBe(true);
 });
+
+it.each([false, true])(
+  "recovers inventory reads without changing paused jobs: loaded=%s",
+  async (loaded) => {
+    vi.useFakeTimers();
+    const request = createGatewayRequestMock();
+    if (loaded) {
+      request.mockResolvedValueOnce(page([job({ enabled: false })]));
+    }
+    request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
+    const current = component(request);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      if (loaded) {
+        current.cron();
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        expect(current.element.textContent).toContain("Paused");
+      }
+      expect(current.find(".chat-summary__automation-retry")).not.toBeNull();
+      const count = request.mock.calls.length;
+      request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
+      current.publish({ ...current.gateway.snapshot });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(request).toHaveBeenCalledTimes(count);
+      await vi.advanceTimersByTimeAsync(1);
+      flush();
+      expect(current.element.textContent).toContain("Recovered automation");
+      expect(current.element.textContent).toContain("Paused");
+      expect(current.find(".chat-summary__automation-retry")).toBeNull();
+      expect(request).toHaveBeenCalledTimes(count + 1);
+      expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
+    } finally {
+      current.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(["retry", "event", "reconnect"] as const)(
+  "retires refused automation content until a new %s read",
+  async (recovery) => {
+    vi.useFakeTimers();
+    const request = createGatewayRequestMock().mockResolvedValueOnce(
+      page([job({ enabled: false })]),
+    );
+    const current = component(request);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(current.element.textContent).toContain("Check the task");
+      request.mockRejectedValue(
+        new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Read authority revoked" }),
+      );
+      current.cron();
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(current.element.textContent).not.toContain("Check the task");
+      expect(current.find(".chat-summary__automation-more")).toBeNull();
+      current.publish({ ...current.gateway.snapshot });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+      request.mockResolvedValue(page([job({ name: "Authorized automation", enabled: false })]));
+      if (recovery === "retry") {
+        current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
+      } else if (recovery === "event") {
+        current.cron();
+      } else {
+        const snapshot = current.gateway.snapshot;
+        current.publish({ ...snapshot, phase: "reconnecting" });
+        current.publish(snapshot);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(current.element.textContent).toContain("Authorized automation");
+      expect(current.element.textContent).toContain("Paused");
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
+    } finally {
+      current.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(["hidden", "offline", "denied", "unmounted"] as const)(
+  "retires pending inventory recovery when %s",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const current = component(
+      createGatewayRequestMock().mockRejectedValue(new Error("Temporary failure")),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      if (boundary === "hidden") {
+        current.update({ presented: false });
+      } else if (boundary === "offline") {
+        current.publish({ ...current.gateway.snapshot, phase: "reconnecting" });
+      } else if (boundary === "denied") {
+        current.publish({
+          ...current.gateway.snapshot,
+          hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+        });
+      } else {
+        current.unmount();
+      }
+      const count = current.request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      flush();
+      expect(current.request).toHaveBeenCalledTimes(count);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (boundary !== "unmounted") {
+        current.unmount();
+      }
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   const pending = createDeferred<Page>();

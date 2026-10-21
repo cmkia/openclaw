@@ -1,7 +1,9 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { JSX } from "@solidjs/web";
 import { For, Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -200,41 +202,51 @@ export function ChatContextBreakdown(props: {
 }) {
   const gateway = createMemo(() => projectGateway(props.gateway));
   const [revision, setRevision] = createSignal(0);
-  const target = createMemo(
+  const identity = createMemo(
     () => {
       const connection = gateway().read();
       return {
-        client: connection.snapshot.phase === "connected" ? connection.snapshot.client : null,
+        client: connection.snapshot.client,
+        scope: gatewayPresentationScope(props.gateway),
         connectionRevision: connection.connectionRevision,
         key: scopedSessionArtifactKey(props.session.key, props.agentId),
         sessionId: props.session.sessionId,
         model: props.session.activeModel || props.session.model,
         provider: props.session.modelProvider,
-        revision: revision(),
-        used: props.used,
+        agentId: props.agentId,
       };
     },
     {
       equals: (a, b) =>
         a.client === b.client &&
+        a.scope === b.scope &&
         a.connectionRevision === b.connectionRevision &&
         a.key === b.key &&
         a.sessionId === b.sessionId &&
         a.model === b.model &&
         a.provider === b.provider &&
-        a.revision === b.revision &&
-        a.used === b.used,
+        a.agentId === b.agentId,
     },
   );
+  const target = createMemo(() => ({
+    identity: identity(),
+    connected: gateway().read().snapshot.phase === "connected",
+    revision: revision(),
+    used: props.used,
+  }));
+  let retained:
+    | { identity: ReturnType<typeof identity>; report: SessionSystemPromptReport | null }
+    | undefined;
   const result = createMemo(
     async (): Promise<{
       report: SessionSystemPromptReport | null;
       failed?: boolean;
       offline?: boolean;
     }> => {
-      const current = target();
-      if (!current.client) {
-        return { report: null, offline: true };
+      const request = target();
+      const current = request.identity;
+      if (!request.connected || !current.client) {
+        return { report: retained?.identity === current ? retained.report : null, offline: true };
       }
       const controller = new AbortController();
       onCleanup(() => controller.abort());
@@ -249,7 +261,7 @@ export function ChatContextBreakdown(props: {
             endDate: today,
             timeZone: "utc",
             scope: "instance",
-            agentId: props.agentId,
+            agentId: current.agentId,
           },
           { key: current.key, includeContextWeight: true, signal: controller.signal },
         );
@@ -265,18 +277,32 @@ export function ChatContextBreakdown(props: {
           (report.model && current.model && report.model !== current.model) ||
           (report.provider && current.provider && report.provider !== current.provider)
         ) {
+          if (!controller.signal.aborted) {
+            retained = { identity: current, report: null };
+          }
           return { report: null };
         }
+        if (!controller.signal.aborted) {
+          retained = { identity: current, report };
+        }
         return { report };
-      } catch {
-        return { report: null, failed: true };
+      } catch (error) {
+        const denied =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+        if (denied && !controller.signal.aborted) {
+          retained = undefined;
+        }
+        return {
+          report: !denied && retained?.identity === current ? retained.report : null,
+          failed: true,
+        };
       }
     },
   );
   return (
     <div class="chat-context">
       <Loading
-        on={target()}
+        on={identity()}
         fallback={
           <p class="chat-context__note" role="status">
             {t("chat.sessionDetails.contextLoading")}
@@ -355,6 +381,15 @@ export function ChatContextBreakdown(props: {
                       <ContextGroups groups={deferred()} />
                     </div>
                   </details>
+                </Show>
+                <Show when={result().failed || result().offline}>
+                  <p class="chat-context__note" role="status">
+                    {t(
+                      result().offline
+                        ? "chat.sessionDetails.contextOffline"
+                        : "chat.sessionDetails.contextUpdateError",
+                    )}
+                  </p>
                 </Show>
                 <p class="chat-context__note">{t("chat.sessionDetails.contextEstimate")}</p>
               </>

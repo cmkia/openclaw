@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionProcessSummary,
@@ -147,7 +148,6 @@ class ProcessObservation {
         (typeof payload.sessionKey !== "string" &&
           !(sessionChanged && payload.sessionKey === undefined)) ||
         (payload.agentId !== undefined && typeof payload.agentId !== "string") ||
-        this.error ||
         !this.current(this.generation) ||
         (typeof payload.sessionKey === "string" &&
           !uiConversationMatches(
@@ -218,6 +218,7 @@ class ProcessObservation {
       return Promise.resolve();
     }
     const generation = this.generation;
+    let accessDenied = false;
     this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
@@ -243,10 +244,15 @@ class ProcessObservation {
         if (!this.current(generation)) {
           return;
         }
-        // Access loss cannot leave the previous private output visible.
-        this.rows = [];
-        this.sessionId = null;
-        this.stopping.clear();
+        accessDenied =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+        if (accessDenied) {
+          this.rows = [];
+          this.sessionId = null;
+          this.stopping.clear();
+          this.hasResult = false;
+          this.truncated = false;
+        }
         this.error = formatUiError(error);
       })
       .finally(() => {
@@ -259,8 +265,8 @@ class ProcessObservation {
         this.loading = false;
         this.changed();
         // A change arriving during the read needs one trailing snapshot. Otherwise
-        // retain only a slow recovery poll; errors require explicit Retry.
-        if (!this.error) {
+        // retain one slow recovery poll, including after transient read failures.
+        if (!accessDenied) {
           if (this.refreshAgain) {
             void this.refresh();
           } else {
@@ -288,7 +294,6 @@ class ProcessObservation {
     ) {
       return;
     }
-    this.clearTimer();
     this.stopping.add(row.instanceId);
     this.error = null;
     this.changed();
@@ -323,7 +328,24 @@ class ProcessObservation {
       }
       this.stopping.delete(row.instanceId);
       this.error = formatUiError(error);
+      const denied =
+        error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+      if (denied) {
+        this.rows = this.rows.map((item) => ({ ...item, canStop: false }));
+      }
       this.changed();
+      if (denied) {
+        // A denied write does not prove read access was revoked. Reconcile the
+        // current output and Stop authority without repeating the mutation.
+        await this.pending;
+        if (this.current(generation)) {
+          await this.refresh();
+          if (this.current(generation) && !this.error) {
+            this.error = formatUiError(error);
+            this.changed();
+          }
+        }
+      }
     }
   }
 
