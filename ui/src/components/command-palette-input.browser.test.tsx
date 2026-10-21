@@ -199,6 +199,10 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
         await threeFrames();
         expect(styleChanges).toEqual([]);
       });
+      edit(input, "One line");
+      observer.takeRecords();
+      await threeFrames();
+      expect(styleChanges).toEqual([]);
     } finally {
       observer.disconnect();
     }

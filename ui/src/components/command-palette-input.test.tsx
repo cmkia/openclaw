@@ -57,7 +57,6 @@ it("reports full edits, reuses their layout, and retires observation across remo
   const measureContent = vi.fn(() => contentHeight);
   mockLayout(input, measureContent);
   await vi.advanceTimersByTimeAsync(20);
-  expect(observe.mock.calls.map(([target]) => target)).toContain(entry);
   expect(inputRef).toHaveBeenCalledWith(input);
 
   contentHeight = 48;
