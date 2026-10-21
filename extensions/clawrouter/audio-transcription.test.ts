@@ -1,87 +1,11 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
-import type { ServerResponse } from "node:http";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
-import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
-type Capture = { url: string; authorization?: string; form: FormData };
-async function fixture(
-  run: (p: {
-    cfg: OpenClawConfig;
-    filePath: string;
-    requests: Capture[];
-    audio: Buffer;
-    home: string;
-  }) => Promise<void>,
-  respond: (res: ServerResponse) => void = (res) => {
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ text: "synthetic transcript" }));
-  },
-) {
-  await withTempHome(
-    async (home) => {
-      const audio = Buffer.alloc(2048, 42);
-      audio.write("RIFF", 0);
-      audio.writeUInt32LE(2040, 4);
-      audio.write("WAVEfmt ", 8);
-      audio.writeUInt32LE(16, 16);
-      audio.writeUInt16LE(1, 20);
-      audio.writeUInt16LE(1, 22);
-      audio.writeUInt32LE(8000, 24);
-      audio.writeUInt32LE(16000, 28);
-      audio.writeUInt16LE(2, 32);
-      audio.writeUInt16LE(16, 34);
-      audio.write("data", 36);
-      audio.writeUInt32LE(2004, 40);
-      const filePath = home + "/meeting (1).wav";
-      await fs.writeFile(filePath, audio);
-      const requests: Capture[] = [];
-      await withServer(
-        (req, res) => {
-          void (async () => {
-            const chunks: Buffer[] = [];
-            for await (const chunk of req) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const form = await new Response(Buffer.concat(chunks), {
-              headers: { "content-type": req.headers["content-type"] ?? "" },
-            }).formData();
-            requests.push({ url: req.url ?? "", authorization: req.headers.authorization, form });
-            respond(res);
-          })().catch((error: unknown) =>
-            res.destroy(error instanceof Error ? error : new Error(String(error))),
-          );
-        },
-        async (baseUrl) => {
-          const cfg: OpenClawConfig = {
-            plugins: { allow: ["clawrouter"], entries: { clawrouter: { enabled: true } } },
-            models: {
-              providers: {
-                clawrouter: {
-                  baseUrl,
-                  apiKey: "fixture-router",
-                  request: { allowPrivateNetwork: true },
-                  models: [],
-                },
-              },
-            },
-            tools: {
-              media: {
-                models: [{ provider: "clawrouter", capabilities: ["audio"] }],
-                audio: { enabled: true },
-              },
-            },
-          };
-          await run({ cfg, filePath, requests, audio, home });
-        },
-      );
-    },
-    { env: { CLAWROUTER_API_KEY: undefined, OPENAI_API_KEY: "fixture-upstream-never-router" } },
-  );
-}
+import { withClawRouterAudioFixture as fixture } from "./audio-transcription.test-support.js";
 
 describe("ClawRouter registered file transcription", () => {
   it("uses the native default, scoped router auth and byte-exact multipart through the media runner", async () => {
@@ -349,6 +273,105 @@ describe("ClawRouter registered file transcription", () => {
         res.setHeader("content-type", "application/json");
         res.write('{"text":"');
         res.once("close", () => closed.resolve());
+      },
+    );
+  });
+});
+
+// A distinct registered-runtime boundary: automatic preparation may continue,
+// but uploading a recording commits that automatic attempt to one provider.
+describe("ClawRouter automatic transcription", () => {
+  it.each([
+    { name: "missing key", fileName: undefined, reason: undefined },
+    { name: "AAC filename", fileName: "voice.aac", reason: "safe upload filename" },
+    { name: "unsafe filename", fileName: "voice[1].wav", reason: "safe upload filename" },
+    { name: "private-network policy", fileName: undefined, reason: "Blocked hostname" },
+  ])(
+    "continues before upload after $name without disclosing to ClawRouter",
+    async ({ name, fileName, reason }) => {
+      await fixture(async ({ cfg, filePath, requests, home }) => {
+        delete cfg.tools!.media!.models;
+        cfg.plugins!.allow!.push("openai");
+        cfg.models!.providers!.openai = {
+          baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
+          apiKey: "fixture-fallback",
+          request: { allowPrivateNetwork: true },
+          models: [],
+        };
+        let uploadPath = filePath;
+        if (name === "missing key") {
+          delete cfg.models!.providers!.clawrouter!.apiKey;
+        } else if (fileName) {
+          const nextPath = home + "/" + fileName;
+          await fs.rename(filePath, nextPath);
+          uploadPath = nextPath;
+        }
+        if (name === "private-network policy") {
+          cfg.models!.providers!.clawrouter!.request = { allowPrivateNetwork: false };
+        }
+        const result = await transcribeAudioFile({
+          cfg,
+          filePath: uploadPath,
+          mime: "audio/wav",
+          activeModel: { provider: "clawrouter", model: "chat-model-not-transcription" },
+        });
+        expect(result).toMatchObject({ text: "synthetic transcript", provider: "openai" });
+        expect(requests.map(({ url, authorization }) => ({ url, authorization }))).toEqual([
+          { url: "/fallback/audio/transcriptions", authorization: "Bearer fixture-fallback" },
+        ]);
+        const attempts = result.decision?.attachments[0]?.attempts;
+        if (reason) {
+          expect(attempts).toEqual([
+            expect.objectContaining({
+              provider: "clawrouter",
+              outcome: "failed",
+              reason: expect.stringContaining(reason),
+            }),
+            expect.objectContaining({ provider: "openai", outcome: "success" }),
+          ]);
+        } else {
+          expect(attempts).toEqual([
+            expect.objectContaining({ provider: "openai", outcome: "success" }),
+          ]);
+        }
+      });
+    },
+  );
+
+  it("stops automatic selection after a pricing_required HTTP upload without contacting another provider", async () => {
+    await fixture(
+      async ({ cfg, filePath, requests }) => {
+        delete cfg.tools!.media!.models;
+        cfg.plugins!.allow!.push("openai");
+        cfg.models!.providers!.openai = {
+          baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
+          apiKey: "fixture-fallback",
+          request: { allowPrivateNetwork: true },
+          models: [],
+        };
+        await expect(
+          transcribeAudioFile({
+            cfg,
+            filePath,
+            activeModel: { provider: "clawrouter", model: "chat-model" },
+          }),
+        ).rejects.toThrow(/pricing_required/);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          url: "/v1/native/openai/v1/audio/transcriptions",
+          authorization: "Bearer fixture-router",
+        });
+      },
+      (res) => {
+        res.statusCode = 400;
+        res.end(
+          JSON.stringify({
+            error: {
+              code: "pricing_required",
+              message: "No qualified arbitrary-file reserve bound",
+            },
+          }),
+        );
       },
     );
   });

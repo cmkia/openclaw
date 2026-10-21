@@ -84,6 +84,7 @@ export function buildClawRouterSpeechProvider(context: Context): SpeechProviderP
                     baseUrl,
                     models: cfg.models?.providers?.clawrouter?.models ?? [],
                     apiKey: config.apiKey,
+                    auth: "api-key",
                   },
                 },
               },

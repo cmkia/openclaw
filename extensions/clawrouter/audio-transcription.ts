@@ -89,8 +89,10 @@ async function prepare(context: AudioTranscriptionConfigContext & { signal?: Abo
 export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "clawrouter",
   capabilities: ["audio"],
+  inheritConfiguredImageCapability: true,
+  sharedEntryCapabilities: ["image"],
   defaultModels: { audio: MODEL },
-  // Explicit selection only: credential availability is not a per-key model grant or admission proof.
+  // Active/configured providers are automatically eligible; readiness is not a model grant or admission proof.
   async isAudioConfigured(context) {
     try {
       await prepare(context);
@@ -100,41 +102,55 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
     }
   },
   async transcribeAudioWithContext(context) {
-    // Every failure is terminal for this explicit router request. Never rotate accounts or replay uploads.
-    const prepared = await prepare(context);
-    if (context.query && Object.keys(context.query).length > 0) {
-      throw new Error(
-        "ClawRouter transcription does not support providerOptions; use language and prompt only",
-      );
+    let uploadStarted = false;
+    try {
+      const prepared = await prepare(context);
+      if (context.query && Object.keys(context.query).length > 0) {
+        throw new Error(
+          "ClawRouter transcription does not support providerOptions; use language and prompt only",
+        );
+      }
+      if (context.buffer.length === 0 || context.buffer.length > 25_000_000) {
+        throw new Error("ClawRouter transcription requires 1-25000000 file bytes");
+      }
+      // The shared helper normalizes paths/AAC names; reject unsupported names rather than silently relabeling bytes.
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(context.fileName) ||
+        context.fileName.includes("..") ||
+        context.fileName !== context.fileName.trim() ||
+        /\.aac$/i.test(context.fileName) ||
+        context.mime === "audio/aac"
+      ) {
+        throw new Error(
+          "ClawRouter transcription requires a safe upload filename (AAC relabeling is unsupported)",
+        );
+      }
+      return {
+        ok: true,
+        value: await transcribeOpenAiCompatibleAudio({
+          ...context,
+          ...prepared,
+          provider: "clawrouter",
+          defaultModel: MODEL,
+          defaultBaseUrl: prepared.baseUrl,
+          auth: { kind: "api-key", apiKey: prepared.apiKey, source: prepared.source },
+          // Keep the guard's dispatcher (native Bun fetch ignores it), but never replay this upload on redirect.
+          fetchFn: (input, init) => {
+            uploadStarted = true;
+            return (context.fetchFn ?? fetchWithRuntimeDispatcher)(input, {
+              ...init,
+              redirect: "error",
+            });
+          },
+        }),
+      };
+    } catch (error) {
+      // The shared guard may reject configuration or network policy before calling fetchFn.
+      // After dispatch, even an HTTP or transport failure must not disclose to another provider.
+      if (uploadStarted) {
+        throw error;
+      }
+      return { ok: false, error };
     }
-    if (context.buffer.length === 0 || context.buffer.length > 25_000_000) {
-      throw new Error("ClawRouter transcription requires 1-25000000 file bytes");
-    }
-    // The shared helper normalizes paths/AAC names; reject unsupported names rather than silently relabeling bytes.
-    if (
-      !/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(context.fileName) ||
-      context.fileName.includes("..") ||
-      context.fileName !== context.fileName.trim() ||
-      /\.aac$/i.test(context.fileName) ||
-      context.mime === "audio/aac"
-    ) {
-      throw new Error(
-        "ClawRouter transcription requires a safe upload filename (AAC relabeling is unsupported)",
-      );
-    }
-    return {
-      ok: true,
-      value: await transcribeOpenAiCompatibleAudio({
-        ...context,
-        ...prepared,
-        provider: "clawrouter",
-        defaultModel: MODEL,
-        defaultBaseUrl: prepared.baseUrl,
-        auth: { kind: "api-key", apiKey: prepared.apiKey, source: prepared.source },
-        // Keep the guard's dispatcher (native Bun fetch ignores it), but never replay this upload on redirect.
-        fetchFn: (input, init) =>
-          (context.fetchFn ?? fetchWithRuntimeDispatcher)(input, { ...init, redirect: "error" }),
-      }),
-    };
   },
 };

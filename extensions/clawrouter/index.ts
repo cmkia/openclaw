@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -13,6 +14,8 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { wrapProviderPayloadHook } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildProviderToolCompatFamilyHooks,
   findUnsupportedSchemaKeywords,
@@ -24,9 +27,15 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as readRecord,
+  normalizeFastMode,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
+import { buildClawRouterDecisionProvider } from "./decision-provider.js";
+import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
+import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
@@ -38,6 +47,11 @@ import {
   normalizeClawRouterResolvedModel,
   prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
+import {
+  resolveClawRouterServiceTiers,
+  resolveFastModeSupport,
+  resolveServiceTiers,
+} from "./provider-policy-api.js";
 import { buildClawRouterSpeechProvider } from "./speech-provider.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
@@ -45,6 +59,12 @@ const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
+
+const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
+  manifest.modelCatalog.providers.clawrouter.models.find(
+    (model) => model.id === "openai/gpt-6-luna",
+  )?.inference,
+);
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 const ATTRIBUTION_VALUE_MAX_LENGTH = 256;
@@ -135,6 +155,8 @@ function setHeaderDefault(
   }
 }
 
+const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const underlying = ctx.streamFn;
   if (!underlying) {
@@ -167,7 +189,44 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     if (dispatchKey) {
       headers.Authorization = `Bearer ${dispatchKey}`;
     }
-    return underlying({ ...preparedModel, headers }, context, options);
+    const tiers = resolveClawRouterServiceTiers(model);
+    const preference = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
+    // Reuse the native tier/Auto precedence only for catalog-qualified routes.
+    const stream = tiers
+      ? (openAiServiceTier.wrapStreamFn?.({
+          ...ctx,
+          streamFn: (requestModel, requestContext, requestOptions) =>
+            underlying(requestModel, requestContext, {
+              ...requestOptions,
+              onPayload: wrapProviderPayloadHook(
+                requestOptions?.onPayload,
+                (payload, replacement) => {
+                  // The caller owns explicit tiers, including async replacements.
+                  const body = readRecord(replacement ?? payload);
+                  if (body?.service_tier === "ultrafast" && !tiers.includes("ultrafast")) {
+                    throw new Error(
+                      "ClawRouter model " +
+                        model.id +
+                        " does not advertise ultrafast; supported tiers: " +
+                        tiers.join(", "),
+                    );
+                  }
+                  return replacement;
+                },
+              ),
+            }),
+          extraParams: {
+            ...ctx.extraParams,
+            fastMode: () => {
+              const fast = normalizeFastMode(
+                typeof preference === "function" ? preference() : preference,
+              );
+              return fast === true && !tiers.includes("priority") ? undefined : fast;
+            },
+          },
+        }) ?? underlying)
+      : underlying;
+    return stream({ ...preparedModel, headers }, context, options);
   };
 }
 
@@ -353,6 +412,13 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
+    api.registerDecisionProvider(buildClawRouterDecisionProvider());
+    api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: "clawrouter",
+      kinds: ["image_generation"],
+      liveCatalog: listClawRouterImageModelCatalog,
+    });
     api.registerGatewayMethod(
       "clawrouter.pool.get",
       async (request) => {
@@ -498,6 +564,19 @@ export default defineSingleProviderPluginEntry({
           };
         },
       },
+      // This is protocol support, not a key grant. The decision executor checks the
+      // selected credential's catalog before using its native route.
+      augmentModelCatalog: ({ entries }) =>
+        entries.map((entry) =>
+          entry.provider === PROVIDER_ID &&
+          entry.id === "openai/gpt-6-luna" &&
+          entry.api === "openai-responses"
+            ? {
+                ...entry,
+                inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
+              }
+            : entry,
+        ),
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
@@ -539,6 +618,8 @@ export default defineSingleProviderPluginEntry({
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      resolveFastModeSupport,
+      resolveServiceTiers,
       wrapSimpleCompletionStreamFn: wrapClawRouterProviderStream,
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {

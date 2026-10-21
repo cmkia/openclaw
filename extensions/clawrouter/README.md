@@ -47,7 +47,7 @@ rather than treating JSON error bodies as audio.
 
 ## Audio transcription
 
-For batch/file transcription (including Talk file transcription), explicitly select
+For batch/file transcription (including Talk file transcription), select
 ClawRouter in the normal media configuration:
 
 ```json5
@@ -76,6 +76,17 @@ The normal media owner classifies MIME and trims prompt whitespace; the adapter
 then preserves its file bytes, filename, effective MIME, language, and prompt.
 AAC relabeling and unsafe filenames are rejected. File uploads are capped at
 25,000,000 bytes; configured media byte/output limits can be lower.
+
+An active or configured ClawRouter provider is also eligible for the existing
+automatic audio selection. This is not an explicit-only adapter. Capability-less
+shared chat/image entries do not opt into audio: use explicit audio capabilities
+for shared transcription entries. Configured image-capable models retain
+automatic, explicit, and shared image selection; native vision handoff is unchanged.
+Authentication and configuration rejections can continue to another automatic
+candidate before upload; missing credentials do not record a failed ClawRouter
+attempt. An upload or HTTP failure stops automatic selection rather than sending
+the same recording to another provider. In particular, a service `pricing_required`
+response is not a reason to try a second provider.
 
 A current service deployment with transcription support is required. Credential
 availability does not prove per-key entitlement or budget admission. There is no
