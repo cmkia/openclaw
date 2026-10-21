@@ -29,16 +29,15 @@ describePluginRegistrationContract(pluginRegistrationContractCases.brave);
 
 describe("plugin testing harness contracts", () => {
   it("executes declared tools and reports missing tool contracts", async () => {
-    const previousHome = process.env.HOME;
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const environment = () => [process.env.HOME, process.env.OPENCLAW_STATE_DIR];
+    const previousEnvironment = environment();
 
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       await expect(
         fs.stat(path.join(stateDir, "agents", "main", "sessions")),
       ).resolves.toBeDefined();
-      expect(process.env.HOME).toBe(home);
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+      expect(environment()).toEqual([home, stateDir]);
 
       const { config, registry } = createPluginRegistryFixture({
         plugins: { entries: { "fixture-echo": { config: { prefix: "scoped" } } } },
@@ -81,8 +80,7 @@ describe("plugin testing harness contracts", () => {
 
       const missingContract = createPluginRegistryFixture();
       registerVirtualTestPlugin({
-        registry: missingContract.registry,
-        config: missingContract.config,
+        ...missingContract,
         id: "missing-contract",
         name: "Missing Contract",
         register(api) {
@@ -99,7 +97,6 @@ describe("plugin testing harness contracts", () => {
       });
     });
 
-    expect(process.env.HOME).toBe(previousHome);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+    expect(environment()).toEqual(previousEnvironment);
   });
 });

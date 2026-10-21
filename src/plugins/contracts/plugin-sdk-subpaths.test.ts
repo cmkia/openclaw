@@ -1,5 +1,5 @@
 // Plugin SDK subpath tests cover documented SDK subpath exports and package aliases.
-import fs, { readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as Contract from "openclaw/plugin-sdk/channel-contract";
@@ -47,19 +47,14 @@ const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-tes
 
 const importSdk = async (subpath: string) => import(`openclaw/plugin-sdk/${subpath}`);
 
-type BrowserFacadeSourceContract = {
+type BrowserHelperContract = {
   subpath: string;
   mentions: readonly string[];
   omits: readonly string[];
-};
-
-type BrowserHelperExportParityContract = {
-  corePath: string;
-  extensionPath: string;
   expectedExports: readonly string[];
 };
 
-const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = [
+const BROWSER_HELPER_CONTRACTS: readonly BrowserHelperContract[] = [
   {
     subpath: "browser-control-auth",
     mentions: identifiers(`
@@ -69,6 +64,10 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
     omits: identifiers(`
       resolveGatewayAuth writeConfigFile generateBrowserControlToken
       ensureGatewayStartupAuth
+    `),
+    expectedExports: identifiers(`
+      BrowserControlAuth ensureBrowserControlAuth resolveBrowserControlAuth
+      shouldAutoGenerateBrowserAuth
     `),
   },
   {
@@ -82,21 +81,6 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
       resolveBrowserSsrFPolicy ensureDefaultProfile ensureDefaultUserBrowserProfile
       normalizeHexColor
     `),
-  },
-];
-
-const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
-  {
-    corePath: "src/plugin-sdk/browser-control-auth.ts",
-    extensionPath: "extensions/browser/browser-control-auth.ts",
-    expectedExports: identifiers(`
-      BrowserControlAuth ensureBrowserControlAuth resolveBrowserControlAuth
-      shouldAutoGenerateBrowserAuth
-    `),
-  },
-  {
-    corePath: "src/plugin-sdk/browser-profiles.ts",
-    extensionPath: "extensions/browser/browser-profiles.ts",
     expectedExports: identifiers(`
       DEFAULT_AI_SNAPSHOT_MAX_CHARS DEFAULT_BROWSER_ACTION_TIMEOUT_MS
       DEFAULT_BROWSER_DEFAULT_PROFILE_NAME DEFAULT_BROWSER_EVALUATE_ENABLED
@@ -136,13 +120,7 @@ function collectNamedExportsFromClause(clause: string): string[] {
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0)
     .map((segment) => segment.replace(/^type\s+/u, ""))
-    .map((segment) => {
-      const aliasMatch = segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u);
-      if (aliasMatch?.[1]) {
-        return aliasMatch[1];
-      }
-      return segment;
-    });
+    .map((segment) => segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u)?.[1] ?? segment);
 }
 
 function collectNamedExportsFromSource(source: string): string[] {
@@ -171,10 +149,6 @@ function collectNamedExportsFromSource(source: string): string[] {
   }
 
   return [...names].toSorted();
-}
-
-function collectNamedExportsFromRepoFile(relativePath: string): string[] {
-  return collectNamedExportsFromSource(readRepoSource(relativePath));
 }
 
 function createSourceFile(absolutePath: string): ts.SourceFile {
@@ -246,31 +220,13 @@ function topLevelVitestModuleMockLines(filePath: string): number[] {
   return lines;
 }
 
-function expectNamedExportParity(params: BrowserHelperExportParityContract) {
-  for (const file of [params.corePath, params.extensionPath]) {
-    expect(collectNamedExportsFromRepoFile(file), `${file} exports changed`).toEqual([
+function expectNamedExportParity(params: BrowserHelperContract) {
+  for (const dir of ["src/plugin-sdk", "extensions/browser"]) {
+    const file = `${dir}/${params.subpath}.ts`;
+    expect(collectNamedExportsFromSource(readRepoSource(file)), `${file} exports changed`).toEqual([
       ...params.expectedExports,
     ]);
   }
-}
-
-function listTrackedRepoTsFiles(dir: string): string[] | null {
-  const relativeDir = toRepoRelativePath(REPO_ROOT, dir);
-  if (!relativeDir || relativeDir.startsWith("..")) {
-    return null;
-  }
-  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
-  if (!files) {
-    return null;
-  }
-  return files
-    .filter(
-      (line) =>
-        line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
-    )
-    .map((line) => resolve(REPO_ROOT, ...line.split("/")))
-    .filter((filePath) => fs.existsSync(filePath))
-    .toSorted();
 }
 
 function listRepoTsFiles(dir: string): string[] {
@@ -278,9 +234,14 @@ function listRepoTsFiles(dir: string): string[] {
   if (cached !== undefined) {
     return cached;
   }
-  const trackedFiles = listTrackedRepoTsFiles(dir);
+  const trackedFiles = listGitTrackedFiles({
+    repoRoot: REPO_ROOT,
+    pathspecs: toRepoRelativePath(REPO_ROOT, dir),
+  });
   expect(trackedFiles, "boundary scans require a Git checkout").not.toBeNull();
-  const files = trackedFiles ?? [];
+  const files = (trackedFiles ?? [])
+    .filter((line) => line.endsWith(".ts") && !/\/(?:dist|node_modules)\//u.test(line))
+    .map((line) => resolve(REPO_ROOT, ...line.split("/")));
   repoTsFilesCache.set(dir, files);
   return files;
 }
@@ -301,31 +262,9 @@ function findRepoFilesContaining(params: {
     .toSorted();
 }
 
-function isIdentifierCode(code: number): boolean {
-  return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    code === 36 ||
-    code === 95
-  );
-}
-
 function sourceMentionsIdentifier(source: string, name: string): boolean {
-  let fromIndex = 0;
-  while (true) {
-    const matchIndex = source.indexOf(name, fromIndex);
-    if (matchIndex === -1) {
-      return false;
-    }
-    const beforeCode = matchIndex === 0 ? -1 : source.charCodeAt(matchIndex - 1);
-    const afterIndex = matchIndex + name.length;
-    const afterCode = afterIndex >= source.length ? -1 : source.charCodeAt(afterIndex);
-    if (!isIdentifierCode(beforeCode) && !isIdentifierCode(afterCode)) {
-      return true;
-    }
-    fromIndex = matchIndex + 1;
-  }
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`, "u").test(source);
 }
 
 function expectSourceMentions(subpath: string, names: readonly string[]) {
@@ -367,7 +306,7 @@ function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
 }
 
-function expectBrowserFacadeSourceContract(contract: BrowserFacadeSourceContract) {
+function expectBrowserFacadeSourceContract(contract: BrowserHelperContract) {
   expectSourceMentions(contract.subpath, contract.mentions);
   expectSourceContains(contract.subpath, `artifactBasename: "${contract.subpath}.js"`);
   expectSourceOmits(contract.subpath, contract.omits);
@@ -433,24 +372,11 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps the curated public list free of internal implementation subpaths", () => {
-    for (const deniedSubpath of [
-      "acpx",
-      "device-pair",
-      "lobster",
-      "pairing-access",
-      "provider-model-definitions",
-      "qa-channel",
-      "qa-channel-protocol",
-      "reply-prefix",
-      "secret-input-schema",
-      "signal-core",
-      "synology-chat",
-      "typing",
-      "whatsapp",
-      "whatsapp-action-runtime",
-      "whatsapp-login-qr",
-      "zai",
-    ]) {
+    for (const deniedSubpath of identifiers(`
+      acpx device-pair lobster pairing-access provider-model-definitions qa-channel
+      qa-channel-protocol reply-prefix secret-input-schema signal-core synology-chat
+      typing whatsapp whatsapp-action-runtime whatsapp-login-qr zai
+    `)) {
       expect(pluginSdkSubpaths).not.toContain(deniedSubpath);
     }
   });
@@ -476,13 +402,13 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps browser compatibility helper subpaths as thin facades", () => {
-    for (const contract of BROWSER_FACADE_SOURCE_CONTRACTS) {
+    for (const contract of BROWSER_HELPER_CONTRACTS) {
       expectBrowserFacadeSourceContract(contract);
     }
   });
 
   it("keeps browser helper facade exports aligned with extension public wrappers", () => {
-    for (const contract of BROWSER_HELPER_EXPORT_PARITY_CONTRACTS) {
+    for (const contract of BROWSER_HELPER_CONTRACTS) {
       expectNamedExportParity(contract);
     }
   });

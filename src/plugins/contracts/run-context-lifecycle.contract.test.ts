@@ -59,17 +59,6 @@ function expectNoCleanupFailures(result: Awaited<ReturnType<typeof runPluginHost
   expect(result.failures).toEqual([]);
 }
 
-function requireFailureByHookId(
-  result: Awaited<ReturnType<typeof runPluginHostCleanup>>,
-  hookId: string,
-) {
-  const failure = result.failures.find((entry) => entry.hookId === hookId);
-  if (!failure) {
-    throw new Error(`Expected cleanup failure for hook ${hookId}`);
-  }
-  return failure;
-}
-
 describe("plugin run context lifecycle", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -264,7 +253,7 @@ describe("plugin run context lifecycle", () => {
       api.registerAgentEventSubscription({
         id: "delayed",
         streams: ["tool"],
-        async handle(eventValue, ctx) {
+        async handle(_event, ctx) {
           ctx.setRunContext("before-terminal", { visible: true });
           await toolHandlerRelease.promise;
           delayedToolHandlerSawContext = ctx.getRunContext("before-terminal");
@@ -334,44 +323,6 @@ describe("plugin run context lifecycle", () => {
     },
   );
 
-  it("preserves run context until async terminal event subscriptions settle", async () => {
-    const readContext = contextReader("async-terminal-subscription", "run-async-terminal");
-    const terminalHandlerRelease = createDeferredCore();
-    let terminalHandlerSawContext: unknown;
-    const { registry } = createRegisteredPlugin("async-terminal-subscription", (api) => {
-      api.registerAgentEventSubscription({
-        id: "records",
-        streams: ["tool", "lifecycle"],
-        async handle(event, ctx) {
-          if (event.stream === "tool") {
-            ctx.setRunContext("seen", { runId: event.runId });
-            return;
-          }
-          if (event.data?.phase !== "end") {
-            return;
-          }
-          await terminalHandlerRelease.promise;
-          terminalHandlerSawContext = ctx.getRunContext("seen");
-        },
-      });
-    });
-    setActivePluginRegistry(registry.registry);
-
-    emitRunEvent("run-async-terminal", "tool", { name: "tool" });
-    await Promise.resolve();
-
-    emitRunEvent("run-async-terminal", "lifecycle", { phase: "end" });
-    await Promise.resolve();
-
-    expect(readContext("seen")).toEqual({ runId: "run-async-terminal" });
-
-    terminalHandlerRelease.resolve();
-    await waitForPluginEventHandlers();
-
-    expect(terminalHandlerSawContext).toEqual({ runId: "run-async-terminal" });
-    expect(readContext("seen")).toBeUndefined();
-  });
-
   it("waits for terminal handlers added after the first terminal cleanup waiter starts", async () => {
     const readContext = contextReader(
       "repeated-terminal-live-wait",
@@ -412,6 +363,7 @@ describe("plugin run context lifecycle", () => {
 
     emitRunEvent("run-repeated-terminal-live-wait", "lifecycle", { phase: "end" });
     await waitForPluginEventHandlers();
+    expect(readContext("seen")).toEqual({ runId: "run-repeated-terminal-live-wait" });
 
     emitRunEvent("run-repeated-terminal-live-wait", "lifecycle", { phase: "end" });
     await waitForPluginEventHandlers();
@@ -585,10 +537,21 @@ describe("plugin run context lifecycle", () => {
       layout: "state-only",
       prefix: "openclaw-run-context-restart-state-",
     });
-    const stateDir = openClawState.stateDir;
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
+    const storePath = path.join(openClawState.stateDir, "sessions.json");
+    const tempConfig = { session: { store: storePath } };
+    const pluginExtensions = {
+      "restart-state-fixture": { workflow: { state: "waiting" } },
+    };
+    const pluginNextTurnInjections = {
+      "restart-state-fixture": [
+        {
+          id: "resume",
+          pluginId: "restart-state-fixture",
+          text: "resume",
+          placement: "prepend_context" as const,
+          createdAt: 1,
+        },
+      ],
     };
     try {
       await withTempConfig({
@@ -600,20 +563,8 @@ describe("plugin run context lifecycle", () => {
             entry: {
               sessionId: "session-1",
               updatedAt: Date.now(),
-              pluginExtensions: {
-                "restart-state-fixture": { workflow: { state: "waiting" } },
-              },
-              pluginNextTurnInjections: {
-                "restart-state-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "restart-state-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
+              pluginExtensions,
+              pluginNextTurnInjections,
             },
           });
 
@@ -627,20 +578,8 @@ describe("plugin run context lifecycle", () => {
           );
 
           const stored = getSessionEntry({ storePath, sessionKey: "agent:main:main" });
-          expect(stored?.pluginExtensions).toEqual({
-            "restart-state-fixture": { workflow: { state: "waiting" } },
-          });
-          expect(stored?.pluginNextTurnInjections).toEqual({
-            "restart-state-fixture": [
-              {
-                id: "resume",
-                pluginId: "restart-state-fixture",
-                text: "resume",
-                placement: "prepend_context",
-                createdAt: 1,
-              },
-            ],
-          });
+          expect(stored?.pluginExtensions).toEqual(pluginExtensions);
+          expect(stored?.pluginNextTurnInjections).toEqual(pluginNextTurnInjections);
         },
       });
     } finally {
@@ -648,22 +587,14 @@ describe("plugin run context lifecycle", () => {
     }
   });
 
-  it("rejects hung cleanup hooks with a bounded timeout", async () => {
+  it("rejects hung runtime scheduler cleanup hooks with a bounded timeout", async () => {
     vi.useFakeTimers();
-    const cleanup = vi.fn(async () => {
-      await new Promise(() => {});
-    });
+    const cleanup = vi.fn(() => new Promise<void>(() => {}));
     registerPluginSessionSchedulerJob({
       pluginId: "hung-cleanup-plugin",
       pluginName: "Hung Cleanup Plugin",
-      job: {
-        id: "job-hung",
-        sessionKey: "agent:main:main",
-        kind: "session-turn",
-        cleanup,
-      },
+      job: { id: "job-hung", sessionKey: "agent:main:main", kind: "session-turn", cleanup },
     });
-
     const resultPromise = runPluginHostCleanup({
       cfg: {},
       reason: "disable",
@@ -673,10 +604,9 @@ describe("plugin run context lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(cleanup).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
-    const result = await resultPromise;
-    expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]?.pluginId).toBe("hung-cleanup-plugin");
-    expect(result.failures[0]?.hookId).toBe("scheduler:job-hung");
+    expect((await resultPromise).failures).toMatchObject([
+      { pluginId: "hung-cleanup-plugin", hookId: "scheduler:job-hung" },
+    ]);
   });
 
   it("bounds session, runtime, and scheduler cleanup callbacks so cleanup keeps moving", async () => {
@@ -724,14 +654,13 @@ describe("plugin run context lifecycle", () => {
       }
       const result = await cleanupPromise;
       expect(result.failures).toHaveLength(3);
-      for (const hookId of [
-        "session:state",
-        "runtime:runtime-cleanup",
-        "scheduler:scheduler-cleanup",
-      ]) {
-        const failure = requireFailureByHookId(result, hookId);
-        expect(failure?.pluginId).toBe("hanging-cleanup-fixture");
-      }
+      expect(result.failures).toEqual(
+        expect.arrayContaining(
+          ["session:state", "runtime:runtime-cleanup", "scheduler:scheduler-cleanup"].map(
+            (hookId) => expect.objectContaining({ hookId, pluginId: "hanging-cleanup-fixture" }),
+          ),
+        ),
+      );
     } finally {
       cleanupRelease.resolve();
       await cleanupPromise;

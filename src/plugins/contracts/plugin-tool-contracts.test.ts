@@ -15,20 +15,7 @@ type PluginManifestFile = {
 };
 
 function walkFiles(dir: string): string[] {
-  const gitFiles = listGitFiles(dir);
-  if (gitFiles) {
-    return gitFiles;
-  }
-
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
-      continue;
-    }
-    const entryPath = path.join(dir, entry.name);
-    files.push(...(entry.isDirectory() ? walkFiles(entryPath) : [entryPath]));
-  }
-  return files;
+  return listGitFiles(dir, (line) => !isSkippedRepoPath(line));
 }
 
 function isSkippedRepoPath(relativePath: string): boolean {
@@ -37,38 +24,17 @@ function isSkippedRepoPath(relativePath: string): boolean {
     .some((part) => part === "node_modules" || part === "dist" || part.startsWith("."));
 }
 
-function listGitFiles(
-  dir: string,
-  include: (relativePath: string) => boolean = (line) => !isSkippedRepoPath(line),
-): string[] | null {
+function listGitFiles(dir: string, include: (relativePath: string) => boolean): string[] {
   const relativeDir = toRepoRelativePath(process.cwd(), dir);
-  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
-    return null;
-  }
   const files = listGitTrackedFiles({ pathspecs: relativeDir });
-  if (!files) {
-    return null;
-  }
-  return files
-    .filter(include)
-    .map((line) => path.join(process.cwd(), ...line.split("/")))
-    .filter((filePath) => fs.existsSync(filePath))
-    .toSorted();
+  expect(files, "tool contract scans require a Git checkout").not.toBeNull();
+  return (files ?? []).filter(include).map((line) => path.join(process.cwd(), ...line.split("/")));
 }
 
 function listPluginManifestPaths(extensionsDir: string): string[] {
-  const gitPaths = listGitFiles(extensionsDir, (line) =>
+  return listGitFiles(extensionsDir, (line) =>
     /^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(line),
   );
-  if (gitPaths) {
-    return gitPaths;
-  }
-
-  return fs
-    .readdirSync(extensionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => path.join(extensionsDir, entry.name, "openclaw.plugin.json"))
-    .filter((manifestPath) => fs.existsSync(manifestPath));
 }
 
 function isProductionSource(filePath: string): boolean {
