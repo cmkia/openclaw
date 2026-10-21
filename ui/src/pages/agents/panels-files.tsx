@@ -125,7 +125,9 @@ export function AgentFiles(
       (isPending(contentRead) || latest(contentRead) === undefined));
   // The owner admits writes synchronously, including overwrite's preceding hash read.
   const [optimisticSaving, setSaving] = createOptimistic(false);
-  const saving = () => optimisticSaving() || params.readData().agentFileSaving;
+  const saving = () =>
+    params.readData().agentFileSaving ||
+    (optimisticSaving() && params.readData().agentFilesLoading);
   const savingAction = action(function* (completion: Promise<boolean>) {
     setSaving(true);
     yield completion;

@@ -25,6 +25,7 @@ it.each([
   "missing file",
   "matching external update",
   "pending save",
+  "pending reconnect",
   "connection replacement",
   "reconnect",
 ])("retains an unsaved file edit across %s", async (transition) => {
@@ -64,7 +65,7 @@ it.each([
           });
         }
         mainContent = params.content ?? "";
-        if (transition === "pending save") {
+        if (transition === "pending save" || transition === "pending reconnect") {
           mainHash = "c".repeat(64);
           await pendingSave.promise;
         }
@@ -172,7 +173,7 @@ it.each([
       tab("AGENTS.md");
       await settle();
     } else if (transition !== "reconnect") {
-      if (transition === "pending save") {
+      if (transition === "pending save" || transition === "pending reconnect") {
         save().click();
         await vi.waitFor(() => {
           expect(request).toHaveBeenCalledWith("agents.files.set", {
@@ -188,6 +189,15 @@ it.each([
         await new Promise((resolve) => {
           setTimeout(resolve, 0);
         });
+      }
+      if (transition === "pending reconnect") {
+        emitGatewaySnapshot(currentGateway, { ...connected, phase: "reconnecting" });
+        emitGatewaySnapshot(currentGateway, connected);
+        await settle();
+        expect(save().textContent).not.toContain("Saving");
+        expect(textarea().disabled).toBe(false);
+        pendingSave.resolve();
+        return;
       }
       selection.set("research");
       await settle();
