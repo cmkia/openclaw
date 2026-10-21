@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
-import { deserialize, serialize } from "node:v8";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -10,6 +9,7 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { prepareSqliteWorkerCommand } from "../infra/sqlite-worker-client.js";
 import {
   assertExistingDatabaseIdentity,
   normalizeDatabasePath,
@@ -21,6 +21,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import {
+  executePreparedSqliteWorkerCommand,
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
@@ -506,20 +507,25 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       input,
       command: { type: command.type, input: command.input },
     };
-    const captured = serialize(publication);
-    const preparation = reserveSqliteWorkerInputPreparation(captured.byteLength, "snapshot");
+    const captured = prepareSqliteWorkerCommand({
+      type: "database.domain.publish",
+      input: publication,
+    });
+    const preparation = reserveSqliteWorkerInputPreparation(
+      captured.payload.byteLength,
+      "snapshot",
+    );
     try {
       return await runPublication(
         assertCurrent,
         async (execution, source) => {
           const receipt = await execution.runExisting(source, async (scope) => ({
-            value: await preparation.handoff(() =>
-              executeOpenClawAgentWorkerPublication<Operations, Key>(
-                scope,
-                // SAFETY: These private bytes snapshot this method's typed publication above.
-                deserialize(captured) as typeof publication,
-                commandOptions,
-              ),
+            value: await preparation.handoff(
+              // SAFETY: The paired module owns the captured command/result contract.
+              () =>
+                executePreparedSqliteWorkerCommand(scope, captured, commandOptions) as Promise<
+                  Operations[Key]["output"]
+                >,
             ),
           }));
           return select(receipt);

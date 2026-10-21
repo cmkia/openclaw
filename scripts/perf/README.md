@@ -1981,6 +1981,28 @@ worker GC, external buffers, and driver/model-fixture allocation are **not** in
 these per-operation estimates. Process CPU and RSS include workers; main-thread
 CPU is reported separately. Profiling adds CPU and memory overhead, so compare
 with the same sampling settings. No profiling runs when `--allocations` is absent.
+Add `--worker-allocations` to collect matching worker profiles through the private
+inspector channel. Each allocation profile gets a `.workers.json` manifest with
+per-worker profile paths, completion status, and CPU/heap samples. Report workers
+that retire before capture completes as gaps; do not combine incomplete worker
+profiles with the main-isolate total. Worker sampling adds overhead, so use the
+same option on both sides of a comparison.
+
+`scripts/bench-worker-transcript-commit.ts --graph-counts` additionally counts
+explicit main-isolate `structuredClone`, `v8.serialize`, and `v8.deserialize`
+calls during its measured commits. It reports totals and calls per completed
+commit; native `postMessage` copying is outside these counters. Keep this
+committer-owner workload separate from the Gateway transport measurements.
+Use `--mode publication` to exercise one-shot agent worker publications through
+the real `SessionManager.appendMessageAsync` path, one message per commit. Add
+`--publication-chars` to size measured messages independently of the seed
+(default 1 MiB). Add
+`--allocation-profile /path/to/profile.heapprofile --runs 1` for collected-object
+main-isolate allocation sampling, and `--start-at <epoch-ms>` to align paired
+runs after warmup. The publication mode verifies the final transcript and message
+ordering; the default committer mode additionally verifies event emission and its
+replay ledger.
+
 For live operator attribution, `diagnostics.heapProfile` accepts
 `{ "durationMs": 10000, "includeCollected": true }` with the existing admin
 scope and 30-second churn cap; it remains a timed sample, not an RPC denominator.

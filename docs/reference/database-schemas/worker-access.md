@@ -64,6 +64,13 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Agent publication commands capture their wire bytes once before waiting for
+writer admission. The internal execution scope forwards that capsule to the
+existing broker without decoding it on the host. The broker retains its byte
+charge through settlement and transfers the bytes to the worker for decoding.
+Released SDK scopes keep their typed command interface and call-time capture;
+prepared bytes do not replace live admission or commit authority checks.
+
 On Node 26.8 and later, the synchronous query owner explicitly disposes private
 statements after execution or iterator completion, and cached statements on
 eviction or invalidation. Large string bindings otherwise remain native allocations
@@ -2053,6 +2060,12 @@ worker and shares its physical writer queue. The memory backend owns incognito
 entries, transcript bytes, pending inputs, and completion outcomes in process
 memory. It opens no SQLite database and allocates no database worker. Backend
 selection happens once at acquisition; commands never fall back to another store.
+
+Internal phase producers transfer readonly payloads to the actor. The phase queue
+owns reducer membership, including restoration after rollback, without copying
+each reducer or command graph. Durable commands serialize once at the worker
+boundary. The in-process memory kernel retains one detached mutable command;
+SDK callbacks and other external mutable inputs keep their capture boundary.
 
 Memory actors serialize commands for the same session and publish complete
 postimages before acknowledgement. Releasing a caller drains its accepted work

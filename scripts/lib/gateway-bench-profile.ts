@@ -418,12 +418,13 @@ export async function measureGatewayAllocations(
   profilePath: string,
   operationCount: number,
   workload: () => Promise<void>,
+  options: { includeWorkers?: boolean } = {},
 ) {
   if (!Number.isSafeInteger(operationCount) || operationCount < 1) {
     throw new Error("Allocation measurement needs a positive operation count");
   }
   const before = await readGatewayResources(child);
-  await controlGatewayProfile(child, "heap", "start", profilePath);
+  await controlGatewayProfile(child, "heap", "start", profilePath, options);
   try {
     await workload();
   } finally {

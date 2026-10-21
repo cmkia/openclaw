@@ -604,7 +604,7 @@ export function createSessionActorReplica(params: {
   currentGeneration: () => string | undefined;
 }) {
   ensureReplicaSubscription();
-  const target = structuredClone(params.target);
+  const { target } = params;
   const key = sessionActorReplicaTargetKey(target);
   const owned = retainSessionActorReplicaCell(pool, target);
   owned.handles += 1;

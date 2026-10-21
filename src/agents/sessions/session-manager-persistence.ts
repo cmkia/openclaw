@@ -87,7 +87,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     const { options } = writeAdmission;
     const database = "actor" in writeAdmission ? undefined : writeAdmission.database;
     const { env: _env, ...writeTarget } = withOwnedSessionTranscriptWriterFence(target);
-    const captured: SessionMetadataWorkerOperations["session.metadata.append"]["input"]["scope"] & {
+    let captured: SessionMetadataWorkerOperations["session.metadata.append"]["input"]["scope"] & {
       storePath: string;
     } = {
       ...writeTarget,
@@ -295,7 +295,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             if (committed.initialEntry?.fence) {
               initialWriter?.recordCommitted(committed.initialEntry.fence);
               Object.assign(target, committed.initialEntry.fence);
-              Object.assign(captured, committed.initialEntry.fence);
+              captured = { ...captured, ...committed.initialEntry.fence };
             }
             const committedHeader = committed.header?.snapshot;
             if (committedHeader?.ok && committedHeader.value.result?.appended) {
@@ -424,7 +424,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                 initialWriter?.recordCommitted(committed.fence);
               }
               Object.assign(target, committed.fence);
-              Object.assign(captured, committed.fence);
+              captured = { ...captured, ...committed.fence };
             }
           } finally {
             if (committed.identity && "withMetadata" in database) {

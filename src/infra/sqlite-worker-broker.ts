@@ -45,6 +45,7 @@ import type {
   SqliteWorkerOpenCustody,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
+  SqliteWorkerExecutionScope,
 } from "./sqlite-worker-broker.types.js";
 import {
   createSqliteWorkerClient,
@@ -410,7 +411,7 @@ export class SqliteWorkerBroker {
 
   runOperation<Operations extends SqliteWorkerOperations, T>(
     store: SqliteWorkerStore<Operations>,
-    operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+    operation: (scope: SqliteWorkerExecutionScope<Operations>) => T | Promise<T>,
     stateContext?: SqliteWorkerStateContext,
     assertCurrent?: (commandType: PropertyKey) => void,
     createAdmission?: SqliteWorkerAdmissionFactory,

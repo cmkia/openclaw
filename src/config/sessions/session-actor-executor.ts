@@ -1,16 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   SessionActor,
   SessionActorAuthority,
-  SessionActorCommandContext,
+  SessionActorCommandInput,
   SessionActorCommitObserver,
   SessionActorHotState,
   SessionActorLifetime,
   SessionActorOutcome,
+  SessionActorPayload,
   SessionActorPhase,
-  SessionActorPhaseInputs,
   SessionActorPhaseResults,
   SessionActorReducer,
   SessionActorTarget,
@@ -30,7 +29,7 @@ export type SessionActorExecutor = {
   read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
   command<Phase extends SessionActorPhase>(
     phase: Phase,
-    input: SessionActorCommandContext & SessionActorPhaseInputs[Phase],
+    input: SessionActorCommandInput<Phase>,
     authority: SessionActorAuthority,
     observer?: SessionActorCommitObserver<SessionActorPhaseResults[Phase]>,
   ): Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
@@ -41,7 +40,7 @@ export type SessionActorExecutor = {
 type PhaseState = {
   id: string;
   active: boolean;
-  reducers: SessionActorReducer[];
+  reducers: SessionActorPayload<SessionActorReducer>[];
   pending: Set<Promise<unknown>>;
   uncertain: Extract<SessionActorOutcome<unknown>, { kind: "unknown" }>["error"] | undefined;
 };
@@ -52,7 +51,7 @@ export function createSessionActorWithExecutor(params: {
   lifetime: SessionActorLifetime;
   createExecutor(guards: SessionActorExecutorGuards): SessionActorExecutor;
 }): SessionActor {
-  const target = freezeJsonSnapshot(structuredClone(params.target));
+  const { target } = params;
   const accepted = new Set<Promise<unknown>>();
   let closing = false;
   let release: Promise<void> | undefined;
@@ -103,19 +102,20 @@ export function createSessionActorWithExecutor(params: {
   };
   const command = <Phase extends SessionActorPhase>(
     name: Phase,
-    input: SessionActorCommandContext & SessionActorPhaseInputs[Phase],
+    input: SessionActorCommandInput<Phase>,
     authority: SessionActorAuthority,
     observer?: SessionActorCommitObserver<SessionActorPhaseResults[Phase]>,
     phase?: PhaseState,
   ): Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>> => {
-    const captured = structuredClone(input);
-    if (phase && captured.phaseId !== phase.id) {
+    if (phase && input.phaseId !== phase.id) {
       throw new Error("Session actor command belongs to another phase");
     }
     return retain(async () => {
       const reducers = phase?.reducers.splice(0) ?? [];
-      captured.reducers = [...reducers, ...(captured.reducers ?? [])];
-      const outcome = await executor.command(name, captured, authority, observer);
+      const mergedInput = reducers.length
+        ? { ...input, reducers: [...reducers, ...(input.reducers ?? [])] }
+        : input;
+      const outcome = await executor.command(name, mergedInput, authority, observer);
       if (phase && outcome.kind === "unknown") {
         phase.uncertain ??= outcome.error;
       } else if (phase && (outcome.kind === "rolled-back" || outcome.kind === "stale-version")) {
@@ -148,8 +148,7 @@ export function createSessionActorWithExecutor(params: {
               return storage.readCurrent(query, authority);
             },
             read(query, authority) {
-              const captured = structuredClone(query);
-              return retain(() => storage.read(captured, authority), phase);
+              return retain(() => storage.read(query, authority), phase);
             },
             mutate(mutation, authority, observer) {
               const captured = structuredClone(mutation);
@@ -200,7 +199,7 @@ export function createSessionActorWithExecutor(params: {
                 if (!held.active) {
                   throw new Error("Session actor phase is settled");
                 }
-                held.reducers.push(...structuredClone(reducers));
+                held.reducers.push(...reducers);
               },
             }),
           };

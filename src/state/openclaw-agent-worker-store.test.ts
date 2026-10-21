@@ -629,10 +629,9 @@ describe("pooled agent publication owner (captured source)", () => {
     );
     const refused = expect(canceled).rejects.toBe(reason);
     cancellation.abort(reason);
-    const following = worker.execute(
-      { type: "append", input: { value: "following" } },
-      () => undefined,
-    );
+    const command = { type: "append" as const, input: { value: "following" } };
+    const following = worker.execute(command, () => undefined);
+    command.input.value = "changed after admission";
     resume.resolve();
     await Promise.all([first, refused, following]);
     expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([

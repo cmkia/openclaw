@@ -6,9 +6,13 @@ import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
   SessionActor,
   SessionActorAuthority,
+  SessionActorCommandContext,
+  SessionActorCommandInput,
   SessionActorFactory,
   SessionActorLifetime,
   SessionActorOutcome,
+  SessionActorPhase,
+  SessionActorPhaseInputs,
   SessionActorPhaseResults,
   SessionActorStorage,
 } from "./session-actor-contract.js";
@@ -46,6 +50,14 @@ import {
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
+
+/** Memory has no MessagePort handoff; its mutable phase kernel owns this detached command. */
+function captureMemoryCommand<Phase extends SessionActorPhase>(
+  input: SessionActorCommandInput<Phase>,
+): SessionActorCommandContext & SessionActorPhaseInputs[Phase];
+function captureMemoryCommand(input: unknown): unknown {
+  return structuredClone(input);
+}
 
 function errorFacts(error: unknown) {
   return error instanceof Error
@@ -115,7 +127,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       ) {
         throw new Error("Memory session actors require a canonical session key for their agent");
       }
-      const target = structuredClone(requestedTarget);
+      const target = Object.freeze({ sessionKey, database: identity });
       let selected = sessions.get(sessionKey);
       if (!selected) {
         selected = { state: createSessionActorMemoryState(target), closed: false };
@@ -168,8 +180,9 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
             }),
             snapshot,
             read: (authority) => enqueue(() => snapshot(authority)),
-            command: (phase, input, authority, observer) =>
-              enqueue(() => {
+            command: (phase, requested, authority, observer) => {
+              const input = captureMemoryCommand<typeof phase>(requested);
+              return enqueue(() => {
                 type Value = SessionActorPhaseResults[typeof phase];
                 try {
                   const before = current();
@@ -283,7 +296,8 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                       : {}),
                   };
                 }
-              }),
+              });
+            },
             async release() {},
           };
         },

@@ -57,6 +57,15 @@ export type {
 
 export type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 
+/** MAIN retains command payloads by ownership; transport creates the worker's mutable graph. */
+export type SessionActorPayload<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends readonly (infer Item)[]
+    ? ReadonlyArray<SessionActorPayload<Item>>
+    : T extends object
+      ? { readonly [Key in keyof T]: SessionActorPayload<T[Key]> }
+      : T;
+
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;
 
@@ -213,6 +222,11 @@ export type SessionActorPhaseInputs = {
 
 export type SessionActorPhase = keyof SessionActorPhaseInputs;
 
+/** Internal producers transfer ownership; only the queue envelope remains writable. */
+export type SessionActorCommandInput<Phase extends SessionActorPhase> = SessionActorPayload<
+  SessionActorCommandContext & SessionActorPhaseInputs[Phase]
+>;
+
 export type SessionActorPhaseResults = {
   acceptInput: {
     inputId?: string;
@@ -336,7 +350,7 @@ export type SessionActorOperations = {
 
 type SessionActorCommands = {
   [Phase in SessionActorPhase]: (
-    input: SessionActorCommandContext & SessionActorPhaseInputs[Phase],
+    input: SessionActorCommandInput<Phase>,
     authority: SessionActorAuthority,
     observer?: SessionActorCommitObserver<SessionActorPhaseResults[Phase]>,
   ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
@@ -361,8 +375,9 @@ export type SessionActorStorage = {
   /** Acquire a separately releasable handle from this already-selected owner. */
   acquire(sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
 
+  /** Internal queries are borrowed unchanged until the read settles. */
   read<Key extends keyof SessionActorStorageReads>(
-    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
+    query: Readonly<{ type: Key; input: SessionActorStorageReads[Key]["input"] }>,
     authority: SessionActorStorageAuthority,
   ): Promise<SessionActorStorageReads[Key]["output"]>;
   mutate<Key extends keyof SessionActorStorageWrites>(
@@ -396,7 +411,7 @@ export type SessionActor = SessionActorLifetime &
       authority: SessionActorAuthority,
       operation: (phase: {
         actor: SessionActor;
-        patch(reducers: readonly SessionActorReducer[]): void;
+        patch(reducers: SessionActorPayload<SessionActorReducer[]>): void;
       }) => Promise<T>,
     ): Promise<T>;
   };

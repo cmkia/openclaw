@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerExecutionScope } from "../../infra/sqlite-worker-broker.types.js";
+import { prepareSqliteWorkerCommand } from "../../infra/sqlite-worker-client.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   wrapSqliteWorkerError,
@@ -24,13 +25,12 @@ import {
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
-  SessionActorCommandContext,
+  SessionActorCommandInput,
   SessionActorCommitObserver,
   SessionActorHotState,
   SessionActorOperations,
   SessionActorOutcome,
   SessionActorPhase,
-  SessionActorPhaseInputs,
   SessionActorPhaseResults,
   SessionActorTarget,
 } from "./session-actor-contract.js";
@@ -48,9 +48,7 @@ type NativeAdmission = {
 export type SessionActorTransport = {
   /** The existing physical writer queue owns serialization, including warm reads. */
   run<T>(
-    operation: (scope: {
-      execute: SqliteWorkerStore<SessionActorOperations>["execute"];
-    }) => Promise<T>,
+    operation: (scope: SqliteWorkerExecutionScope<SessionActorOperations>) => Promise<T>,
     authorize: (
       request: SqliteWorkerAdmissionRequest,
       native: NativeAdmission,
@@ -65,29 +63,6 @@ export type SessionActorTransport = {
   /** Backend lifetime retention is independent of its per-command writer FIFO. */
   retain?<T>(operation: () => Promise<T>): Promise<T>;
   release(): Promise<void>;
-};
-
-type TransportScope = Parameters<Parameters<SessionActorTransport["run"]>[0]>[0];
-
-const executePhase: {
-  [Phase in SessionActorPhase]: (
-    scope: TransportScope,
-    input: SessionActorCommandContext &
-      SessionActorPhaseInputs[Phase] & { target: SessionActorTarget },
-  ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
-} = {
-  acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
-  adoptRun: (scope, input) => scope.execute({ type: "session.actor.adoptRun", input }),
-  appendToolResult: (scope, input) =>
-    scope.execute({ type: "session.actor.appendToolResult", input }),
-  appendTranscriptEvent: (scope, input) =>
-    scope.execute({ type: "session.actor.appendTranscriptEvent", input }),
-  completeTurn: (scope, input) => scope.execute({ type: "session.actor.completeTurn", input }),
-  deliveryPending: (scope, input) =>
-    scope.execute({ type: "session.actor.deliveryPending", input }),
-  deliverySettled: (scope, input) =>
-    scope.execute({ type: "session.actor.deliverySettled", input }),
-  patch: (scope, input) => scope.execute({ type: "session.actor.patch", input }),
 };
 
 function errorFacts(error: unknown) {
@@ -209,11 +184,10 @@ export function createSqliteSessionActorExecutor(
   };
   const command = async <Phase extends SessionActorPhase>(
     name: Phase,
-    input: SessionActorCommandContext & SessionActorPhaseInputs[Phase],
+    input: SessionActorCommandInput<Phase>,
     authority: SessionActorAuthority,
     observer?: SessionActorCommitObserver<SessionActorPhaseResults[Phase]>,
   ): Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>> => {
-    const captured = input;
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     let native: NativeAdmission | undefined;
     let previousEntry: SessionActorAuthorityFacts["entry"];
@@ -247,7 +221,7 @@ export function createSqliteSessionActorExecutor(
       return {
         kind: "unknown",
         target,
-        commandId: captured.commandId,
+        commandId: input.commandId,
         error: { ...errorFacts(error), cause: error },
       };
     };
@@ -280,7 +254,16 @@ export function createSqliteSessionActorExecutor(
               );
             }
             const pending = params.replica.beginCommand();
-            const reply = await executePhase[name](scope, { ...captured, target }).then(
+            // Serialization gives the worker its mutable command from the readonly host payload.
+            const prepared = prepareSqliteWorkerCommand({
+              type: `session.actor.${name}`,
+              input: { ...input, target },
+            });
+            // SAFETY: The paired actor kernel returns this phase's native acknowledgement.
+            const response = scope.executePrepared(prepared) as Promise<
+              SessionActorOperations[`session.actor.${Phase}`]["output"]
+            >;
+            const reply = await response.then(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
             );
@@ -318,8 +301,8 @@ export function createSqliteSessionActorExecutor(
                 evidence.kind === "committed" &&
                 isRecord(receipt) &&
                 receipt.kind === "session-actor-committed" &&
-                receipt.commandId === captured.commandId &&
-                receipt.phaseId === captured.phaseId &&
+                receipt.commandId === input.commandId &&
+                receipt.phaseId === input.phaseId &&
                 receipt.phase === name
               ) {
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
@@ -452,10 +435,10 @@ export function createSqliteSessionActorExecutor(
           },
         ),
         (name === "appendTranscriptEvent" || name === "appendToolResult") &&
-          "append" in captured &&
-          captured.append !== undefined &&
-          captured.append.initialization === undefined &&
-          !captured.reducers?.length
+          "append" in input &&
+          input.append !== undefined &&
+          input.append.initialization === undefined &&
+          !input.reducers?.length
           ? "transcript-only"
           : undefined,
       );

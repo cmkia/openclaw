@@ -396,7 +396,12 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
     replica,
     transport: {
       run: async (operation) => {
-        const result = operation({ execute });
+        const result = operation({
+          execute,
+          executePrepared: async () => {
+            throw new Error("Read fixture cannot execute mutations");
+          },
+        });
         started.resolve();
         return result;
       },

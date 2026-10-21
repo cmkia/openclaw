@@ -1,14 +1,16 @@
 // Run with pnpm test:gateway:worker-commit.
-// Measures the real committer owner with synthetic admission, not worker transport or UI delivery.
+// Measures real commit/publication owners, excluding inference-worker RPC and UI delivery.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { Session as InspectorSession } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import v8 from "node:v8";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
@@ -32,6 +34,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../src/test-utils/openclaw-test-state.js";
+import { readGatewayHeapProfile } from "./lib/gateway-bench-profile.ts";
 
 const { values } = parseArgs({
   options: {
@@ -39,10 +42,15 @@ const { values } = parseArgs({
     "abandoned-events": { type: "string", default: "0" },
     "session-count": { type: "string", default: "1" },
     "message-chars": { type: "string", default: "1024" },
+    "publication-chars": { type: "string", default: "1048576" },
     commits: { type: "string", default: "12" },
     runs: { type: "string", default: "3" },
     output: { type: "string" },
     "cpu-profile": { type: "string" },
+    "allocation-profile": { type: "string" },
+    "graph-counts": { type: "boolean", default: false },
+    mode: { type: "string", default: "committer" },
+    "start-at": { type: "string" },
   },
 });
 
@@ -62,10 +70,20 @@ const fixture = {
   commits: integer(values.commits, "commits", 1, 100),
 };
 const runs = integer(values.runs, "runs", 1, 10);
-if (values["cpu-profile"] && runs !== 1) {
-  throw new Error(
-    "cpu-profile requires runs=1; keep diagnostic profiles separate from timing runs",
-  );
+const publicationChars = integer(
+  values["publication-chars"],
+  "publication-chars",
+  64,
+  4 * 1024 * 1024,
+);
+if (!["committer", "publication"].includes(values.mode)) {
+  throw new Error("mode must be committer or publication");
+}
+if (values["cpu-profile"] && values["allocation-profile"]) {
+  throw new Error("CPU and allocation profiles need separate runs");
+}
+if ((values["cpu-profile"] || values["allocation-profile"]) && runs !== 1) {
+  throw new Error("profiling requires runs=1; keep diagnostic profiles separate from timing runs");
 }
 const sessionId = "worker-commit-benchmark";
 const sessionKey = `agent:main:${sessionId}`;
@@ -196,7 +214,12 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   return { target, config, baseLeafId, initialDagEvents, sessionRows, seedSha256 };
 }
 
-async function runSample(shape: typeof fixture, profilePath?: string) {
+async function runSample(
+  shape: typeof fixture,
+  profilePath?: string,
+  allocationPath?: string,
+  startAt?: number,
+) {
   const sampleStart = performance.now();
   const result = await withOpenClawTestState(
     { label: "worker-commit-benchmark" },
@@ -207,20 +230,73 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
         getConfig: () => config,
         store: createWorkerTranscriptCommitStore({ database: openOpenClawStateDatabase() }),
       });
+      const publisher =
+        values.mode === "publication" ? await SessionManager.openAsync(target) : undefined;
       const updates: Array<{ messageId: string | undefined; messageSeq: number | undefined }> = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => {
         if (update.target.sessionId === sessionId) {
           updates.push({ messageId: update.messageId, messageSeq: update.messageSeq });
         }
       });
-      const batches = Array.from({ length: shape.commits }, (_, index) => messages(index + 1));
-      const inspector = profilePath ? new InspectorSession() : undefined;
+      const batches = Array.from({ length: publisher ? 0 : shape.commits }, (_, index) =>
+        messages(index + 1),
+      );
+      const publicationMessages = Array.from(
+        { length: publisher ? shape.commits : 0 },
+        (_, index) => ({
+          role: "user" as const,
+          content: `Publication ${index}: ${"x".repeat(publicationChars)}`,
+          timestamp: index + 1,
+        }),
+      );
+      const inspector = profilePath || allocationPath ? new InspectorSession() : undefined;
       const loopDelay = monitorEventLoopDelay({ resolution: 1 });
+      const originals = {
+        structuredClone: globalThis.structuredClone,
+        serialize: v8.serialize,
+        deserialize: v8.deserialize,
+      };
+      const graphCalls = { structuredClone: 0, serialize: 0, deserialize: 0 };
+      let countGraphCalls = false;
+      if (values["graph-counts"]) {
+        globalThis.structuredClone = (...args) => {
+          if (countGraphCalls) {
+            graphCalls.structuredClone++;
+          }
+          return originals.structuredClone(...args);
+        };
+        v8.serialize = (...args) => {
+          if (countGraphCalls) {
+            graphCalls.serialize++;
+          }
+          return originals.serialize(...args);
+        };
+        v8.deserialize = (...args) => {
+          if (countGraphCalls) {
+            graphCalls.deserialize++;
+          }
+          return originals.deserialize(...args);
+        };
+        syncBuiltinESMExports();
+      }
       try {
+        if (startAt !== undefined) {
+          if (Date.now() >= startAt) {
+            throw new Error("start-at passed before fixture readiness");
+          }
+          await delay(startAt - Date.now());
+        }
         inspector?.connect();
-        if (inspector) {
+        if (inspector && profilePath) {
           await inspector.post("Profiler.enable");
           await inspector.post("Profiler.start");
+        }
+        if (inspector && allocationPath) {
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 32 * 1024,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
         }
         loopDelay.enable();
         await delay(5);
@@ -234,9 +310,18 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
         let leaf = baseLeafId;
         let lastRequest: WorkerTranscriptCommitParams | undefined;
         let lastOutcome: Awaited<ReturnType<typeof committer.commit>> | undefined;
-        for (let index = 0; index < batches.length; index += 1) {
-          const request = { runEpoch, seq: index + 1, baseLeafId: leaf, messages: batches[index]! };
+        countGraphCalls = true;
+        for (let index = 0; index < shape.commits; index += 1) {
           const start = performance.now();
+          if (publisher) {
+            const id = await publisher.appendMessageAsync(publicationMessages[index]!);
+            assert.ok(id, "publication must append a message");
+            durationsMs.push(performance.now() - start);
+            entryIds.push(id);
+            leaf = id;
+            continue;
+          }
+          const request = { runEpoch, seq: index + 1, baseLeafId: leaf, messages: batches[index]! };
           const outcome = await committer.commit({
             identity,
             request,
@@ -257,6 +342,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           lastOutcome = outcome;
         }
         const elapsedMs = performance.now() - started;
+        countGraphCalls = false;
         const cpu = process.cpuUsage(cpuBefore);
         const loopUtilization = performance.eventLoopUtilization(loopBefore);
         const memoryAfter = process.memoryUsage();
@@ -266,25 +352,35 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           const { profile } = await inspector.post("Profiler.stop");
           await fs.writeFile(profilePath, JSON.stringify(profile));
         }
-        assert.equal(new Set(entryIds).size, shape.commits * 4);
-        assert.deepEqual(
-          updates,
-          entryIds.map((messageId, index) => ({
-            messageId,
-            messageSeq: shape.activeEvents + index + 1,
-          })),
-        );
+        let allocation: ReturnType<typeof readGatewayHeapProfile> | undefined;
+        if (inspector && allocationPath) {
+          const { profile } = await inspector.post("HeapProfiler.stopSampling");
+          await fs.writeFile(allocationPath, JSON.stringify(profile));
+          allocation = readGatewayHeapProfile(allocationPath);
+        }
+        assert.equal(new Set(entryIds).size, shape.commits * (publisher ? 1 : 4));
+        if (!publisher) {
+          assert.deepEqual(
+            updates,
+            entryIds.map((messageId, index) => ({
+              messageId,
+              messageSeq: shape.activeEvents + index + 1,
+            })),
+          );
+        }
         const publicationCount = updates.length;
-        assert.ok(lastRequest);
-        assert.deepEqual(
-          await committer.commit({
-            identity,
-            request: lastRequest,
-            sessionTarget: target,
-            assertCurrent: () => undefined,
-          }),
-          lastOutcome,
-        );
+        if (!publisher) {
+          assert.ok(lastRequest);
+          assert.deepEqual(
+            await committer.commit({
+              identity,
+              request: lastRequest,
+              sessionTarget: target,
+              assertCurrent: () => undefined,
+            }),
+            lastOutcome,
+          );
+        }
         assert.equal(updates.length, publicationCount, "ledger replay must not publish again");
         const final = await SessionManager.openAsync(target);
         assert.equal(final.getLeafId(), leaf);
@@ -310,12 +406,38 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
         return {
           requestedCommits: shape.commits,
           completedCommits: durationsMs.length,
+          ...(allocation
+            ? {
+                allocation: {
+                  ...allocation,
+                  estimatedAllocatedBytesPerCommit:
+                    allocation.sampledAllocatedBytes / shape.commits,
+                },
+              }
+            : {}),
+          ...(values["graph-counts"]
+            ? {
+                graphCalls: {
+                  scope:
+                    "explicit main-isolate calls during commits; excludes native postMessage cloning",
+                  totals: graphCalls,
+                  perCommit: Object.fromEntries(
+                    Object.entries(graphCalls).map(([name, count]) => [
+                      name,
+                      count / shape.commits,
+                    ]),
+                  ),
+                },
+              }
+            : {}),
           appendedMessages: entryIds.length,
           emittedUpdates: publicationCount,
           initialDagEvents,
           sessionRows,
           seedSha256,
-          batchSha256: createHash("sha256").update(JSON.stringify(batches)).digest("hex"),
+          batchSha256: createHash("sha256")
+            .update(JSON.stringify(publisher ? publicationMessages : batches))
+            .digest("hex"),
           elapsedMs,
           commitsPerSecond: shape.commits / (elapsedMs / 1000),
           commitMs: {
@@ -339,6 +461,12 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           reconcileDrainMs,
         };
       } finally {
+        if (values["graph-counts"]) {
+          globalThis.structuredClone = originals.structuredClone;
+          v8.serialize = originals.serialize;
+          v8.deserialize = originals.deserialize;
+          syncBuiltinESMExports();
+        }
         loopDelay.disable();
         inspector?.disconnect();
         unsubscribe();
@@ -351,13 +479,27 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
 async function main(): Promise<void> {
   // Load the lazy committer runtime through its real entrypoint, using a separate state and ledger.
   await runSample({ ...fixture, activeEvents: 2, abandonedEvents: 0, sessionCount: 1, commits: 1 });
+  const startAt = values["start-at"]
+    ? integer(values["start-at"], "start-at", 1, Number.MAX_SAFE_INTEGER)
+    : undefined;
   const samples = [];
   for (let run = 0; run < runs; run += 1) {
-    samples.push(await runSample(fixture, values["cpu-profile"]));
+    samples.push(
+      await runSample(
+        fixture,
+        values["cpu-profile"],
+        values["allocation-profile"],
+        run === 0 ? startAt : undefined,
+      ),
+    );
   }
   const output = {
     scope:
-      "committer owner; synthetic admission; synchronous event emission, no worker transport or UI delivery",
+      values.mode === "publication"
+        ? "SessionManager append through one-shot agent worker publication; no Gateway or UI delivery"
+        : "committer owner; synthetic admission; no inference-worker RPC or UI delivery",
+    mode: values.mode,
+    ...(values.mode === "publication" ? { publicationChars } : {}),
     warmup: "one real commit on separate state before fresh-state samples",
     fixtureIdentity:
       "deterministic seed and request hashes; runtime-generated entry IDs and timestamps vary",
@@ -369,7 +511,7 @@ async function main(): Promise<void> {
       availableParallelism: os.availableParallelism(),
       logicalCpus: os.cpus().length,
     },
-    profiled: Boolean(values["cpu-profile"]),
+    profiled: Boolean(values["cpu-profile"] || values["allocation-profile"]),
     samples,
   };
   const json = `${JSON.stringify(output, null, 2)}\n`;

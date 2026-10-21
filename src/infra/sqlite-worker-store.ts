@@ -7,6 +7,8 @@ import type {
   SqliteWorkerInputRetention,
   SqliteWorkerOpenCustody,
   SqliteWorkerStoreOptions,
+  SqliteWorkerExecutionScope,
+  PreparedSqliteWorkerCommand,
 } from "./sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
@@ -42,6 +44,30 @@ function bindCallerExecute<Operations extends SqliteWorkerOperations>(
   };
 }
 
+// Match the broker's cross-bundle ownership; SDK views expose only typed commands.
+const preparedScopes = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerPreparedScopes"),
+  () =>
+    new WeakMap<
+      object,
+      Pick<SqliteWorkerExecutionScope<SqliteWorkerOperations>, "executePrepared">
+    >(),
+);
+
+export function executePreparedSqliteWorkerCommand(
+  scope: object,
+  command: PreparedSqliteWorkerCommand,
+  options?: { signal?: AbortSignal },
+): Promise<unknown> {
+  const bound = preparedScopes.get(scope);
+  if (!bound) {
+    throw new Error("SQLite worker scope is not bound");
+  }
+  const result = withCallerErrors(bound.executePrepared(command, options));
+  void result.catch(() => undefined);
+  return result;
+}
+
 export {
   SqliteWorkerError,
   type SqliteWorkerBackend,
@@ -61,7 +87,11 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   return withCallerErrors(
     resolveSqliteWorkerBroker().runOperation(
       store,
-      (scope) => operation(bindCallerExecute(scope)),
+      (scope) => {
+        const view = bindCallerExecute(scope);
+        preparedScopes.set(view, scope);
+        return operation(view);
+      },
       stateContext,
       assertCurrent,
       createAdmission,

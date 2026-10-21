@@ -1,3 +1,4 @@
+import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
@@ -196,7 +197,12 @@ function createFixture() {
             });
           }
         }
-        return operation({ execute });
+        return operation({
+          execute,
+          executePrepared: (command) =>
+            // SAFETY: The paired actor serializer prepared this fixture's worker command.
+            execute(deserialize(command.payload) as SqliteWorkerCommand<SessionActorOperations>),
+        });
       });
     },
     async afterCommitted(outcome) {

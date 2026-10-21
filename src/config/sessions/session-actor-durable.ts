@@ -1,4 +1,6 @@
+import { executePreparedSqliteWorkerCommand } from "../../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import type {
@@ -18,12 +20,16 @@ export function captureDurableSessionActor(params: {
   };
   lifetime: SessionActorLifetime;
 }): SessionActor {
+  const target = Object.freeze({
+    sessionKey: params.target.sessionKey,
+    database: Object.freeze({ ...params.target.database }),
+  });
   const database = {
     ...params.database,
     env: Object.freeze({ ...(params.database.env ?? process.env) }),
   };
   const execution = captureOpenClawAgentDatabaseExecution(database, {
-    expectedIdentity: params.target.database,
+    expectedIdentity: target.database,
   });
   const lifetime = {
     assertAdmission: () => params.lifetime.assertAdmission?.(),
@@ -37,10 +43,10 @@ export function captureDurableSessionActor(params: {
     },
   };
   return createSessionActor({
-    target: params.target,
+    target,
     lifetime,
     replica: createSessionActorReplica({
-      target: params.target,
+      target,
       lifetime,
       currentGeneration() {
         return execution.capturePreparedGenerationClaim()?.incarnation;
@@ -66,16 +72,19 @@ export function captureDurableSessionActor(params: {
             } else {
               await execution.prepare(source);
             }
+            const run = async <Value>(
+              dispatch: (worker: AgentDatabaseExecutionScope) => Promise<Value>,
+            ) => {
+              const result = await execution.runExisting(source, dispatch);
+              if (result === undefined) {
+                throw new Error("Session actor database disappeared");
+              }
+              return result;
+            };
             return operation({
-              async execute(command) {
-                const result = await execution.runExisting(source, (worker) =>
-                  worker.execute(command),
-                );
-                if (result === undefined) {
-                  throw new Error("Session actor database disappeared");
-                }
-                return result;
-              },
+              execute: (command) => run((worker) => worker.execute(command)),
+              executePrepared: (command, options) =>
+                run((worker) => executePreparedSqliteWorkerCommand(worker, command, options)),
             });
           },
           undefined,
@@ -123,13 +132,9 @@ export function createSessionActorFactory(
           lifetime,
         );
       }
-      const target = {
-        sessionKey: requestedTarget.sessionKey,
-        database: structuredClone(requestedTarget.database),
-      };
       return captureDurableSessionActor({
         database: captured,
-        target: { sessionKey: target.sessionKey, database: target.database },
+        target: { sessionKey: requestedTarget.sessionKey, database: requestedTarget.database },
         lifetime,
       });
     },

@@ -10,6 +10,8 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
+  SqliteWorkerOperations,
+  SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -138,6 +140,29 @@ export type StoreClient = {
     command: { type: PropertyKey; input: unknown },
     options: { signal?: AbortSignal },
     scope?: OperationScope,
+  ): Promise<unknown>;
+  executePrepared(
+    command: PreparedSqliteWorkerCommand,
+    options: { signal?: AbortSignal },
+    scope?: OperationScope,
+  ): Promise<unknown>;
+};
+
+/** Private wire capsule; its type and diagnostic class describe these exact bytes. */
+export type PreparedSqliteWorkerCommand = {
+  readonly type: PropertyKey;
+  readonly payload: Buffer<ArrayBuffer>;
+  readonly requestClass: string;
+};
+
+/** Host scopes can forward captured bytes without reconstructing the command graph. */
+export type SqliteWorkerExecutionScope<Operations extends SqliteWorkerOperations> = Pick<
+  SqliteWorkerStore<Operations>,
+  "execute"
+> & {
+  executePrepared(
+    command: PreparedSqliteWorkerCommand,
+    options?: { signal?: AbortSignal },
   ): Promise<unknown>;
 };
 

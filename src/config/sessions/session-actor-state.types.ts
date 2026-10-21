@@ -13,9 +13,9 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionActorTarget = Readonly<{
-  database:
-    | AgentDatabaseExecutionFileIdentity
-    | { kind: "memory"; handle: string; incarnation: string };
+  database: Readonly<
+    AgentDatabaseExecutionFileIdentity | { kind: "memory"; handle: string; incarnation: string }
+  >;
   sessionKey: string;
 }>;
 
