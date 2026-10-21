@@ -5,7 +5,6 @@ import {
   getSqliteDatabaseAdmissionIdentityForPath,
   readSqliteDatabaseWriteTokenForPath,
 } from "../../infra/sqlite-database-admission.js";
-import { runWithAsyncStore } from "../../shared/async-store.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
@@ -64,7 +63,7 @@ export async function withSessionEntryWriterReads<T>(
       parent: writerReads.getStore(),
     };
     try {
-      return await runWithAsyncStore(writerReads, context, run);
+      return await writerReads.run(context, run);
     } finally {
       context.active = false;
     }

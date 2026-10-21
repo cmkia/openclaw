@@ -12,7 +12,6 @@ import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
-import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
@@ -273,7 +272,7 @@ export async function runSessionMutation<T>(
     effects: current?.effects ?? new Set(),
     mutations: new Set([...(current?.mutations ?? []), mutation]),
   };
-  return await runWithAsyncStore(ownerContext, context, async () => {
+  return await ownerContext.run(context, async () => {
     let stopCompetitionWait: (() => void) | undefined;
     let pendingEffects: Set<Effect> | undefined;
     const runObserved = () => {
@@ -515,8 +514,7 @@ export async function beginSessionEffect(
       }
       running++;
       try {
-        return await runWithAsyncStore(
-          ownerContext,
+        return await ownerContext.run(
           {
             sourceInput: caller?.sourceInput ?? current?.sourceInput ?? effect.sourceInput,
             operation,

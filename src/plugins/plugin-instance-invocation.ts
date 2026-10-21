@@ -54,21 +54,13 @@ const pluginExecutionContext = resolveGlobalSingleton(
           const current = frames.getStore();
           return current?.invocation === invocation
             ? run()
-            : runWithAsyncStore(
-                frames,
-                createPluginExecutionFrame({ ...current, invocation }, current),
-                run,
-              );
+            : frames.run(createPluginExecutionFrame({ ...current, invocation }, current), run);
         },
         // Cache-owned retirement drops self-call admission, never the Gateway caller.
         exit<T>(run: () => T): T {
           const current = frames.getStore();
           return current?.invocation
-            ? runWithAsyncStore(
-                frames,
-                current.withScopes({ ...current, invocation: undefined }),
-                run,
-              )
+            ? frames.run(current.withScopes({ ...current, invocation: undefined }), run)
             : run();
         },
       },

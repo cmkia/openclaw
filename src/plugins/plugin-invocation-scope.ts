@@ -1,4 +1,3 @@
-import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -39,8 +38,7 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
     ]),
   );
   try {
-    return await runWithAsyncStore(
-      pluginInvocationContext,
+    return await pluginInvocationContext.run(
       {
         lookup: (instance) => {
           const binding = bindings.get(instance);
@@ -121,7 +119,7 @@ export class PluginInvocationScope {
 
   run<T>(run: () => T): T {
     this.assertOpen();
-    return runWithAsyncStore(pluginInvocationContext, this, run);
+    return pluginInvocationContext.run(this, run);
   }
 
   wrap<T>(value: T): T {

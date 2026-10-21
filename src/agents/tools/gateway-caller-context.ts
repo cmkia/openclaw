@@ -25,7 +25,6 @@ import {
 } from "../../plugins/runtime/gateway-context-binding.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
-import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
   captureAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
@@ -291,8 +290,7 @@ export async function withGatewayPersonalToolUser<T>(
     }
     return await run();
   }
-  return await runWithAsyncStore(
-    gatewayToolCallerStorage,
+  return await gatewayToolCallerStorage.run(
     {
       ...caller,
       personalToolUser: user,
@@ -358,8 +356,7 @@ export function withGatewayToolOperatorContinuation<T>(
   }
   const { operatorAuthority, requesterOrigin } = selection;
   operatorAuthority?.assertCurrent();
-  return runWithAsyncStore(
-    gatewayToolCallerStorage,
+  return gatewayToolCallerStorage.run(
     {
       ...caller,
       personalToolParticipants: undefined,
@@ -479,7 +476,7 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
     if (!active) {
       throw new Error("agent tool caller admission is no longer active");
     }
-    runWithAsyncStore(receiptAdmissionStorage, predicates, () => assertion?.());
+    receiptAdmissionStorage.run(predicates, () => assertion?.());
   };
   assertCurrent();
   return {
@@ -573,8 +570,7 @@ export async function withGatewayToolCallerIdentity<T>(
   const approvalSignals = [
     ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
   ];
-  return await runWithAsyncStore(
-    gatewayToolCallerStorage,
+  return await gatewayToolCallerStorage.run(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
