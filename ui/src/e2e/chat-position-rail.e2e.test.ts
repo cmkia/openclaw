@@ -545,7 +545,10 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
 
   // Saved widths can consume the gutter even in a wide desktop pane.
   for (const width of ["100%", "none", "95%", "48rem"]) {
-    await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
+    await page.evaluate((url) => {
+      history.pushState(null, "", url);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, `${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
     const widthInput = page.locator("[data-settings-chat-message-width]");
     await widthInput.fill(width);
     await widthInput.press("Tab");
