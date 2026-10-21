@@ -24,6 +24,7 @@ import { AgentOverview } from "./panels-overview.tsx";
 import { AgentSkills } from "./panels-skills.tsx";
 import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
+import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -65,6 +66,7 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
+  const rosterPending = createAgentReadPending(() => props.listRead);
   const config = () => currentConfigObject(props.config);
   const defaultId = () =>
     props.readData().agentsList?.selectionRequired
@@ -113,7 +115,7 @@ export function Agents(props: AgentsProps) {
             >
               <button
                 class="btn btn--sm btn--ghost agents-create-btn"
-                disabled={props.loading || !props.access.canCreateAgent}
+                disabled={rosterPending() || !props.access.canCreateAgent}
                 title={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
                 onClick={() => props.onCreateAgent()}
               >
@@ -165,18 +167,14 @@ export function Agents(props: AgentsProps) {
             </Show>
             <button
               class="btn btn--sm agents-refresh-btn"
-              disabled={props.loading}
+              disabled={rosterPending()}
               onClick={() => props.onRefresh()}
             >
-              {t(props.loading ? "common.loading" : "common.refresh")}
+              {t(rosterPending() ? "common.loading" : "common.refresh")}
             </button>
           </div>
         </div>
-        <Show when={props.error}>
-          <div class="callout danger" style={{ "margin-top": "8px" }}>
-            {props.error}
-          </div>
-        </Show>
+        <AgentReadNotice request={props.listRead} style={{ "margin-top": "8px" }} />
       </section>
       <section class="agents-main">
         <div class="settings-group">

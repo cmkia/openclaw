@@ -57,10 +57,29 @@ type AgentGateway = {
   subscribe: (listener: (snapshot: AgentGateway["snapshot"]) => void) => () => void;
 };
 
+export type AgentReadOutcome<T> =
+  | { result: T | null; error?: never }
+  | { error: string; result?: never };
+
+type AgentRead<T> = ReturnType<typeof createAgentRead<T>>;
+
+function createAgentRead<T>() {
+  const { promise, resolve } = Promise.withResolvers<AgentReadOutcome<T> | null>();
+  return {
+    promise,
+    resolve,
+    result: promise.then((outcome) => outcome?.result ?? null),
+  };
+}
+
 type AgentFilesStatus = {
   list: AgentsFilesListResult | null;
-  loading: boolean;
-  error: string | null;
+  readonly loading: boolean;
+  read: Promise<AgentReadOutcome<AgentsFilesListResult> | null> | null;
+};
+
+type AgentFilesRequestStatus = AgentFilesStatus & {
+  request: AgentRead<AgentsFilesListResult> | null;
 };
 
 type AgentCapabilityState = {
@@ -175,28 +194,45 @@ export async function updateAgentIdentity(
   });
 }
 
-function emptyAgentFilesStatus(): AgentFilesStatus {
-  return { list: null, loading: false, error: null };
+function emptyAgentFilesStatus(): AgentFilesRequestStatus {
+  return {
+    list: null,
+    get loading() {
+      return this.request !== null;
+    },
+    read: null,
+    request: null,
+  };
 }
 
 export function createAgentCapability(gateway: AgentGateway) {
   let presentationKey = gatewayPresentationScope(gateway).key;
+  let agentsRequest: AgentRead<AgentsListResult> | null = null;
+  let listRead: Promise<AgentReadOutcome<AgentsListResult> | null> | null = null;
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
-    agentsLoading: false,
+    get agentsLoading() {
+      return agentsRequest !== null;
+    },
     agentsError: null,
     agentsList: null,
   };
-  const files = new Map<string, AgentFilesStatus>();
-  const fileRequests = new Map<string, Promise<AgentsFilesListResult | null>>();
+  const files = new Map<string, AgentFilesRequestStatus>();
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
-  let agentsRequest: Promise<AgentsListResult | null> | null = null;
 
   const retireAgentsRequest = () => {
+    // A closed connection can leave its transport pending; release native readers immediately.
+    agentsRequest?.resolve(null);
     agentsRequest = null;
-    state.agentsLoading = false;
+  };
+  const retireFileRequests = () => {
+    for (const status of files.values()) {
+      status.request?.resolve(null);
+      status.request = null;
+      status.read = null;
+    }
   };
 
   const publish = () => {
@@ -207,7 +243,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       listener(state);
     }
   };
-  const fileStatus = (agentId: string): AgentFilesStatus => {
+  const fileStatus = (agentId: string): AgentFilesRequestStatus => {
     const existing = files.get(agentId);
     if (existing) {
       return existing;
@@ -217,103 +253,94 @@ export function createAgentCapability(gateway: AgentGateway) {
     return next;
   };
 
-  const loadList = async (force: boolean): Promise<AgentsListResult | null> => {
+  const loadList = (force: boolean): Promise<AgentsListResult | null> => {
     const client = state.client;
     if (!client || !state.connected || disposed) {
-      return state.agentsList;
+      return Promise.resolve(state.agentsList);
     }
     if (agentsRequest && !force) {
-      return agentsRequest;
+      return agentsRequest.result;
     }
     if (state.agentsList && !state.agentsError && !force) {
-      return state.agentsList;
+      return Promise.resolve(state.agentsList);
     }
-    state.agentsLoading = true;
+    retireAgentsRequest();
+    const request = createAgentRead<AgentsListResult>();
+    agentsRequest = request;
+    listRead = request.promise;
     state.agentsError = null;
+    const current = () => state.client === client && agentsRequest === request;
+    const complete = (outcome: AgentReadOutcome<AgentsListResult>) => {
+      agentsRequest = null;
+      request.resolve(outcome);
+      publish();
+    };
     publish();
-    const request: Promise<AgentsListResult | null> = client
+    void client
       // New Session reads the placement policy from this roster instead of a second request.
       .request<AgentsListResult>("agents.list", { includeSessionPlacement: true })
-      .then((result) => {
-        const current = state.client === client && agentsRequest === request;
-        if (current) {
-          state.agentsList = result;
-          state.agentsError = null;
-        }
-        return current ? result : null;
-      })
-      .catch((err: unknown) => {
-        if (state.client === client && agentsRequest === request) {
-          if (isMissingOperatorReadScopeError(err)) {
-            state.agentsList = null;
-            files.clear();
+      .then(
+        (result) => {
+          if (current()) {
+            state.agentsList = result;
+            complete({ result });
           }
-          state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
-        }
-        return null;
-      })
-      .finally(() => {
-        const currentRequest = agentsRequest === request;
-        if (currentRequest) {
-          agentsRequest = null;
-        }
-        if (currentRequest && state.client === client) {
-          state.agentsLoading = false;
-          publish();
-        }
-      });
-    agentsRequest = request;
-    return request;
+        },
+        (err: unknown) => {
+          if (current()) {
+            if (isMissingOperatorReadScopeError(err)) {
+              state.agentsList = null;
+              retireFileRequests();
+              files.clear();
+            }
+            state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
+            complete({ error: state.agentsError });
+          }
+        },
+      );
+    return request.result;
   };
 
-  const loadFiles = async (
-    rawAgentId: string,
-    force: boolean,
-  ): Promise<AgentsFilesListResult | null> => {
+  const loadFiles = (rawAgentId: string, force: boolean): Promise<AgentsFilesListResult | null> => {
     const agentId = normalizeOptionalString(rawAgentId);
     const client = state.client;
     if (!agentId || !client || !state.connected || disposed) {
-      return agentId ? (files.get(agentId)?.list ?? null) : null;
+      return Promise.resolve(agentId ? (files.get(agentId)?.list ?? null) : null);
     }
     const status = fileStatus(agentId);
     if (status.list && !force) {
-      return status.list;
+      return Promise.resolve(status.list);
     }
-    const activeRequest = fileRequests.get(agentId);
-    if (activeRequest && !force) {
-      return activeRequest;
+    if (status.request && !force) {
+      return status.request.result;
     }
-    status.loading = true;
-    status.error = null;
+    status.request?.resolve(null);
+    const request = createAgentRead<AgentsFilesListResult>();
+    status.request = request;
+    status.read = request.promise;
+    const current = () => state.client === client && status.request === request;
+    const complete = (outcome: AgentReadOutcome<AgentsFilesListResult>) => {
+      status.request = null;
+      request.resolve(outcome);
+      publish();
+    };
     publish();
-    const request: Promise<AgentsFilesListResult | null> = client
-      .request<AgentsFilesListResult | null>("agents.files.list", { agentId })
-      .then((result) => {
-        const current = state.client === client && fileRequests.get(agentId) === request;
-        if (current && result) {
-          status.list = result;
-          status.error = null;
+    void client.request<AgentsFilesListResult | null>("agents.files.list", { agentId }).then(
+      (result) => {
+        if (current()) {
+          if (result) {
+            status.list = result;
+          }
+          complete({ result: status.list });
         }
-        return current ? status.list : null;
-      })
-      .catch((err: unknown) => {
-        if (state.client === client && fileRequests.get(agentId) === request) {
-          status.error = formatUiError(err);
+      },
+      (err: unknown) => {
+        if (current()) {
+          complete({ error: formatUiError(err) });
         }
-        return null;
-      })
-      .finally(() => {
-        const currentRequest = fileRequests.get(agentId) === request;
-        if (currentRequest) {
-          fileRequests.delete(agentId);
-        }
-        if (currentRequest && state.client === client) {
-          status.loading = false;
-          publish();
-        }
-      });
-    fileRequests.set(agentId, request);
-    return request;
+      },
+    );
+    return request.result;
   };
 
   // Retire cached agent and file reads when connection or access authority changes.
@@ -332,18 +359,16 @@ export function createAgentCapability(gateway: AgentGateway) {
     state.connected = connected;
     if ((connectionChanged && (identityChanged || !connected)) || accessLost) {
       retireAgentsRequest();
-      fileRequests.clear();
-      for (const status of files.values()) {
-        status.loading = false;
-      }
+      retireFileRequests();
       if (identityChanged || accessLost) {
         files.clear();
         state.agentsList = null;
         state.agentsError = null;
+        listRead = null;
       }
     }
     if (filesAccessLost) {
-      fileRequests.clear();
+      retireFileRequests();
       files.clear();
     }
     if (connectionChanged || accessLost || filesAccessLost) {
@@ -354,7 +379,7 @@ export function createAgentCapability(gateway: AgentGateway) {
         }
         if (!identityChanged) {
           for (const [agentId, status] of files) {
-            if (status.list && !fileRequests.has(agentId)) {
+            if (status.list && !status.request) {
               void loadFiles(agentId, true);
             }
           }
@@ -367,9 +392,12 @@ export function createAgentCapability(gateway: AgentGateway) {
     get state() {
       return state;
     },
+    get listRead() {
+      return listRead;
+    },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
-    files(agentId: string | null | undefined) {
+    files(agentId: string | null | undefined): AgentFilesStatus {
       const normalized = normalizeOptionalString(agentId);
       return normalized
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
@@ -378,8 +406,13 @@ export function createAgentCapability(gateway: AgentGateway) {
     invalidateFiles(agentIds: readonly (string | null | undefined)[]) {
       let changed = false;
       for (const agentId of normalizeUniqueTrimmedStringList(agentIds)) {
-        changed = files.delete(agentId) || changed;
-        changed = fileRequests.delete(agentId) || changed;
+        const status = files.get(agentId);
+        if (status) {
+          status.request?.resolve(null);
+          status.request = null;
+          files.delete(agentId);
+          changed = true;
+        }
       }
       if (changed) {
         publish();
@@ -397,7 +430,6 @@ export function createAgentCapability(gateway: AgentGateway) {
       }
       // A confirmed file result supersedes lists already in flight. Retain the
       // full canonical list so their awaiting callers can still read it.
-      fileRequests.delete(agentId);
       const entry = { ...file };
       delete entry.content;
       const entries = status.list.files;
@@ -407,8 +439,9 @@ export function createAgentCapability(gateway: AgentGateway) {
           ? entries.map((existing) => (existing.name === entry.name ? entry : existing))
           : [...entries, entry],
       };
-      status.loading = false;
-      status.error = null;
+      status.request?.resolve({ result: status.list });
+      status.request = null;
+      status.read = null;
       publish();
     },
     subscribe(listener: (state: AgentCapabilityState) => void) {
@@ -418,7 +451,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       disposed = true;
       stopGateway();
       listeners.clear();
-      fileRequests.clear();
+      retireFileRequests();
       files.clear();
       retireAgentsRequest();
     },

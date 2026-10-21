@@ -299,7 +299,7 @@ export function createAgentsPageState(
     if (!state.agentFileActive || !files.some((file) => file.name === state.agentFileActive)) {
       state.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
-    if (state.agentFileActive) {
+    if (state.agentFileActive && !context.agents.files(agentId).loading) {
       await loadAgentFileContent(state, agentId, state.agentFileActive, {
         force,
       });
@@ -539,29 +539,26 @@ export function createAgentsPageState(
   async function loadAgentFiles(agentId: string, force = false) {
     const client = state.client;
     const agents = context.agents;
-    if (!client || !state.connected || state.agentFilesLoading) {
+    const cached = agents.files(agentId);
+    if (!client || !state.connected || state.agentFilesLoading || cached.loading) {
       return;
     }
-    const cached = agents.files(agentId);
     if (cached.list && !force) {
       syncCurrentAgentFiles(agents);
       return;
     }
-    const generation = state.requestGeneration;
-    state.agentFilesLoading = true;
-    state.agentFilesError = null;
-    try {
-      const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
-      if (!isCurrentRequest(client, generation, agentId, { agents })) {
-        return;
-      }
-      state.agentFilesList = list ?? agents.files(agentId).list;
-    } finally {
-      if (isCurrentRequest(client, generation, agentId, { agents })) {
-        state.agentFilesLoading = false;
-      }
+    // Keep an initial failure visible until explicit retry or owner retirement.
+    if (cached.read && !force) {
+      return;
     }
-    if (isCurrentRequest(client, generation, agentId, { agents })) {
+    const generation = state.requestGeneration;
+    state.agentFilesError = null;
+    const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
+    if (!isCurrentRequest(client, generation, agentId, { agents })) {
+      return;
+    }
+    state.agentFilesList = list ?? agents.files(agentId).list;
+    if (list) {
       await selectDefaultAgentFile(agentId, force);
     }
   }
@@ -807,7 +804,6 @@ export function createAgentsPageState(
 
   function viewProps() {
     const configState = context.runtimeConfig.state;
-    const agentsState = context.agents.state;
     const selectedAgentId = state.agentsSelectedId;
     const canEditIdentity = () =>
       selectedAgentId === state.agentsSelectedId && canCall("agents.update", "operator.admin");
@@ -819,7 +815,6 @@ export function createAgentsPageState(
       canWriteFiles: canCall("agents.files.set", "operator.admin"),
       canRunCron: canCall("cron.run", "operator.admin"),
     };
-    const agentFilesListError = context.agents.files(selectedAgentId).error;
     const modelCatalog = readAgentModelCatalog(
       state.connected ? state.client : null,
       state.agentsSelectedId,
@@ -829,8 +824,7 @@ export function createAgentsPageState(
       readData,
       readChannels,
       basePath: context.basePath,
-      loading: agentsState.agentsLoading,
-      error: agentsState.agentsError,
+      listRead: context.agents.listRead,
       selectedAgentId,
       memoryTarget,
       config: configState,
@@ -846,7 +840,8 @@ export function createAgentsPageState(
         onRunNow: (jobId: string) => runCronJobNow(jobId),
       },
       agentFiles: {
-        agentFilesError: state.agentFilesError ?? agentFilesListError,
+        agentFilesError: state.agentFilesError,
+        listRead: context.agents.files(selectedAgentId).read,
         onLoadFiles: (agentId: string) => void loadAgentFiles(agentId, true),
         onSelectFile: (name: string) => {
           state.agentFileActive = name;
