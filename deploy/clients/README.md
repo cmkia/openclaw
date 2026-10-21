@@ -22,6 +22,10 @@ checks below before changing that pin.
   MCP Apps sandbox. The sandbox must have a different origin and serve no other
   sensitive application. Both listeners stay behind HTTPS; no host ports are
   published by the stack.
+- For proxied DNS, select a certificate resolver using HTTP-01 or DNS-01 instead
+  of TLS-ALPN-01, and keep its configuration in the proxy's deployment source.
+  HTTP-01 needs public port 80; HTTP-to-HTTPS redirection is compatible. See
+  [Traefik ACME](https://doc.traefik.io/traefik/v3.6/https/acme/).
 - An authenticated OmniRoute administrator and working provider connections.
   OAuth accounts remain in OmniRoute; OpenClaw receives only its own scoped key.
 - Select chat models supporting Responses translation, tools, images as input,
@@ -34,8 +38,8 @@ checks below before changing that pin.
 
 Memory files and SQLite indexes stay local to each tenant. This template sets
 `memory.search.provider` to `none` to use keyword search (FTS5), keeping memory
-retrieval available without an external embedding API. ChatGPT chat/image access
-does not supply an embeddings endpoint. Semantic vector search requires a
+retrieval available without an external embedding API. This subscription-only
+deployment does not configure an embeddings endpoint. Semantic vector search requires a
 separately configured embedding service or managed local embedding model; do not
 grant unrestricted model access to work around an embedding authorization error.
 
