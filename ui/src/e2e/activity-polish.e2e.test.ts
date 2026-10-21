@@ -20,8 +20,11 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Activity recap and screenshot polish" });
 const imageMatch = { sessionKey: keys.current, type: "image" };
-const screenshot = (page: Page, name: string) =>
-  page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+const screenshot = async (page: Page, name: string) => {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+  }
+};
 const imageResponse = (response: Awaited<ReturnType<typeof activityPolishImages>>) => ({
   cases: [{ match: imageMatch, response }, { response: { artifacts: [] } }],
 });
