@@ -580,6 +580,71 @@ it("refreshes update status once when the page becomes active", async () => {
   await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
 });
 
+it("presents initial and manual update status reads without hiding policy controls", async () => {
+  const initial = deferred<boolean>();
+  const manual = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(initial.promise)
+    .mockReturnValueOnce(manual.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: {
+        updateStatusBanner: { source: "read", tone: "warn", text: "Recorded update status" },
+      },
+    },
+  });
+  const { container } = mountConfigPage(context, { pageId: "updates" });
+  const status = () => container.querySelector(".settings-status")?.textContent;
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+  initial.resolve(true);
+  await waitForSolid(() => expect(status()).toContain("Recorded update status"));
+  const check = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Check status",
+  )!;
+  check.click();
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  expect(check.disabled).toBe(true);
+  manual.resolve(false);
+  await waitForSolid(() => {
+    expect(status()).toContain("Recorded update status");
+    expect(check.disabled).toBe(false);
+  });
+  expect(container.querySelector(".updates-status-check-failed")).toBeNull();
+  expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+});
+
+it("retires an update status receipt when the page leaves and re-enters", async () => {
+  const first = deferred<boolean>();
+  const second = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(second.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
+    },
+  });
+  const view = mountConfigPage(context, { pageId: "updates" });
+  const status = () => view.container.querySelector(".settings-status")?.textContent;
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  view.update({ pageId: "advanced" });
+  view.update({ pageId: "updates" });
+  expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  first.resolve(false);
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  second.resolve(true);
+  await waitForSolid(() => expect(status()).toContain("Current update status"));
+});
+
 it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
   const patchForm = vi.fn();
   const updateActions = {
