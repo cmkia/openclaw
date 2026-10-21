@@ -71,7 +71,19 @@ describe("Model setup refresh continuity", () => {
     expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
   });
 
+  it("waits for route data without reading props during effect application", async () => {
+    const warnings = vi.spyOn(console, "warn");
+    const { context, request } = createFirstRunContext();
+    const page = createPage(context);
+    document.body.appendChild(page);
+    mountModelSetupPage(page);
+    await page.updateComplete;
+    expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(0);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
+  });
+
   it("keeps editable drafts and focus through a failed rescan and its retry", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     const { page } = await mountDetection(context, client, inventory, false);
     await selectManualProvider(page, "fixture-key");
@@ -112,6 +124,7 @@ describe("Model setup refresh continuity", () => {
     expect(page.querySelector(manualInput)).toBe(input);
     expect(input.value).toBe("synthetic-draft");
     expect(document.activeElement).toBe(input);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
   it("reopens the published native inventory without restarting discovery and retries explicitly", async () => {
