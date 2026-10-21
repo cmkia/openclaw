@@ -65,7 +65,6 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
-  const hashMemo = new Map<string, string>();
   let pendingCheckpoint: Promise<void> | undefined;
   const checkpoint = (): Promise<void> => {
     if (pendingCheckpoint) {
@@ -75,7 +74,7 @@ export async function prepareLocalSandboxWorkspace(params: {
       // Quiescence is now held. Later requests need their own capture; only
       // requests waiting together for custody can share this checkpoint.
       pendingCheckpoint = undefined;
-      return state.synchronize("canonical", hashMemo);
+      return state.synchronize("canonical");
     }).finally(() => {
       if (pendingCheckpoint === pending) {
         pendingCheckpoint = undefined;

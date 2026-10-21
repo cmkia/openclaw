@@ -166,7 +166,7 @@ function parseOptions(argv: string[]): Options {
         options.fileBytes = parseBenchmarkInteger(value, "--file-bytes", 1, 64 * 1024 * 1024);
       },
       "--changed-files": (options, value) => {
-        options.changedFiles = parseBenchmarkInteger(value, "--changed-files", 1, 5_000);
+        options.changedFiles = parseBenchmarkInteger(value, "--changed-files", 0, 5_000);
       },
       "--timeout-ms": (options, value) => {
         options.timeoutMs = parseBenchmarkInteger(value, "--timeout-ms", 1_000, 3_600_000);
@@ -758,7 +758,7 @@ async function childMain(fixturePath: string): Promise<void> {
               },
             });
             return async () => {
-              assert(began, "reconciliation did not apply changed files");
+              assert.equal(began, fixture.changedEntries.length > 0);
               assert.equal(committedRef, fixture.currentRef);
               assert.equal(result.manifestRef, fixture.currentRef);
               assert.deepEqual(result.conflictPaths, []);
@@ -1048,7 +1048,7 @@ node --import ./scripts/tsx.mjs scripts/bench-workspace-computation.ts [options]
   --runs <n>           Warm measured samples (default: 3)
   --warmup <n>         Extra warmup samples after separately reported cold sample (default: 1)
   --file-bytes <n>     Bytes per file (default: 1024; inventory capped at 4 GiB)
-  --changed-files <n>  Changed files in delta/compare/reconcile/checkpoint (default: 1; max: 5000)
+  --changed-files <n>  Changed files in delta/compare/reconcile/checkpoint (default: 1; range: 0–5000)
   --timeout-ms <n>     Per-operation/probe deadline (default: 300000)
   --prepare-root <dir> Seed fixtures only into a new persistent directory
   --reuse-root <dir>   Measure prepared fixtures (same scenario/size/concurrency/source)

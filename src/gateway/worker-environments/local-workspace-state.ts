@@ -19,7 +19,6 @@ import {
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import { withWorkspaceHashMemo, type WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -365,13 +364,9 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = async (target: Direction, captureMemo?: WorkspaceHashMemo) => {
+  const synchronize = async (target: Direction) => {
     await settle();
-    // Only the source capture reuses its prepared owner's hashes. Apply retains
-    // its operation-local memo instead of transferring the source inventory.
-    const snapshot = captureMemo
-      ? await withWorkspaceHashMemo(captureMemo, () => capture(target))
-      : await capture(target);
+    const snapshot = await capture(target);
     if (snapshot.manifestRef === current().baseline_ref) {
       return;
     }
