@@ -12,17 +12,20 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
@@ -411,13 +414,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       manualChange = false;
       panel.toggleAttribute("data-restoring", isDesktop && !manual);
       if (
-        isDesktop &&
-        presented &&
-        (!previous || identity !== previous[0] || presented !== previous[9])
-      ) {
-        position(layout);
-      }
-      if (
         !open ||
         (previous &&
           (identity !== previous[0] ||
@@ -519,6 +515,19 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       surface.remove();
     };
   });
+  function SessionContent(content: { children: Element }) {
+    return (
+      <Show when={sessionOpened()}>
+        <Loading
+          fallback={
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+          }
+        >
+          {content.children}
+        </Loading>
+      </Show>
+    );
+  }
   return (
     <openclaw-chat-details
       ref={(element) => (host = element)}
@@ -580,25 +589,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                     when={props.mobileHost && props.chat}
                     fallback={
                       <>
-                        <Show when={sessionOpened()}>
-                          <Loading
-                            fallback={
-                              <PanelLoadingSkeleton
-                                variant="file-list"
-                                label={t("common.loading")}
-                                compact
-                              />
+                        <SessionContent>
+                          <ChatDetailsSession
+                            props={props.chat}
+                            presented={isPresented() && opened()}
+                            dismissed={
+                              props.mobileHost ? !props.mobileHost.open : intent() === "closed"
                             }
-                          >
-                            <ChatDetailsSession
-                              props={props.chat}
-                              presented={isPresented() && opened()}
-                              dismissed={
-                                props.mobileHost ? !props.mobileHost.open : intent() === "closed"
-                              }
-                            />
-                          </Loading>
-                        </Show>
+                          />
+                        </SessionContent>
                         <Show
                           when={props.chat?.progressCard || props.chat?.progressCardInitialLoading}
                         >
@@ -621,54 +620,34 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   >
                     <Show when={presentation()} keyed>
                       {(_identity) => (
-                        <Show when={sessionOpened()}>
-                          <Loading
-                            fallback={
-                              <PanelLoadingSkeleton
-                                variant="file-list"
-                                label={t("common.loading")}
-                                compact
-                              />
-                            }
-                          >
-                            <ChatDetailsMobileHostContent
-                              details={props.chat!}
-                              host={props.mobileHost!}
-                              bindings={props.mobileBindings}
-                              presented={isPresented() && opened()}
-                            />
-                          </Loading>
-                        </Show>
+                        <SessionContent>
+                          <ChatDetailsMobileHostContent
+                            details={props.chat!}
+                            host={props.mobileHost!}
+                            bindings={props.mobileBindings}
+                            presented={isPresented() && opened()}
+                          />
+                        </SessionContent>
                       )}
                     </Show>
                   </Show>
                 }
               >
-                <Show when={sessionOpened()}>
-                  <Loading
-                    fallback={
-                      <PanelLoadingSkeleton
-                        variant="file-list"
-                        label={t("common.loading")}
-                        compact
-                      />
-                    }
-                  >
-                    <ChatDetailsDesktopComposition
-                      props={props.chat}
-                      presented={isPresented() && opened()}
-                      dismissed={intent() === "closed"}
-                      progressMenuRef={(menu) => {
-                        progressMenu = menu;
-                      }}
-                      onHideProgress={() => {
-                        if (!docked()) {
-                          close(true);
-                        }
-                      }}
-                    />
-                  </Loading>
-                </Show>
+                <SessionContent>
+                  <ChatDetailsDesktopComposition
+                    props={props.chat}
+                    presented={isPresented() && opened()}
+                    dismissed={intent() === "closed"}
+                    progressMenuRef={(menu) => {
+                      progressMenu = menu;
+                    }}
+                    onHideProgress={() => {
+                      if (!docked()) {
+                        close(true);
+                      }
+                    }}
+                  />
+                </SessionContent>
               </Show>
             )}
           </Show>
