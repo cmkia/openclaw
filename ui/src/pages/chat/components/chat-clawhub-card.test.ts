@@ -113,7 +113,7 @@ describe("ClawHub chat recommendations", () => {
     async (completion) => {
       let installed = false;
       const { card, context, request, harness, client } = mount(async () => detail(installed));
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe(
           "Install",
         ),
@@ -155,7 +155,7 @@ describe("ClawHub chat recommendations", () => {
           },
         });
       }
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(card.querySelector(".chat-clawhub-card__installed")?.textContent).toContain(
           "Installed",
         ),
@@ -171,7 +171,7 @@ describe("ClawHub chat recommendations", () => {
     const result = detail(false);
     result.plugin.catalog.official = false;
     const { card, context } = mount(async () => result);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe(
         "View details",
       ),
@@ -194,20 +194,20 @@ describe("ClawHub chat recommendations", () => {
       return retry.promise;
     });
     setRecommendation({ ...recommendation, installed: true });
-    await vi.waitFor(() => expect(card.textContent).toContain("Status unavailable"));
+    await waitForSolid(() => expect(card.textContent).toContain("Status unavailable"));
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
     fail = false;
     card.querySelector<HTMLButtonElement>(".chat-clawhub-card__dismiss")!.click();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull(),
     );
     expect(card.textContent).not.toContain("Checking installation");
     retry.resolve(detail(false));
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(card.querySelector(".chat-clawhub-card__install")).not.toBeNull(),
     );
     card.querySelector<HTMLButtonElement>(".chat-clawhub-card__dismiss")!.click();
-    await vi.waitFor(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
+    await waitForSolid(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
   });
 
   it.each(["connection", "plugin generation"] as const)(
@@ -218,7 +218,7 @@ describe("ClawHub chat recommendations", () => {
       const { card, harness, request, client } = mount(() =>
         pending ? old.promise : Promise.resolve(detail(false)),
       );
-      await vi.waitFor(() => expect(request).toHaveBeenCalled());
+      await waitForSolid(() => expect(request).toHaveBeenCalled());
       expect(card.querySelector(".skeleton")).not.toBeNull();
       expect(card.textContent).not.toContain("Checking installation");
       if (boundary === "connection") {
@@ -238,7 +238,7 @@ describe("ClawHub chat recommendations", () => {
           },
         });
       }
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(card.querySelector(".chat-clawhub-card__install")).not.toBeNull(),
       );
       old.resolve(detail(true));
@@ -460,20 +460,20 @@ describe("ClawHub chat recommendations", () => {
       );
       Object.assign(result.plugin.local, owner === "plugin" ? { pluginId: "custom-channel" } : {});
       const { card } = mount(async () => result);
-      await vi.waitFor(() => expect(iconFetch[owner]).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(iconFetch[owner]).toHaveBeenCalledOnce());
       expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
       expect(card.querySelector(".chat-clawhub-card__status-skeleton")).toBeNull();
       pending.resolve("blob:whatsapp-icon");
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:whatsapp-icon"),
       );
       expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
       card.querySelector("img")!.dispatchEvent(new Event("load"));
-      await vi.waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
+      await waitForSolid(() => expect(card.querySelector(".skeleton")).toBeNull());
       expect(card.querySelector("img")!.hidden).toBe(false);
       expect(card.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false");
       card.querySelector("img")!.dispatchEvent(new Event("error"));
-      await vi.waitFor(() => expect(card.querySelector("img")).toBeNull());
+      await waitForSolid(() => expect(card.querySelector("img")).toBeNull());
       expect(card.querySelector(".skeleton")).toBeNull();
       expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull();
     },
@@ -492,21 +492,21 @@ describe("ClawHub chat recommendations", () => {
       });
       Object.assign(result.plugin.local, { pluginId: "whatsapp" });
       const { card } = mount(async () => result);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:package"),
       );
       if (failure === "stalled secondary") {
         card.querySelector("img")!.dispatchEvent(new Event("load"));
-        await vi.waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
+        await waitForSolid(() => expect(card.querySelector(".skeleton")).toBeNull());
         expect(card.querySelector("img")!.hidden).toBe(false);
       } else {
         card.querySelector("img")!.dispatchEvent(new Event("error"));
         catalog.resolve("blob:catalog");
-        await vi.waitFor(() =>
+        await waitForSolid(() =>
           expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:catalog"),
         );
         card.querySelector("img")!.dispatchEvent(new Event("error"));
-        await vi.waitFor(() =>
+        await waitForSolid(() =>
           expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull(),
         );
         expect(card.querySelector(".skeleton")).toBeNull();
@@ -519,7 +519,7 @@ describe("ClawHub chat recommendations", () => {
     const result = detail(false);
     Object.assign(result.plugin.catalog, { packageName: "@openclaw/whatsapp" });
     const { card } = mount(async () => result);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull(),
     );
     expect(card.querySelector(".skeleton")).toBeNull();
@@ -577,7 +577,7 @@ describe("ClawHub chat recommendations", () => {
         skill,
         "research",
       );
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(
           card.querySelector(
             installed ? ".chat-clawhub-card__installed" : ".chat-clawhub-card__install",
