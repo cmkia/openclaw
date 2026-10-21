@@ -46,8 +46,8 @@ let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let getHealthSnapshot: (params?: LegacyHealthSnapshotParams) => Promise<HealthSummary>;
 let buildTelegramHealthSummaryForTest: NonNullable<
-  HealthTestPlugin["status"]
->["buildChannelSummary"];
+  NonNullable<HealthTestPlugin["status"]>["buildChannelSummary"]
+>;
 let probeTelegramAccountForTestOverride: NonNullable<HealthTestPlugin["status"]>["probeAccount"];
 
 function healthPlugin(
@@ -123,7 +123,7 @@ describe("collectGatewayHealthSnapshot", () => {
           configured: true,
         },
         {
-          buildChannelSummary: (params) => buildTelegramHealthSummaryForTest?.(params),
+          buildChannelSummary: (params) => buildTelegramHealthSummaryForTest(params),
           probeAccount: async (params) => await probeTelegramAccountForTestOverride?.(params),
         },
       ),
