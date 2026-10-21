@@ -9,6 +9,14 @@ import { ChatNotice } from "./chat-divider.tsx";
 
 let container: HTMLDivElement;
 let noticeView: { update: (props: Parameters<typeof ChatNotice>[0]) => void } | undefined;
+const failure = (summary: string) => ({
+  kind: "notice" as const,
+  key: "failure",
+  label: "",
+  text: "",
+  timestamp: 1,
+  runError: { runId: "run-a", summary },
+});
 function drawNotice(
   item: Parameters<typeof ChatNotice>[0]["item"],
   onPermissionRetry?: Parameters<typeof ChatNotice>[0]["onPermissionRetry"],
@@ -91,14 +99,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
 
 it("updates text and callbacks without closing expanded details", async () => {
   const onRetry = vi.fn();
-  const item = {
-    kind: "notice" as const,
-    key: "failure",
-    label: "",
-    text: "",
-    timestamp: 1,
-    runError: { runId: "run-a", summary: "First failure\nFirst details" },
-  };
+  const item = failure("First failure\nFirst details");
   drawNotice(item, undefined, {
     failureActionsRunId: "run-a",
     onRetryRun: onRetry,
@@ -136,14 +137,7 @@ it.each([
   { failureActionsRunId: "run-a", runActive: true },
   { failureActionsRunId: "run-a", runWorking: true },
 ])("removes recovery actions when the run is no longer eligible: %j", async (recovery) => {
-  const item = {
-    kind: "notice" as const,
-    key: "failure",
-    label: "",
-    text: "",
-    timestamp: 1,
-    runError: { runId: "run-a", summary: "Failure details" },
-  };
+  const item = failure("Failure details");
   const actions = { onRetryRun: vi.fn() };
   drawNotice(item, undefined, { failureActionsRunId: "run-a", ...actions });
   flush();

@@ -70,18 +70,30 @@ async function fixture(state: NodePermissionRequest["state"], ids = ["screenReco
   };
   const retry = vi.fn();
   const view = await mountPermissionCard(request, retry, context);
+  const publish = () => {
+    snapshot.revision = (snapshot.revision ?? 0) + 1;
+    window.dispatchEvent(
+      new CustomEvent("openclaw:native-device-settings-changed", { detail: snapshot }),
+    );
+    flush();
+  };
   return {
     view,
     post,
     retry,
     request,
     snapshot,
-    publish() {
-      snapshot.revision = (snapshot.revision ?? 0) + 1;
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-device-settings-changed", { detail: snapshot }),
-      );
-      flush();
+    publish,
+    async resolve(label: string, capabilities = ids, nextState = state) {
+      const button = view.getByRole("button", { name: label });
+      button.click();
+      await waitForSolid(() => {
+        expect(post).toHaveBeenCalledWith({
+          type: "resolve-permission",
+          request: { ...request, capabilities, state: nextState },
+        });
+        expect(button.hasAttribute("disabled")).toBe(false);
+      });
     },
   };
 }
@@ -98,11 +110,7 @@ it.each([
     const toggle = state === "disabled-in-openclaw";
     const name = toggle ? "Computer Control" : "Screen Recording";
     const f = await fixture(state, toggle ? ["computerControl"] : ["screenRecording"]);
-    const button = f.view.getByRole("button", { name: label });
-    button.click();
-    await waitForSolid(() =>
-      expect(f.post).toHaveBeenCalledWith({ type: "resolve-permission", request: f.request }),
-    );
+    await f.resolve(label);
     expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
     f.snapshot.permissions.entries = [{ id: "screenRecording", status: "granted" }];
     f.snapshot.capabilities.computerControlEnabled = true;
@@ -123,66 +131,28 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
     { id: "screenRecording", status: "notDetermined" },
   ];
   f.publish();
-  const enable = f.view.getByRole("button", { name: "Enable Computer Control" });
-  enable.click();
+  await f.resolve("Enable Computer Control", ["computerControl"]);
   expect(
     f.view.getByText("Then grant the remaining permissions: Accessibility, Screen Recording."),
   ).toBeTruthy();
-  await waitForSolid(() => {
-    expect(f.post).toHaveBeenCalledWith({
-      type: "resolve-permission",
-      request: { ...f.request, capabilities: ["computerControl"] },
-    });
-    expect(enable.hasAttribute("disabled")).toBe(false);
-  });
   f.snapshot.capabilities.computerControlEnabled = true;
   f.publish();
-  const grant = f.view.getByRole("button", { name: "Grant Accessibility, Screen Recording" });
-  grant.click();
-  await waitForSolid(() => {
-    expect(f.post).toHaveBeenCalledWith({
-      type: "resolve-permission",
-      request: {
-        ...f.request,
-        capabilities: ["accessibility", "screenRecording"],
-        state: "not-determined",
-      },
-    });
-    expect(grant.hasAttribute("disabled")).toBe(false);
-  });
+  await f.resolve(
+    "Grant Accessibility, Screen Recording",
+    ["accessibility", "screenRecording"],
+    "not-determined",
+  );
   expect(f.view.queryByText(/Then grant the remaining permissions/)).toBeNull();
   f.snapshot.permissions.entries = [
     { id: "accessibility", status: "granted", state: "stale-grant" },
     { id: "screenRecording", status: "granted", state: "restart-required" },
   ];
   f.publish();
-  const settings = f.view.getByRole("button", { name: "Open System Settings" });
-  settings.click();
-  await waitForSolid(() => {
-    expect(f.post).toHaveBeenCalledWith({
-      type: "resolve-permission",
-      request: {
-        ...f.request,
-        capabilities: ["accessibility"],
-        state: "stale-grant",
-      },
-    });
-    expect(settings.hasAttribute("disabled")).toBe(false);
-  });
+  await f.resolve("Open System Settings", ["accessibility"], "stale-grant");
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
   f.snapshot.permissions.entries[0] = { id: "accessibility", status: "granted" };
   f.publish();
-  f.view.getByRole("button", { name: "Relaunch OpenClaw" }).click();
-  await waitForSolid(() =>
-    expect(f.post).toHaveBeenCalledWith({
-      type: "resolve-permission",
-      request: {
-        ...f.request,
-        capabilities: ["screenRecording"],
-        state: "restart-required",
-      },
-    }),
-  );
+  await f.resolve("Relaunch OpenClaw", ["screenRecording"], "restart-required");
   f.snapshot.permissions.entries = [
     { id: "accessibility", status: "granted" },
     { id: "screenRecording", status: "granted" },
@@ -208,13 +178,7 @@ it("opens Settings for denied Location while its OpenClaw mode is off", async ()
   f.snapshot.permissions.location.mode = "off";
   f.snapshot.permissions.entries = [{ id: "location", status: "denied", state: "denied" }];
   f.publish();
-  f.view.getByRole("button", { name: "Open System Settings" }).click();
-  await waitForSolid(() =>
-    expect(f.post).toHaveBeenCalledWith({
-      type: "resolve-permission",
-      request: { ...f.request, state: "denied" },
-    }),
-  );
+  await f.resolve("Open System Settings", ["location"], "denied");
   f.snapshot.permissions.entries = [{ id: "location", status: "granted" }];
   f.publish();
   expect(f.view.getByRole("button", { name: "Enable Location" })).toBeTruthy();
