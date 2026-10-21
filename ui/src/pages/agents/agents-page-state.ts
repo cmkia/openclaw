@@ -14,11 +14,7 @@ import { createGitHubIdentity } from "../../features/github-connections/github-i
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
-  loadToolsCatalog,
-  loadToolsEffective,
   buildToolsEffectiveRequestKey,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
   setDefaultAgent,
   type AgentsState,
 } from "../../lib/agents/index.ts";
@@ -71,6 +67,7 @@ import {
 import type { AgentsRouteData } from "./route.ts";
 import { createAgentSelectionDrafts } from "./selection-drafts.ts";
 import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
+import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
 
 type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
   AgentFilesState & {
@@ -97,10 +94,8 @@ type AgentsViewData = Omit<
   | "sessionsResult"
   | "sessionKey"
   | "agentFileWriteRevisions"
-  | "toolsCatalogLoadingAgentId"
-  | "toolsEffectiveLoadingKey"
-  | "toolsEffectiveResultKey"
 >;
+
 export type AgentsPageView = ReturnType<ReturnType<typeof createAgentsPageState>["read"]>;
 
 export function createAgentsPageState(
@@ -117,15 +112,6 @@ export function createAgentsPageState(
   const observation = observeState<AgentsPageData>({
     agentsList: null,
     agentsSelectedId: null,
-    toolsCatalogLoading: false,
-    toolsCatalogLoadingAgentId: null,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveLoadingKey: null,
-    toolsEffectiveResultKey: null,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
     chatModelCatalogStatus: createPanelRefreshStatus(),
     agentFilesLoading: false,
     agentFilesError: null,
@@ -208,7 +194,7 @@ export function createAgentsPageState(
     canUpdate: (agentId: string) =>
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
     getReport: () => state.agentSkillsReport,
-    onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(state),
+    onPrimaryChanged: () => refreshEffectiveToolsForCurrentSession(),
   });
   const githubIdentity = createGitHubIdentity({
     runExternalMutation: (task, options) =>
@@ -244,6 +230,19 @@ export function createAgentsPageState(
     },
     ensureInitialData: () => ensureInitialData(),
   });
+  const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
+    isCurrentRequest(client, generation, agentId, {});
+  const toolsCatalog = createAgentToolsCatalog({
+    scope: () => state,
+    isCurrent: isCurrentToolsRead,
+  });
+  const effectiveTools = createAgentEffectiveTools({
+    scope: () => state,
+    isCurrent: isCurrentToolsRead,
+    key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
+    changed: publish,
+  });
+
   function applyRoute() {
     applyRouteData();
     syncCanonicalLocation();
@@ -321,9 +320,8 @@ export function createAgentsPageState(
     state.agentFileSaving = false;
     state.identitySaving = false;
     state.agentSkillsLoading = false;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    resetToolsEffectiveState(state);
+    toolsCatalog.invalidate();
+    effectiveTools.reset();
     state.cron = {
       ...state.cron,
       cronLoading: false,
@@ -448,9 +446,7 @@ export function createAgentsPageState(
     }
     if (state.agentsPanel === "tools") {
       syncGitHubIdentity(agentId);
-      if (state.toolsCatalogResult?.agentId !== agentId && !state.toolsCatalogLoading) {
-        void loadToolsCatalog(state, agentId);
-      }
+      toolsCatalog.ensure(agentId);
       loadEffectiveToolsForAgent(agentId);
       githubIdentity.ensureVerified();
       return;
@@ -685,30 +681,27 @@ export function createAgentsPageState(
     state.agentSkillsError = null;
     state.agentSkillsAgentId = null;
     resetIdentityDraft(state);
-    state.toolsCatalogResult = null;
-    state.toolsCatalogError = null;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    resetToolsEffectiveState(state);
+    toolsCatalog.reset();
+    effectiveTools.reset();
     state.cron = createInitialCronState({
       client: state.client,
       connected: state.connected,
     });
   }
 
-  function loadEffectiveToolsForAgent(agentId: string) {
+  function loadEffectiveToolsForAgent(agentId: string, refresh = false) {
     if (agentId !== chatAgentId()) {
-      resetToolsEffectiveState(state);
+      effectiveTools.reset();
       return;
     }
-    const requestKey = buildToolsEffectiveRequestKey(state, {
-      agentId,
-      sessionKey: state.sessionKey,
-    });
-    if (state.toolsEffectiveResultKey === requestKey && !state.toolsEffectiveError) {
-      return;
+    effectiveTools.ensure(agentId, state.sessionKey, refresh);
+  }
+
+  function refreshEffectiveToolsForCurrentSession() {
+    const agentId = state.agentsSelectedId;
+    if (state.agentsPanel === "tools" && agentId) {
+      loadEffectiveToolsForAgent(agentId, true);
     }
-    void loadToolsEffective(state, { agentId, sessionKey: state.sessionKey });
   }
 
   async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
@@ -726,7 +719,7 @@ export function createAgentsPageState(
       return;
     }
     if (mode === "save") {
-      resetToolsEffectiveState(state);
+      effectiveTools.reset();
     }
     syncAgentState(agents);
     if (mode !== "refresh") {
@@ -951,6 +944,16 @@ export function createAgentsPageState(
         onClear: (agentId: string) => clearAgentSkills(agentId),
       },
       tools: {
+        readCatalog: toolsCatalog.read,
+        catalogRequest: toolsCatalog.request(),
+        readEffective: effectiveTools.read,
+        effectivePreview: effectiveTools.cached,
+        effectiveRequest: effectiveTools.request(),
+        onRetryCatalog: () => {
+          if (state.agentsSelectedId) {
+            toolsCatalog.ensure(state.agentsSelectedId);
+          }
+        },
         githubIdentity,
         onOpenGitHubConnections: () =>
           context.navigate("profile", { hash: "#settings-profile-github-connections" }),
@@ -1024,7 +1027,7 @@ export function createAgentsPageState(
       }),
       // Session model receipts replace the tools.effective request key before older results settle.
       context.sessions.subscribe(() => {
-        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        refreshEffectiveToolsForCurrentSession();
         publish();
       }),
     ];

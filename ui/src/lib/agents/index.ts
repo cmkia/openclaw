@@ -6,7 +6,7 @@ import type {
   AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsListResult,
-  ToolsCatalogResult,
+  ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
@@ -18,31 +18,19 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import type { AgentsPanel } from "./panels.ts";
-import {
-  buildToolsEffectiveRequestKey,
-  loadToolsEffective as loadToolsEffectiveShared,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
-  type ToolsEffectiveState,
-} from "./tools-effective.ts";
+import type { ToolsEffectiveModelState } from "./tools-effective.ts";
 
 export type { AgentsPanel } from "./panels.ts";
 export { watchAgentScope } from "./watch-agent-scope.ts";
 export { watchSelectedAgent } from "./watch-selected-agent.ts";
 
-export type AgentsState = ToolsEffectiveState &
+export type AgentsState = ToolsEffectiveModelState &
   AgentCapabilityState & {
     requestGeneration: number;
     agentsSelectedId: string | null;
-    toolsCatalogLoading: boolean;
-    toolsCatalogLoadingAgentId?: string | null;
-    toolsCatalogError: string | null;
-    toolsCatalogResult: ToolsCatalogResult | null;
     sessionKey?: string;
     agentsPanel?: AgentsPanel;
   };
-
-type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
 
 type AgentsConfigCapability = {
   readonly state: { configFormDirty: boolean };
@@ -75,65 +63,24 @@ export type AgentCapability = ReturnType<typeof createAgentCapability>;
 
 function resolveAgentReadErrorMessage(
   err: unknown,
-  target: "agent list" | "tools catalog" | "effective tools",
+  target: "agent list" | "effective tools",
 ): string {
   return isMissingOperatorReadScopeError(err)
     ? formatMissingOperatorReadScopeMessage(target)
     : formatUiError(err);
 }
 
-export async function loadToolsCatalog(state: AgentToolsState, agentId: string) {
-  const resolvedAgentId = agentId.trim();
-  const client = state.client;
-  if (
-    !client ||
-    !state.connected ||
-    !resolvedAgentId ||
-    (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId)
-  ) {
-    return;
-  }
-  const shouldIgnoreResponse = () =>
-    state.client !== client || state.toolsCatalogLoadingAgentId !== resolvedAgentId;
-  state.toolsCatalogLoading = true;
-  state.toolsCatalogLoadingAgentId = resolvedAgentId;
-  state.toolsCatalogError = null;
-  state.toolsCatalogResult = null;
-  try {
-    const res = await client.request<ToolsCatalogResult>("tools.catalog", {
-      agentId: resolvedAgentId,
-      includePlugins: true,
-    });
-    if (shouldIgnoreResponse()) {
-      return;
-    }
-    state.toolsCatalogResult = res;
-  } catch (err) {
-    if (shouldIgnoreResponse()) {
-      return;
-    }
-    state.toolsCatalogError = resolveAgentReadErrorMessage(err, "tools catalog");
-  } finally {
-    if (state.client === client && state.toolsCatalogLoadingAgentId === resolvedAgentId) {
-      state.toolsCatalogLoadingAgentId = null;
-      state.toolsCatalogLoading = false;
-    }
-  }
-}
+export { buildToolsEffectiveRequestKey } from "./tools-effective.ts";
 
-export {
-  buildToolsEffectiveRequestKey,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
-};
-
-export async function loadToolsEffective(
-  state: AgentToolsState,
+export async function readToolsEffective(
+  client: GatewayBrowserClient,
   params: { agentId: string; sessionKey: string },
 ) {
-  await loadToolsEffectiveShared(state, params, {
-    onError: (err) => resolveAgentReadErrorMessage(err, "effective tools"),
-  });
+  try {
+    return await client.request<ToolsEffectiveResult>("tools.effective", params);
+  } catch (error) {
+    throw new Error(resolveAgentReadErrorMessage(error, "effective tools"), { cause: error });
+  }
 }
 
 export async function setDefaultAgent(
