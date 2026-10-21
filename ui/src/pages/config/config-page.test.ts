@@ -460,11 +460,27 @@ it("keeps media permission gestures live while discovery status is pending", asy
     expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).not.toBeNull(),
   );
   expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+  select.focus();
+  const retry = deferred<MediaDeviceInfo[]>();
+  enumerateDevices.mockReturnValueOnce(retry.promise);
   mediaDevices.dispatchEvent(new Event("devicechange"));
   await waitForSolid(() =>
     expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).toBeNull(),
   );
+  expect(select.closest(".settings-row")?.textContent).not.toContain("No additional microphones");
+  expect(document.activeElement).toBe(select);
+  retry.resolve([
+    {
+      deviceId: "recovered-mic",
+      groupId: "synthetic",
+      kind: "audioinput",
+      label: "Recovered microphone",
+      toJSON: () => ({}),
+    },
+  ]);
+  await waitForSolid(() => expect(select.textContent).toContain("Recovered microphone"));
   expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+  expect(document.activeElement).toBe(select);
 });
 
 it("persists only confirmed camera selections and ignores superseded failures", async () => {
@@ -479,33 +495,84 @@ it("persists only confirmed camera selections and ignores superseded failures", 
   const { state } = mountConfigPageState(context);
   const props = state.configProps;
 
-  props().onCameraSelect?.("missing-camera");
-  await waitForSolid(() =>
-    expect(props().camera?.error).toBe("The selected camera is unavailable"),
+  await expect(props().onCameraSelect?.("missing-camera")).rejects.toThrow(
+    "The selected camera is unavailable",
   );
   expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
   expect(context.theme.refresh).not.toHaveBeenCalled();
 
-  props().onCameraSelect?.("slow-camera");
+  const superseded = props().onCameraSelect?.("slow-camera");
+  await props().onCameraSelect?.("back-camera");
+  await expect(superseded).resolves.toBeUndefined();
   flush();
-  expect(props().camera?.error).toBeNull();
-  props().onCameraSelect?.("back-camera");
-  await waitForSolid(() => expect(props().camera?.selectedDeviceId).toBe("back-camera"));
+  expect(props().camera?.selectedDeviceId).toBe("back-camera");
   expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
   expect(context.theme.refresh).toHaveBeenCalledOnce();
   first.reject(new Error("The selected camera is unavailable"));
   await first.promise.catch(() => undefined);
   flush();
-  expect(props().camera?.error).toBeNull();
+  await expect(props().camera?.selection).resolves.toBeUndefined();
   expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
   expect(context.theme.refresh).toHaveBeenCalledOnce();
 
-  props().onCameraSelect?.("another-missing-camera");
-  await waitForSolid(() => expect(props().camera?.error).toBe("Another camera error"));
-  props().onCameraSelect?.("");
-  await waitForSolid(() => expect(props().camera?.selectedDeviceId).toBe(""));
-  expect(props().camera?.error).toBeNull();
+  await expect(props().onCameraSelect?.("another-missing-camera")).rejects.toThrow(
+    "Another camera error",
+  );
+  await props().onCameraSelect?.("");
+  flush();
+  expect(props().camera?.selectedDeviceId).toBe("");
   expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+});
+
+it("keeps the camera select mounted through pending, rejected, and retried selections", async () => {
+  const pending = deferred();
+  const retry = deferred();
+  const recovery = deferred();
+  switchActiveRealtimeTalkCameras
+    .mockReturnValueOnce(pending.promise)
+    .mockReturnValueOnce(retry.promise)
+    .mockReturnValueOnce(recovery.promise);
+  vi.stubGlobal("navigator", {
+    mediaDevices: Object.assign(new EventTarget(), {
+      enumerateDevices: vi
+        .fn()
+        .mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
+      getUserMedia: vi.fn(),
+    }),
+  });
+  const { container } = mountConfigPage(configContext({ theme: { refresh: vi.fn() } }), {
+    pageId: "appearance",
+  });
+  const select = container.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
+  await waitForSolid(() => expect(select.options).toHaveLength(2));
+  select.focus();
+  select.value = "camera-1";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() => expect(select.value).toBe("camera-1"));
+  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+  pending.reject(new Error("Synthetic camera unavailable"));
+  const alert = () => select.closest(".settings-row")?.querySelector('[role="alert"]');
+  await waitForSolid(() => expect(alert()?.textContent).toContain("Synthetic camera unavailable"));
+  expect(select.value).toBe("");
+  expect(container.querySelector("[data-settings-camera]")).toBe(select);
+  expect(document.activeElement).toBe(select);
+  select.value = "camera-1";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() => expect(alert()).toBeNull());
+  retry.reject(new Error("Synthetic second camera failure"));
+  await waitForSolid(() => expect(alert()?.textContent).toBe("Synthetic second camera failure"));
+  expect(select.value).toBe("");
+  expect(container.querySelector("[data-settings-camera]")).toBe(select);
+  expect(document.activeElement).toBe(select);
+  select.value = "camera-1";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() => expect(alert()).toBeNull());
+  recovery.resolve();
+  await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
+  expect(alert()).toBeNull();
+  expect(select.value).toBe("camera-1");
+  expect(container.querySelector("[data-settings-camera]")).toBe(select);
+  expect(document.activeElement).toBe(select);
 });
 
 it("updates mobile pairing eligibility when connection and admin access are published", () => {

@@ -39,7 +39,6 @@ import { i18n, isSupportedLocale, type Locale } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
@@ -54,7 +53,6 @@ import {
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
 import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
-import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
   configSectionKeysForPage,
@@ -67,7 +65,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { refreshMediaDevice } from "./media-device-discovery.ts";
+import { createCameraSelection, refreshMediaDevice } from "./media-device-discovery.ts";
 import { admitMemoryRoute } from "./memory-route-admission.ts";
 import {
   configTargetIdFromHash,
@@ -162,7 +160,11 @@ export function createConfigPage(
     microphone: createMediaDeviceState(),
     camera: createMediaDeviceState(),
   };
-  let cameraSelectionRequest = 0;
+  const selectCamera = createCameraSelection(
+    mediaDevices.camera,
+    (videoDeviceId) => applySettings({ realtimeTalkVideoDeviceId: videoDeviceId }),
+    invalidate,
+  );
   let previousGateway: ApplicationContext["gateway"] | null = null;
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
@@ -542,30 +544,6 @@ export function createConfigPage(
     }
   }
 
-  async function selectCamera(deviceId: string) {
-    const request = ++cameraSelectionRequest;
-    const videoDeviceId = deviceId.trim() || undefined;
-    mediaDevices.camera.error = null;
-    mediaDevices.camera.discovery = null;
-    invalidate();
-    try {
-      await switchActiveRealtimeTalkCameras(videoDeviceId);
-      if (request !== cameraSelectionRequest) {
-        return;
-      }
-      // Persist only a camera the active Talk session accepted. A superseded
-      // request must not overwrite the newer confirmed selection.
-      applySettings({
-        realtimeTalkVideoDeviceId: videoDeviceId,
-      });
-    } catch (error) {
-      if (request === cameraSelectionRequest) {
-        mediaDevices.camera.error = formatUiError(error);
-        invalidate();
-      }
-    }
-  }
-
   function isUpdateBusy(): boolean {
     const update = context.overlays.snapshot;
     return update.updateRunning || update.updateReconciliationPending;
@@ -874,7 +852,7 @@ export function createConfigPage(
       },
       onCameraRefresh: () =>
         void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
-      onCameraSelect: (deviceId: string) => void selectCamera(deviceId),
+      onCameraSelect: selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
