@@ -1,32 +1,27 @@
 /* @vitest-environment jsdom */
 
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
-import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
-import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { TalkSettingsPage } from "./talk-page.tsx";
+import {
+  expectVoiceState,
+  mountTalkPage,
+  readVoiceOptions,
+  setTalkRealtimeConfig,
+} from "./talk.test-support.tsx";
 
 const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
 const DEFAULT_VOICES = ["", "marin", "custom-voice"];
-
-type TalkPageElement = HTMLElement & {
-  context: ApplicationContext;
-  configObject: Record<string, unknown>;
-  changeModel: (model: string | null) => void;
-  changeProvider: (providerId: string | null) => void;
-};
 
 type TalkMutationHarnessOptions = {
   nativeDeviceSettings?: NativeDeviceSettingsCapability;
@@ -195,68 +190,6 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       gatewayListeners.forEach((notify) => notify());
     },
   };
-}
-
-function mountTalkPage(context: ApplicationContext, initialConfig: Record<string, unknown>) {
-  const page: TalkPageElement = Object.assign(document.createElement("div"), {
-    context,
-    configObject: initialConfig,
-    changeModel: (value: string | null) => {
-      flush();
-      const picker = page.querySelector<SelectPicker>("openclaw-select-picker");
-      if (!picker) {
-        throw new Error("Talk model picker is unavailable");
-      }
-      picker.params.onChange(value ?? "");
-    },
-    changeProvider: (value: string | null) => {
-      const input = [...page.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
-        (entry) => entry.value === (value ?? ""),
-      );
-      if (!input) {
-        throw new Error("Talk provider choice is unavailable");
-      }
-      input.click();
-    },
-  });
-  const [config, setConfig] = createSignal(initialConfig);
-  document.body.append(page);
-  const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(
-    () =>
-      createComponent(TalkSettingsPage, {
-        get configObject() {
-          return config();
-        },
-      }),
-    { container: page, wrapper: provider.wrapper },
-  );
-  const remove = page.remove.bind(page);
-  Object.defineProperties(page, {
-    context: { value: context },
-    configObject: { get: config, set: setConfig },
-  });
-  page.remove = () => {
-    view.unmount();
-    remove();
-  };
-  flush();
-  return page;
-}
-
-function readVoiceOptions(page: HTMLElement): string[] {
-  return [...page.querySelectorAll("select option")].map(
-    (option) => option.getAttribute("value") ?? "",
-  );
-}
-
-function setTalkRealtimeConfig(page: TalkPageElement, realtime: Record<string, unknown>) {
-  page.configObject = { talk: { realtime } };
-}
-
-function expectVoiceState(page: TalkPageElement, options: string[], unsupported: boolean) {
-  expect(readVoiceOptions(page)).toEqual(options);
-  expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(unsupported);
 }
 
 async function selectModel(model: string, options: TalkMutationHarnessOptions = {}) {
@@ -447,17 +380,18 @@ describe("Talk device and voice wake settings", () => {
     expect(alert()).toBeNull();
   });
 
-  it("retains rejected trigger edits and gives a visible retry action", async () => {
-    const voiceWakeRequest = vi.fn(async (method: string) => {
-      if (method === "voicewake.set") {
-        throw new Error("Permission denied");
-      }
-      return { triggers: ["openclaw"] };
-    });
+  it("retains rejected trigger edits and recovers through retry or typing", async () => {
+    const voiceWakeRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ triggers: ["openclaw"] })
+      .mockRejectedValueOnce(new Error("Permission denied"))
+      .mockRejectedValueOnce(new Error("Permission denied"))
+      .mockResolvedValue({ triggers: ["new phrase"] });
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
     await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
+    input.focus();
     input.value = "hello";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(400);
@@ -467,48 +401,68 @@ describe("Talk device and voice wake settings", () => {
     expect(input.disabled).toBe(false);
     page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
     expect(voiceWakeRequest).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(0);
+    input.value = "new phrase";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(page.querySelector("[role='alert']")).toBeNull();
+    await vi.advanceTimersByTimeAsync(400);
+    flush();
+    expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+    expect(page.querySelector("textarea")).toBe(input);
+    expect(document.activeElement).toBe(input);
   });
 
-  it("keeps trigger typing focused while serializing saves and ignoring older acknowledgments", async () => {
-    const first = createDeferred<{ triggers: string[] }>();
-    const second = createDeferred<{ triggers: string[] }>();
-    let writes = 0;
-    const voiceWakeRequest = vi.fn(async (method: string) => {
-      if (method === "voicewake.get") {
-        return { triggers: ["openclaw"] };
+  it.each(["success", "failure"])(
+    "keeps trigger typing focused across an older %s while serializing saves",
+    async (olderResult) => {
+      const first = createDeferred<{ triggers: string[] }>();
+      const second = createDeferred<{ triggers: string[] }>();
+      let writes = 0;
+      const voiceWakeRequest = vi.fn(async (method: string) => {
+        if (method === "voicewake.get") {
+          return { triggers: ["openclaw"] };
+        }
+        writes += 1;
+        return writes === 1 ? first.promise : second.promise;
+      });
+      const { page } = createTalkMutationHarness({ voiceWakeRequest });
+      await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+      vi.useFakeTimers();
+      const input = page.querySelector("textarea")!;
+      input.focus();
+      input.value = "first phrase";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(400);
+      flush();
+      expect(input.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
+      input.value = "second phrase";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(400);
+      expect(writes).toBe(1);
+      if (olderResult === "success") {
+        first.resolve({ triggers: ["first phrase"] });
+      } else {
+        first.reject(new Error("Older edit failed"));
       }
-      writes += 1;
-      return writes === 1 ? first.promise : second.promise;
-    });
-    const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
-    vi.useFakeTimers();
-    const input = page.querySelector("textarea")!;
-    input.focus();
-    input.value = "first phrase";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(400);
-    flush();
-    expect(input.disabled).toBe(false);
-    expect(document.activeElement).toBe(input);
-    input.value = "second phrase";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(400);
-    expect(writes).toBe(1);
-    first.resolve({ triggers: ["first phrase"] });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(input.value).toBe("second phrase");
-    expect(document.activeElement).toBe(input);
-    expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
-      triggers: ["second phrase"],
-    });
-    second.resolve({ triggers: ["second phrase"] });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(input.value).toBe("second phrase");
-    expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
-  });
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(input.value).toBe("second phrase");
+      expect(document.activeElement).toBe(input);
+      expect(page.querySelector("[role='alert']")).toBeNull();
+      expect(page.querySelector("[role='status']")?.textContent).toBe("Saving…");
+      expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
+        triggers: ["second phrase"],
+      });
+      second.resolve({ triggers: ["second phrase"] });
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(input.value).toBe("second phrase");
+      expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+    },
+  );
 
   it.each(["latest phrase", "first phrase"])(
     "flushes the latest queued trigger draft on navigation: %s",
@@ -564,12 +518,12 @@ describe("Talk device and voice wake settings", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(timing === "in-flight" ? 400 : 100);
       setGatewayConnection(false);
-      if (timing === "in-flight") {
-        interrupted.reject(new Error("Connection closed"));
-      }
+      await vi.advanceTimersByTimeAsync(0);
       flush();
       expect(page.querySelector("textarea")?.value).toBe("hello computer");
-      expect(page.querySelector("[role='alert']")?.textContent).toContain("Reconnect");
+      await waitForSolid(() =>
+        expect(page.querySelector("[role='alert']")?.textContent).toContain("Reconnect"),
+      );
       await vi.advanceTimersByTimeAsync(400);
       const priorCalls = voiceWakeRequest.mock.calls.length;
       page.querySelector<HTMLButtonElement>("[role='alert'] button")?.click();
@@ -585,6 +539,11 @@ describe("Talk device and voice wake settings", () => {
       });
       expect(page.querySelector("[role='alert']")).toBeNull();
       expect(page.querySelector("textarea")?.value).toBe("hello computer");
+      if (timing === "in-flight") {
+        interrupted.reject(new Error("Retired connection closed"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(page.querySelector("[role='alert']")).toBeNull();
+      }
     },
   );
 

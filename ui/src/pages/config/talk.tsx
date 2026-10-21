@@ -49,6 +49,8 @@ type TalkViewProps = {
   voiceWake?: {
     readState: () => VoiceWakeEditorState;
     scope?: object | null;
+    saving: boolean;
+    readWriteResult: () => void;
     onInput: (text: string) => void;
     onRetry: () => void;
   };
@@ -358,6 +360,8 @@ export function Talk(props: TalkViewProps) {
           <VoiceWakeEditor
             readState={props.voiceWake.readState}
             scope={props.voiceWake.scope}
+            saving={props.voiceWake.saving}
+            readWriteResult={props.voiceWake.readWriteResult}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />
