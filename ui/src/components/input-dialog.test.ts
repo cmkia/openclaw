@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showInputDialog } from "./input-dialog.ts";
 
 let restoreDialogPolyfill: () => void;
@@ -170,6 +171,8 @@ describe("showInputDialog", () => {
     expect(submit).toHaveBeenCalledOnce();
     flush();
     expect(dialogInput().disabled).toBe(true);
+    expect(findButton("Create group").disabled).toBe(true);
+    expect(findButton("Cancel").disabled).toBe(true);
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
     modal.dispatchEvent(cancelEvent);
@@ -181,11 +184,47 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
+  it("retires a pending submit without changing a replacement dialog", async () => {
+    const controller = new AbortController();
+    let reject!: (error: Error) => void;
+    const closed = showInputDialog({
+      ...REQUIRED,
+      signal: controller.signal,
+      submit: () =>
+        new Promise((_resolve, rejectAttempt) => {
+          reject = rejectAttempt;
+        }),
+    });
+    await getRenderedModalDialog(document.body);
+    await type("Retired draft");
+    submitForm();
+    flush();
+    expect(dialogInput().disabled).toBe(true);
+    controller.abort();
+    await expect(closed).resolves.toBeNull();
+    const replacement = showInputDialog({ title: "Replacement", defaultValue: "Current draft" });
+    await getRenderedModalDialog(document.body);
+    reject(new Error("Retired submission failed"));
+    await Promise.resolve();
+    flush();
+    expect(dialogInput().value).toBe("Current draft");
+    expect(dialogInput().disabled).toBe(false);
+    expect(document.body.textContent).not.toContain("Retired submission failed");
+    findButton("Cancel").click();
+    await expect(replacement).resolves.toBeNull();
+  });
+
   it.each(["synchronous", "asynchronous"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
+      let finishRetry!: (message: string | null) => void;
       const submit = vi
-        .fn((): Promise<string | null> => Promise.resolve(null))
+        .fn(
+          () =>
+            new Promise<string | null>((resolve) => {
+              finishRetry = resolve;
+            }),
+        )
         .mockImplementationOnce(() => {
           const error = new Error("gateway exploded");
           if (mode === "synchronous") {
@@ -198,16 +237,19 @@ describe("showInputDialog", () => {
 
       await type("Client work");
       submitForm();
-      await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-      await Promise.resolve();
+      await waitForSolid(() => expect(document.body.textContent).toContain("gateway exploded"));
 
-      expect(document.body.textContent).toContain("gateway exploded");
+      expect(submit).toHaveBeenCalledOnce();
       expect(dialogInput().disabled).toBe(false);
       expect(dialogInput().value).toBe("Client work");
       expect(findButton("Create group").disabled).toBe(false);
       expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
+      flush();
+      expect(document.body.textContent).not.toContain("gateway exploded");
+      expect(dialogInput().disabled).toBe(true);
+      finishRetry(null);
       await closed;
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     },
