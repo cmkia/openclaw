@@ -15,7 +15,6 @@ type OptionalOwnerProps =
   | "credentialChoices"
   | "onClose"
   | "onDiscoveryShown"
-  | "detectionError"
   | "modelConfigured"
   | "cancellationNotice"
   | "activationUnresolved"
