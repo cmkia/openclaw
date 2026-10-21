@@ -45,7 +45,7 @@ describe("legacy config migrate validation", () => {
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config?.agents?.defaults?.systemAgent?.agentId).toBe("main");
-    expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
+    expect(result.config?.agents?.defaults).not.toHaveProperty("heartbeat");
   });
 
   it("validates resolved OTel values while retaining authored interpolation", () => {
