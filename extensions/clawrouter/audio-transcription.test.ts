@@ -7,11 +7,6 @@ import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-run
 import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import {
-  createTalkFileTranscriptionSession,
-  resolveTalkFileTranscriptionConfig,
-} from "../../src/gateway/talk/file-transcription.js";
-
 type Capture = { url: string; authorization?: string; form: FormData };
 async function fixture(
   run: (p: {
@@ -270,42 +265,6 @@ describe("ClawRouter registered file transcription", () => {
       expect(result.text).toBeUndefined();
       expect(result.decision?.attachments[0]?.attempts[0]?.reason).toContain("maxBytes");
       expect(requests).toHaveLength(0);
-    });
-  });
-  it("reaches registered batch transcription from Talk and reports a transcript", async () => {
-    await fixture(async ({ cfg, requests }) => {
-      const config = await resolveTalkFileTranscriptionConfig(cfg);
-      expect(config?.ready).toBe(true);
-      expect(config?.provider).toBe("clawrouter");
-      if (!config) {
-        throw new Error("Talk file transcription unavailable");
-      }
-      const transcripts: string[] = [];
-      const session = createTalkFileTranscriptionSession(
-        config,
-        {
-          onTranscript: (text) => {
-            transcripts.push(text);
-          },
-        },
-        () => {},
-      );
-      await session.connect();
-      session.sendAudio(Buffer.alloc(1600, 0xff));
-      try {
-        await session.finish();
-      } finally {
-        session.close();
-      }
-      expect(transcripts).toEqual(["synthetic transcript"]);
-      expect(requests).toHaveLength(1);
-      const file = requests[0]!.form.get("file") as File;
-      expect(file.name).toBe("speech.wav");
-      expect(
-        Buffer.from(await file.arrayBuffer())
-          .subarray(0, 4)
-          .toString(),
-      ).toBe("RIFF");
     });
   });
   it("refuses credential/framing overrides before HTTP", async () => {

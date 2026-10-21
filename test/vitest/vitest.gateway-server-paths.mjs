@@ -331,6 +331,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/client-gateway-control.agent-consult.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
+  "src/gateway/talk/file-transcription.clawrouter.test.ts",
   "src/gateway/talk/handlers/client-consult-authority.test.ts",
   "src/gateway/talk/handlers/client-create-authority.test.ts",
   "src/gateway/talk/handlers/client-create-cross-store-authority.test.ts",
