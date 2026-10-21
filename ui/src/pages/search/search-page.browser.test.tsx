@@ -327,8 +327,9 @@ describe("Search settings", () => {
       const old = createDeferred<unknown>();
       fixture.setTestResponse(old.promise);
       fixture.click("Test search");
-      flush();
-      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…"));
+      await waitForSolid(() =>
+        expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…")),
+      );
       if (change === "agent") {
         fixture.setResult({
           ...ready,
@@ -340,7 +341,18 @@ describe("Search settings", () => {
         fixture.gateway.publish({ ...fixture.snapshot, phase: "stopped", client: null });
         fixture.gateway.publish(fixture.snapshot);
       }
-      old.resolve({ provider: "searxng", status: "ok", latencyMs: 1, content: "Obsolete success" });
+      try {
+        await waitForSolid(() =>
+          expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested")),
+        );
+      } finally {
+        old.resolve({
+          provider: "searxng",
+          status: "ok",
+          latencyMs: 1,
+          content: "Obsolete success",
+        });
+      }
       await fixture.settle();
       expect(fixture.element.textContent).not.toContain("Obsolete success");
       expect(fixture.element.textContent).not.toContain("Search succeeded");
@@ -356,9 +368,15 @@ describe("Search settings", () => {
       const pending = createDeferred<unknown>();
       fixture.setTestResponse(pending.promise);
       fixture.click("Test search");
-      flush();
+      fixture.click("Test search");
+      expect(fixture.calls("webSearch.test")).toHaveLength(1);
       try {
-        expect(query).toMatchObject({ disabled: true, value: "Query A" });
+        await waitForSolid(() =>
+          expect({ disabled: query.disabled, value: query.value }).toEqual({
+            disabled: true,
+            value: "Query A",
+          }),
+        );
       } finally {
         if (outcome === "request error") {
           pending.reject(new Error("Previous transport error"));
