@@ -164,7 +164,11 @@ async function createEmptyFixture(createSourceDatabase: boolean) {
   const stateDir = tempDirs.make("openclaw-shared-auth-empty-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+  };
   const mainAgentDir = paths.resolveSharedMainAuthAgentDir(env);
   const sourcePath = sqlite.resolveAuthProfileDatabasePath(mainAgentDir);
   if (createSourceDatabase) {
