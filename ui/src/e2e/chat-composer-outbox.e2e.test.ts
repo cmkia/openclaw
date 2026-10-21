@@ -95,7 +95,9 @@ suite.define(() => {
         await queue.locator(".chat-queue__steer, .chat-queue__retry, .chat-queue__grip").count(),
       ).toBe(0);
       expect(await statusBand.count()).toBe(0);
-      await page.screenshot({ path: suite.artifactDir + "/queued-message.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: suite.artifactDir + "/queued-message.png" });
+      }
 
       await reconnectMockGateway(page, gateway);
       await queue.getByText(prompt, { exact: true }).waitFor();
@@ -187,7 +189,9 @@ suite.define(() => {
         reason: "agent.input.settled",
       });
       await page.locator('[data-chat-queue-item="pending-input:other-client-input"]').waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/queued-attachment.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: suite.artifactDir + "/queued-attachment.png" });
+      }
       await queue.getByText(cancelText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
       await page.getByRole("button", { name: "Show earlier messages", exact: true }).click();
@@ -198,7 +202,9 @@ suite.define(() => {
       expect(
         await page.locator(".chat-group.user").getByText(prompt, { exact: true }).count(),
       ).toBe(0);
-      await page.screenshot({ path: suite.artifactDir + "/queued-attachment-history.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: suite.artifactDir + "/queued-attachment-history.png" });
+      }
 
       const promoted = {
         ...pendingMessage,
@@ -250,7 +256,11 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.startup", recentHistory);
       await reconnectMockGateway(page, gateway);
       await page.locator(".chat-group.assistant").getByText(recentReply, { exact: true }).waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/queue-after-consumption-reconnect.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          path: suite.artifactDir + "/queue-after-consumption-reconnect.png",
+        });
+      }
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(0);
       expect(await queue.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
@@ -311,7 +321,9 @@ suite.define(() => {
         ).toBe(0);
       };
       await expectRemoved();
-      await page.screenshot({ path: suite.artifactDir + "/removed-message.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: suite.artifactDir + "/removed-message.png" });
+      }
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await gateway.setMethodResponse("chat.startup", cancelledHistory);
@@ -323,7 +335,9 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await expectRemoved();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });
+      }
 
       const stopRunId = "ordinary-stopped-input";
       const stopText = "Keep this stopped request available to send again.";
@@ -386,7 +400,9 @@ suite.define(() => {
       expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
       expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.screenshot({ path: suite.artifactDir + "/stopped-message-retained.png" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: suite.artifactDir + "/stopped-message-retained.png" });
+      }
     });
   });
 });
