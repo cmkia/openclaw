@@ -76,6 +76,7 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.staged-directories": "workspace.inventory",
   "workspace.manifest.capture": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
   "workspace.manifest.serialize": "workspace.manifest",
   "workspace.manifest.overlay": "workspace.manifest",

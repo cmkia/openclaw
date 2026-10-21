@@ -19,6 +19,7 @@ import {
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { withWorkspaceHashMemo, type WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -227,7 +228,10 @@ export function projectionOperations(
     });
     await update({ pending_ref: null });
   };
-  const settle = async (retainAccepted = false) => {
+  const settle = async (
+    retainAccepted = false,
+    preparedSnapshot?: Awaited<ReturnType<typeof capture>>,
+  ) => {
     await recover();
     if (!retainAccepted) {
       await cleanupAccepted();
@@ -258,7 +262,7 @@ export function projectionOperations(
           "Workspace integration source is unavailable; retry github_publish prepare_pr for an imported PR, or refresh_base for the selected project. Saved work was preserved.",
         );
       }
-      const snapshot = await capture(target);
+      const snapshot = preparedSnapshot ?? (await capture(target));
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: owner.worktree.path,
         stagingRoot: sourcePath(target),
@@ -361,14 +365,18 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = async (target: Direction) => {
+  const synchronize = async (target: Direction, captureMemo?: WorkspaceHashMemo) => {
     await settle();
-    const snapshot = await capture(target);
+    // Only the source capture reuses its prepared owner's hashes. Apply retains
+    // its operation-local memo instead of transferring the source inventory.
+    const snapshot = captureMemo
+      ? await withWorkspaceHashMemo(captureMemo, () => capture(target))
+      : await capture(target);
     if (snapshot.manifestRef === current().baseline_ref) {
       return;
     }
     await update({ pending_ref: workerWorkspaceResultRef(randomUUID()), pending_target: target });
-    await settle();
+    await settle(false, snapshot);
   };
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;

@@ -237,7 +237,7 @@ it("expires an old runtime-file baseline while preserving unaccepted source", as
   await proveGeneratedWorkspaceExpiry(owner);
 });
 
-it.each([false, true])("settles stopped commands (parent disposed: %s)", async (disposed) => {
+it.each([false, true])("settles command checkpoints (parent disposed: %s)", async (disposed) => {
   const { proveStoppedLocalWorkspaceCheckpoint } =
     await import("./local-workspace-cancellation.test-support.js");
   await proveStoppedLocalWorkspaceCheckpoint(owner, disposed);
