@@ -575,19 +575,24 @@ export function redactJsonRecord(
       current = updateCurrentRecord(input, current, tokens, changed);
     }
   }
+  // Renaming JSON keys can create duplicates or change integer-key ordering.
+  // Preserve the decoded-record semantics expected by console and tail consumers.
+  const keysChanged =
+    !batch && tokens.some((token) => token.isKey && token.currentValue !== token.value);
   if (messageToken && message) {
     const finished = message.finish(messageToken.currentValue);
     if (finished !== messageToken.currentValue) {
-      return applyRedactionEdits(current, [
+      const result = applyRedactionEdits(current, [
         {
           start: messageToken.currentStart,
           end: messageToken.currentEnd,
           replacement: JSON.stringify(finished),
         },
       ]);
+      return keysChanged ? JSON.stringify(JSON.parse(result)) : result;
     }
   }
-  return applyRedactionEdits(
+  const result = applyRedactionEdits(
     current,
     tokens.flatMap((token) =>
       token.deferEncoding && token.edits.length > 0
@@ -601,4 +606,5 @@ export function redactJsonRecord(
         : [],
     ),
   );
+  return keysChanged ? JSON.stringify(JSON.parse(result)) : result;
 }

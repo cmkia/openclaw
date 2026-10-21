@@ -1041,10 +1041,10 @@ const preparationPatterns: ResolvedRedactPattern[] = [
 const CONSOLE_STRUCTURAL_FIELDS = new Set(["time", "level"]);
 
 /** Converts native values once and applies configured and structural protection before output. */
-export function redactLogRecordForTransport(
+export function serializeLogRecordForTransport(
   record: Record<string, unknown>,
-  tail?: { redaction: ResolvedRedactOptions; message?: RedactionMessage },
-): Record<string, unknown> {
+  tail?: { redaction: ResolvedRedactOptions; message?: RedactionMessage; originalLine: string },
+): string {
   const finishMeasurement = startRedactionMeasurement("log-record");
   let outcome: "ok" | "error" = "error";
   let inputChars: number | undefined;
@@ -1103,36 +1103,39 @@ export function redactLogRecordForTransport(
     });
     inputChars = json.length;
     const couldMatch = createRedactPrefilter(couldMatchDefaultFullContextPatterns);
-    const result = JSON.parse(
-      redactJsonRecord(
-        json,
-        origins,
+    const result = redactJsonRecord(
+      json,
+      origins,
+      [
+        [{ patterns: resolved.patterns }],
         [
-          [{ patterns: resolved.patterns }],
-          [
-            { patterns: preparationPatterns },
-            {
-              patterns: resolved.patterns,
-              ...(resolved.patterns === defaultResolvedPatterns ? { couldMatch } : {}),
-            },
-          ],
+          { patterns: preparationPatterns },
+          {
+            patterns: resolved.patterns,
+            ...(resolved.patterns === defaultResolvedPatterns ? { couldMatch } : {}),
+          },
         ],
-        prepareRedactionCapture,
-        tail ? getLegacyFieldRecordEdits : () => [],
-        (field) => getFieldRecordEdits(field, resolved.mode),
-        (field) => getTextRecordEdits(field, resolved.mode, tail !== undefined),
-        (field, currentValue) =>
-          (field.path.length === 1 && CONSOLE_STRUCTURAL_FIELDS.has(field.key)) ||
-          (resolved.patterns === defaultResolvedPatterns && !couldMatch(currentValue)),
-        tail?.message,
-      ),
+      ],
+      prepareRedactionCapture,
+      tail ? getLegacyFieldRecordEdits : () => [],
+      (field) => getFieldRecordEdits(field, resolved.mode),
+      (field) => getTextRecordEdits(field, resolved.mode, tail !== undefined),
+      (field, currentValue) =>
+        (field.path.length === 1 && CONSOLE_STRUCTURAL_FIELDS.has(field.key)) ||
+        (resolved.patterns === defaultResolvedPatterns && !couldMatch(currentValue)),
+      tail?.message,
     );
     outcome = "ok";
-    return result;
+    return tail && result === json ? tail.originalLine : result;
   } finally {
     finishMeasurement?.(outcome, inputChars);
   }
 }
+
+/** Plain-text metadata consumers need decoded fields, unlike JSON output sinks. */
+export const redactLogRecordForTransport = (
+  record: Record<string, unknown>,
+): Record<string, unknown> => JSON.parse(serializeLogRecordForTransport(record));
 
 /** The full default policy, programmatic matchers included; keep only the strings for `logging.redactPatterns`. */
 export function getDefaultRedactPatterns(): RedactPattern[] {
@@ -1174,13 +1177,11 @@ export function redactSensitiveLines(
         if (record === null || typeof record !== "object" || !isPlainRedactableObject(record)) {
           return line;
         }
-        const redacted = JSON.stringify(
-          redactLogRecordForTransport(record, {
-            redaction: recordRedaction,
-            message: getFileLogRedactionMessage(record),
-          }),
-        );
-        return redacted === JSON.stringify(record) ? line : redacted;
+        return serializeLogRecordForTransport(record, {
+          redaction: recordRedaction,
+          message: getFileLogRedactionMessage(record),
+          originalLine: line,
+        });
       })
       .join("\n"),
     { value: { structured: false, primitiveMask: false }, children: new Map() },

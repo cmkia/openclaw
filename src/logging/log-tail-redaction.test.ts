@@ -80,6 +80,19 @@ it("redacts raw JSON credentials and default tokens with custom tail patterns", 
   expect(await fs.readFile(file, "utf8")).toBe(raw);
 });
 
+it("preserves original JSON bytes when no fields need redaction", async () => {
+  const line = ' { "message" : "request completed", "count": 1e2, "nested": { "ok": true } } ';
+  await seed(`${line}\n`);
+  await tail([line]);
+});
+
+it("preserves decoded object semantics when redacted keys collide", async () => {
+  await seed('{"private-a":1,"private-b":2,"ordinary":true}\n', {
+    redactPatterns: ["private-[ab]"],
+  });
+  await tail(['{"***":2,"ordinary":true}']);
+});
+
 it.each([false, true])("keeps cold and incremental PEM context (closed=%s)", async (closed) => {
   const prefix = pemBegin + "earlier body\n" + (closed ? pemEnd : "");
   await seed(prefix + "older line\n".repeat(2000) + "cold line\n");

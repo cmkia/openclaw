@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
-  redactLogRecordForTransport,
+  serializeLogRecordForTransport,
   redactSensitiveFieldValue,
   redactSensitiveText,
   redactToolPayloadText,
@@ -41,9 +41,7 @@ it("redacts short texts byte-identically to the pre-fix implementation", () => {
     const [sensitive, toolPayload, logRecord] = fixture.outputs[index]!.map(restoreSchemes);
     expect(redactSensitiveText(sample, { mode: "tools" })).toBe(sensitive);
     expect(redactToolPayloadText(sample)).toBe(toolPayload);
-    expect(JSON.stringify(redactLogRecordForTransport({ message: sample, level: "info" }))).toBe(
-      logRecord,
-    );
+    expect(serializeLogRecordForTransport({ message: sample, level: "info" })).toBe(logRecord);
   }
 });
 

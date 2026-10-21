@@ -2,7 +2,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { readLoggingConfig } from "./config.js";
 import type { LogLevel } from "./levels.js";
-import { redactLogRecordForTransport } from "./redact.js";
+import { serializeLogRecordForTransport } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 
@@ -19,7 +19,7 @@ export function formatJsonConsoleLine(params: {
     ...(params.subsystem ? { subsystem: params.subsystem } : {}),
     message: params.message,
   };
-  return JSON.stringify(redactLogRecordForTransport(envelope));
+  return serializeLogRecordForTransport(envelope);
 }
 
 /** Formats diagnostics that must bypass console capture without bypassing JSON console style. */
