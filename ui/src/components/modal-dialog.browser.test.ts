@@ -116,7 +116,12 @@ async function mountModal(
   });
   host.append(modal);
   const rendered = await getRenderedModalDialog(host);
-  await Promise.all(rendered.dialog.getAnimations().map((animation) => animation.finished));
+  const openingAnimations = rendered.dialog.getAnimations();
+  // Initial presentation is setup here; motion-policy cases mount their own modal.
+  for (const animation of openingAnimations) {
+    animation.finish();
+  }
+  await Promise.all(openingAnimations.map((animation) => animation.finished));
   return { modal, dialog: rendered.dialog, name, notes };
 }
 describe.runIf(browserMode)("modal native focus ownership", () => {
