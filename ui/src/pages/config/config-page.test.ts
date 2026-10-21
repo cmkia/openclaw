@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { createRouter, definePage } from "@openclaw/uirouter";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import {
@@ -24,14 +27,18 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
 import {
+  completeConfigContext,
   mountConfigPage,
   mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
+import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
+import { pages } from "./route.ts";
 import { extractQuickSettingsSecurity } from "./security.tsx";
 
 const switchActiveRealtimeTalkCameras =
@@ -573,6 +580,115 @@ it("keeps the camera select mounted through pending, rejected, and retried selec
   expect(select.value).toBe("camera-1");
   expect(container.querySelector("[data-settings-camera]")).toBe(select);
   expect(document.activeElement).toBe(select);
+});
+
+it("leaves Appearance while a camera selection is unresolved", async () => {
+  const pending = deferred();
+  switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
+  vi.stubGlobal("navigator", {
+    mediaDevices: Object.assign(new EventTarget(), {
+      enumerateDevices: vi
+        .fn()
+        .mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
+      getUserMedia: vi.fn(),
+    }),
+  });
+  const view = mountConfigPage(configContext({ theme: { refresh: vi.fn() } }), {
+    pageId: "appearance",
+  });
+  const select = view.container.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
+  await waitForSolid(() => expect(select.options).toHaveLength(2));
+  select.value = "camera-1";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() =>
+    expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
+  );
+  expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+
+  view.update({ pageId: "notifications" });
+  await waitForSolid(() => {
+    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
+    expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
+  });
+
+  pending.resolve();
+  await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
+});
+
+it("leaves the settings route before a camera switch settles and still records its outcome", async () => {
+  const pending = deferred();
+  switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
+  vi.stubGlobal("navigator", {
+    mediaDevices: Object.assign(new EventTarget(), {
+      enumerateDevices: vi
+        .fn()
+        .mockResolvedValue([{ kind: "videoinput", deviceId: "camera-1", label: "Desk Camera" }]),
+      getUserMedia: vi.fn(),
+    }),
+  });
+  const appearance = pages.find((page) => page.id === "appearance")!;
+  const production = await appearance.component();
+  const module = {
+    ...production,
+    renderSolid: (props: Parameters<typeof production.renderSolid>[0]) =>
+      createComponent(provider.wrapper, {
+        get children() {
+          return createComponent(production.renderSolid, props);
+        },
+      }),
+  };
+  const router = createRouter<
+    ConfigPageId | "usage",
+    ApplicationContext,
+    typeof module,
+    ConfigPageRouteData
+  >({
+    routes: [
+      { ...appearance, component: () => module },
+      definePage({
+        id: "usage",
+        path: "/usage",
+        component: () => ({
+          renderSolid: () => {
+            const destination = document.createElement("p");
+            destination.textContent = "Usage destination";
+            return destination;
+          },
+        }),
+      }),
+    ],
+  });
+  const context = completeConfigContext(configContext({ router, theme: { refresh: vi.fn() } }));
+  const provider = createSolidApplicationContextProvider(context);
+  const outlet = mountRouterOutlet({ router, retryContext: context });
+  try {
+    await router.navigate("appearance", context);
+    await waitForSolid(() =>
+      expect(
+        outlet.querySelector<HTMLSelectElement>("[data-settings-camera]")?.options,
+      ).toHaveLength(2),
+    );
+    const select = outlet.querySelector<HTMLSelectElement>("[data-settings-camera]")!;
+    select.value = "camera-1";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(switchActiveRealtimeTalkCameras).toHaveBeenCalledWith("camera-1"),
+    );
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+
+    await router.navigate("usage", context);
+    await waitForSolid(() => {
+      expect(outlet.textContent).toContain("Usage destination");
+      expect(outlet.querySelector("openclaw-config-page")).toBeNull();
+    });
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+    pending.resolve();
+    await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
+  } finally {
+    pending.resolve();
+    outlet.dispose();
+    router.stop();
+  }
 });
 
 it("updates mobile pairing eligibility when connection and admin access are published", () => {

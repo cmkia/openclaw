@@ -134,11 +134,11 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
     () => state()?.selectedDeviceId.trim() ?? "",
   );
   const [selectingCamera, setSelectingCamera] = createOptimistic(false);
-  const selectCamera = action(function* (deviceId: string) {
+  const selectCamera = action(function* (deviceId: string, completion: Promise<void> | undefined) {
     setSelectedDeviceId(deviceId);
     setSelectingCamera(true);
     // The retained owner receipt reports errors through the status boundary.
-    yield props.config.onCameraSelect?.(deviceId).catch(() => {});
+    yield completion?.catch(() => {});
   });
   const selectOptions = createMemo(() => {
     const devices = state()?.devices ?? [];
@@ -252,7 +252,7 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
             onChange={(event) => {
               const deviceId = event.currentTarget.value;
               if (props.kind === "camera") {
-                void selectCamera(deviceId);
+                void selectCamera(deviceId, props.config.onCameraSelect?.(deviceId));
               } else {
                 props.config.onMicrophoneSelect?.(deviceId);
               }

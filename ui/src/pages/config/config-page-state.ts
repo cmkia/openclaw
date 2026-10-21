@@ -65,7 +65,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { createCameraSelection, refreshMediaDevice } from "./media-device-discovery.ts";
+import { createMediaDevicePreferences, refreshMediaDevice } from "./media-device-discovery.ts";
 import { admitMemoryRoute } from "./memory-route-admission.ts";
 import {
   configTargetIdFromHash,
@@ -77,7 +77,7 @@ import {
   buildSessionObserverUtilityModelPatch,
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
-import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
+import { createConfigViewState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -156,15 +156,11 @@ export function createConfigPage(
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   let updateStatusClient: GatewayBrowserClient | null = null;
   let mediaDeviceWatch: (() => void) | null = null;
-  const mediaDevices = {
-    microphone: createMediaDeviceState(),
-    camera: createMediaDeviceState(),
-  };
-  const selectCamera = createCameraSelection(
-    mediaDevices.camera,
+  const mediaDeviceOwner = createMediaDevicePreferences(
     (videoDeviceId) => applySettings({ realtimeTalkVideoDeviceId: videoDeviceId }),
     invalidate,
   );
+  const mediaDevices = mediaDeviceOwner.devices;
   let previousGateway: ApplicationContext["gateway"] | null = null;
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
@@ -205,7 +201,7 @@ export function createConfigPage(
     routeInitialized = true;
     if (pageId === "appearance" && nextPageId !== "appearance") {
       customThemeImportOwner.retireImport();
-      retireMediaPermissionRequests();
+      mediaDeviceOwner.retire();
     }
     abortRequests();
     pageId = nextPageId;
@@ -235,11 +231,6 @@ export function createConfigPage(
     synchronize();
     invalidate();
   };
-  function retireMediaPermissionRequests() {
-    for (const device of Object.values(mediaDevices)) {
-      device.requestsPermission = false;
-    }
-  }
 
   function abortRequests() {
     systemInfoTask.cancel();
@@ -852,7 +843,7 @@ export function createConfigPage(
       },
       onCameraRefresh: () =>
         void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
-      onCameraSelect: selectCamera,
+      onCameraSelect: mediaDeviceOwner.selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
@@ -893,6 +884,7 @@ export function createConfigPage(
       context.agentSelection,
       context.overlays,
     ].map((source) => source.subscribe(refresh));
+    subscriptions.push(mediaDeviceOwner.observeNavigation(context.router));
     // Server selection intent can change while the stored preferences stay equal.
     subscriptions.push(context.theme.subscribe(refresh));
     connected = true;
@@ -913,7 +905,7 @@ export function createConfigPage(
       subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();
-      retireMediaPermissionRequests();
+      mediaDeviceOwner.retire();
       mediaDeviceWatch?.();
       mediaDeviceWatch = null;
       clearInterval(poll);

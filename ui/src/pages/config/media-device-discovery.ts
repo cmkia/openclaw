@@ -1,4 +1,5 @@
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
+import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   discoverRealtimeTalkCameras,
@@ -6,15 +7,25 @@ import {
   realtimeTalkDeviceIssueMessage,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
-import type { createMediaDeviceState } from "./view-state.ts";
+import { createMediaDeviceState } from "./view-state.ts";
 
-export function createCameraSelection(
-  device: ReturnType<typeof createMediaDeviceState>,
+export function createMediaDevicePreferences(
   applySelection: (deviceId: string | undefined) => void,
   invalidate: () => void,
 ) {
+  const devices = { microphone: createMediaDeviceState(), camera: createMediaDeviceState() };
+  const device = devices.camera;
   let current: Deferred | null = null;
-  return (deviceId: string) => {
+  let presentation = Promise.withResolvers<void>();
+  function retire() {
+    presentation.resolve();
+    presentation = Promise.withResolvers<void>();
+    for (const state of Object.values(devices)) {
+      state.requestsPermission = false;
+    }
+  }
+  const selectCamera = (deviceId: string) => {
+    const retired = presentation.promise;
     // Retire superseded presentation even if the old hardware switch stays pending.
     current?.resolve();
     const selection = createDeferredCore();
@@ -40,7 +51,23 @@ export function createCameraSelection(
           invalidate();
         }
       });
-    return selection.promise;
+    // Navigation releases only presentation; the device retains its actual receipt.
+    return Promise.race([selection.promise, retired]);
+  };
+  return {
+    devices,
+    selectCamera,
+    retire,
+    observeNavigation(router: Pick<ApplicationContext["router"], "getState" | "subscribe">) {
+      // Intent arrives before Solid teardown, which can be parked by the action.
+      return router.subscribe(() => {
+        const state = router.getState();
+        const target = state.pendingMatches[0] ?? state.matches[0];
+        if (target?.routeId !== "appearance") {
+          retire();
+        }
+      });
+    },
   };
 }
 

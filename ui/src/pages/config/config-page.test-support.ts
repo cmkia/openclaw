@@ -40,7 +40,7 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   const subscribe = () => () => undefined;
   Object.assign(context, {
     basePath: context.basePath ?? "",
-    router: context.router ?? { subscribe },
+    router: context.router ?? { subscribe, getState: () => ({ pendingMatches: [], matches: [] }) },
     config: context.config ?? { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
     settingsAgentSelection: context.settingsAgentSelection ?? {
       state: { selectedId: "main" },
