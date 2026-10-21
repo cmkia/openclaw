@@ -18,24 +18,16 @@ import type {
   GatewayEventListener,
 } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
-import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
-import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
-import { loadSettings } from "../../app/settings.ts";
 import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
-import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
-import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
-import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -46,6 +38,11 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid as mountSolidRoot } from "../../test-helpers/mount-solid.ts";
+import {
+  createInitializationContext,
+  withLiveCapabilities,
+  type FixtureContextServices,
+} from "./chat-pane-context.test-support.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -71,6 +68,7 @@ import type { ChatTranscript } from "./components/chat-transcript-controller.ts"
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
+export { createInitializationContext } from "./chat-pane-context.test-support.ts";
 export { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
@@ -274,122 +272,6 @@ export function createGatewayBrowserClientFixture(
     Object.defineProperty(client, key, { configurable: true, writable: true, value });
   }
   return client;
-}
-
-type FixtureContextServices =
-  | "theme"
-  | "agentIdentity"
-  | "agents"
-  | "sessions"
-  | "plugins"
-  | "connectionBootstrap"
-  | "chatAttachmentHandoff";
-
-function withLiveCapabilities(
-  context: Omit<ApplicationContext, FixtureContextServices> & { sessions?: SessionCapability },
-): ApplicationContext {
-  const chatAttachmentHandoff = createChatAttachmentHandoff(context.gateway);
-  const connectionBootstrap = createConnectionBootstrapCoordinator();
-  const synchronizeBootstrap = (snapshot: ApplicationContext["gateway"]["snapshot"]) =>
-    connectionBootstrap.synchronize({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    });
-  synchronizeBootstrap(context.gateway.snapshot);
-  const stopBootstrap = context.gateway.subscribe(synchronizeBootstrap);
-  const theme = createApplicationTheme(
-    loadSettings(context.gateway.connection.gatewayUrl),
-    context.gateway,
-  );
-  const agents = createAgentCapability(context.gateway);
-  const sessions =
-    context.sessions ??
-    createSessionCapability(context.gateway, context.agentSelection, { connectionBootstrap });
-  const plugins = new ControlUiPluginRuntime(() => applicationContext);
-  onTestFinished(() => {
-    plugins.dispose();
-    stopBootstrap();
-    chatAttachmentHandoff.dispose();
-    connectionBootstrap.reset();
-    if (!context.sessions) {
-      sessions.dispose();
-    }
-    agents.dispose();
-    theme.dispose();
-  });
-  const applicationContext: ApplicationContext = {
-    ...context,
-    chatAttachmentHandoff,
-    connectionBootstrap,
-    navigation: createNavigationPreferencesFixture(),
-    theme,
-    agents,
-    sessions,
-    plugins,
-    agentIdentity: createAgentIdentityCapability(context.gateway),
-  };
-  return applicationContext;
-}
-
-export function createInitializationContext(client?: GatewayBrowserClient): ApplicationContext {
-  return withLiveCapabilities({
-    basePath: "",
-    gateway: {
-      snapshot: {
-        client: client ?? null,
-        phase: client ? "connected" : "stopped",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
-        sessionKey: "",
-        lastError: null,
-        lastErrorCode: null,
-      },
-      subscribe: () => () => {},
-      subscribeEvents: () => () => {},
-      connection: {
-        gatewayUrl: loadSettings().gatewayUrl,
-        token: "",
-        bootstrapToken: "",
-        password: "",
-      },
-    },
-    config: {
-      subscribe: () => () => {},
-      current: {
-        assistantIdentity: {
-          agentId: null,
-          name: "Assistant",
-          avatar: null,
-          avatarStatus: null,
-          avatarReason: null,
-        },
-        serverVersion: null,
-        embedSandboxMode: "strict",
-        allowExternalEmbedUrls: false,
-        terminalEnabled: false,
-      },
-    },
-    agentSelection: {
-      state: { selectedId: "main" },
-      subscribe: () => () => {},
-    },
-    runtimeConfig: {
-      state: { configNeedsApply: false, configSnapshot: null },
-      ensureLoaded: async () => undefined,
-      subscribe: () => () => {},
-    },
-    placementStartup: {
-      get: () => null,
-      hasPendingTurn: () => false,
-      retry: () => undefined,
-      pause: () => undefined,
-      subscribe: () => () => {},
-    },
-    navigate: () => undefined,
-    chatSubmissions: createChatSubmissions(),
-  } as unknown as Omit<ApplicationContext, FixtureContextServices>);
 }
 
 export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
