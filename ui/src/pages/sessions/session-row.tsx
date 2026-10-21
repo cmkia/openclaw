@@ -450,7 +450,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                     placeholder={t("sessionsView.optionalPlaceholder")}
                     onChange={(e) => {
                       const value = normalizeOptionalString(e.currentTarget.value) ?? null;
-                      props.onPatch(row().key, { label: value }, { sessionScope: true });
+                      void props.onPatch(row().key, { label: value }, { sessionScope: true });
                     }}
                   />
                 </label>
@@ -471,7 +471,9 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                           class="settings-select"
                           disabled={props.loading || Boolean(props.patchAdminDisabledReason)}
                           title={props.patchAdminDisabledReason ?? undefined}
-                          onChange={(event) => override().onChange(event.currentTarget.value)}
+                          onChange={(event) => {
+                            void override().onChange(event.currentTarget.value);
+                          }}
                         >
                           <For each={choices()} keyed={(option) => option.value}>
                             {(option) => {
