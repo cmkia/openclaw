@@ -11,7 +11,11 @@ import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  captureUiProofEnabled,
+  chatThreadDistanceFromBottom,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
@@ -149,6 +153,8 @@ suite.define(() => {
   ] as const)(
     "remeasures recovered assistant text after interrupted scrolling ($reducedMotion, $interruption, $recoveryPosition)",
     async ({ reducedMotion, interruption, recoveryPosition }) => {
+      const captureProof =
+        captureUiProofEnabled || Boolean(process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim());
       const artifactDir = path.join(
         createControlUiE2eArtifactDir(
           "virtual-sizing",
@@ -157,11 +163,12 @@ suite.define(() => {
         "after",
         `${reducedMotion}-${interruption}-${recoveryPosition}`,
       );
+      await fs.mkdir(artifactDir, { recursive: true });
       await suite.withPage(
         {
           reducedMotion,
           viewport: { width: 1440, height: 900 },
-          recordVideo: { dir: artifactDir },
+          ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.clock.install();
@@ -193,7 +200,9 @@ suite.define(() => {
           await page
             .locator('.chat-bubble[data-entry-id="sizing-message-1"]')
             .waitFor({ state: "visible" });
-          await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
+          }
           let during: { top: number; max: number };
           if (interruption === "synthetic-pointer") {
             // Check native gutter hit testing separately from animation timing.
@@ -476,7 +485,9 @@ suite.define(() => {
             };
           }, nextMessageId);
           const finalAnchor = await captureTopVisibleVirtualRow(thread);
-          await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
+          }
           await fs.writeFile(
             path.join(artifactDir, "interrupted-scroll.json"),
             JSON.stringify(
@@ -546,7 +557,9 @@ suite.define(() => {
           }, nextMessageId);
           expect(returned.height).toBe(final.height);
           expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
-          await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
+          }
           await thread.evaluate(
             (element, offset) => {
               element.scrollTop = offset;
@@ -554,7 +567,9 @@ suite.define(() => {
             final.returnOffset + Math.min(300, final.height / 2),
           );
           await waitForChatScrollIdle(page);
-          await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
+          }
         },
       );
     },
