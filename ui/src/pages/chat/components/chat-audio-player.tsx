@@ -81,8 +81,6 @@ function ChatAudioPlayerContent(
   const sourceState = projectOwner(sourceController, (owner) => owner);
   const cancelPendingResume = () => sourceController.cancelPendingResume();
   let mediaElement: HTMLAudioElement | null = null;
-  let waveformElement: HTMLElement | null = null;
-  let waveformResizeObserver: ResizeObserver | null = null;
   let releaseWaveformBlob: (() => void) | undefined;
   let waveformController: AbortController | null = null;
   let waveformAttempted = false;
@@ -134,22 +132,6 @@ function ChatAudioPlayerContent(
   const setMedia = (element: HTMLAudioElement) => {
     mediaElement = element;
     syncSource();
-  };
-
-  const setWaveform = (waveform: HTMLDivElement) => {
-    waveformResizeObserver?.disconnect();
-    waveformResizeObserver = null;
-    waveformElement = waveform;
-    updateWaveformWidth(waveform.getBoundingClientRect().width);
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    waveformResizeObserver = new ResizeObserver(([entry]) => {
-      if (entry && waveformElement === entry.target) {
-        updateWaveformWidth(entry.contentRect.width);
-      }
-    });
-    waveformResizeObserver.observe(waveform);
   };
 
   function updateWaveformWidth(width: number): void {
@@ -439,12 +421,21 @@ function ChatAudioPlayerContent(
       />
     );
     const Waveform = () => {
-      const waveformRef = elementRef((element: HTMLDivElement) => {
-        setWaveform(element);
+      const waveformRef = elementRef((waveform: HTMLDivElement) => {
+        updateWaveformWidth(waveform.getBoundingClientRect().width);
+        if (typeof ResizeObserver === "undefined") {
+          return;
+        }
+        let current: HTMLDivElement | null = waveform;
+        const observer = new ResizeObserver(([entry]) => {
+          if (entry && current === entry.target) {
+            updateWaveformWidth(entry.contentRect.width);
+          }
+        });
+        observer.observe(waveform);
         return () => {
-          waveformResizeObserver?.disconnect();
-          waveformResizeObserver = null;
-          waveformElement = null;
+          observer.disconnect();
+          current = null;
         };
       });
       return (
