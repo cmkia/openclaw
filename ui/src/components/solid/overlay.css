@@ -98,9 +98,28 @@
 
 .oc-overlay[data-placement="left"],
 .oc-overlay[data-placement="left-start"],
+.oc-overlay[data-placement="left-end"],
+.oc-overlay[data-placement="right"],
+.oc-overlay[data-placement="right-start"],
+.oc-overlay[data-placement="right-end"] {
+  /* Area-relative caps shrink side menus before the browser can try a block flip. */
+  max-height: min(
+    var(--oc-overlay-max-height, 420px),
+    var(--oc-overlay-available-height, calc(100dvh - 16px)),
+    calc(100dvh - 16px)
+  );
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline,
+    --oc-overlay-below,
+    --oc-overlay-above;
+}
+
+.oc-overlay[data-placement="left"],
+.oc-overlay[data-placement="left-start"],
 .oc-overlay[data-placement="left-end"] {
   margin: 0 var(--oc-overlay-distance, 6px) 0 0;
-  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
   transform-origin: right;
 }
 
@@ -108,7 +127,6 @@
 .oc-overlay[data-placement="right-start"],
 .oc-overlay[data-placement="right-end"] {
   margin: 0 0 0 var(--oc-overlay-distance, 6px);
-  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
   transform-origin: left;
 }
 
