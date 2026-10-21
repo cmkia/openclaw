@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,6 +9,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   authorizationCode,
   availableStatus,
+  createMutationRunner,
   setupRequest,
   sharedTarget,
 } from "./github-identity-harness.test-support.ts";
@@ -205,6 +206,60 @@ describe("GitHub identity view", () => {
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.queryByRole("button", { name: "Saving…" })).toBeNull();
+  });
+
+  it("leaves the GitHub panel while its admitted PAT command remains pending", async () => {
+    const stored = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) =>
+      method === "secrets.store.set" ? stored.promise : availableStatus("system"),
+    );
+    const client = createTestGatewayClient(request);
+    let identity!: ReturnType<typeof createGitHubIdentityView>;
+    const view = mountSolid(() => {
+      const [panel, setPanel] = createSignal("github");
+      identity = createGitHubIdentityView({
+        runExternalMutation: createMutationRunner(client),
+      });
+      return (
+        <>
+          <button onClick={() => setPanel("destination")}>Open destination</button>
+          <Show when={panel() === "github"} fallback={<h1>Destination panel</h1>}>
+            <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+          </Show>
+        </>
+      );
+    });
+    flush();
+    identity.sync({
+      client,
+      connected: true,
+      permissionsReady: true,
+      target: sharedTarget(),
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+    identity.showPatFallback();
+    flush();
+    const input = view.getByLabelText("Fine-grained PAT");
+    if (!(input instanceof HTMLInputElement)) throw new Error("Expected PAT input");
+    input.value = "synthetic-navigation-token";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    view.getByRole("button", { name: "Save Identity" }).click();
+    flush();
+    try {
+      expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+      view.getByRole("button", { name: "Open destination" }).click();
+      flush();
+      expect(view.getByRole("heading", { name: "Destination panel" })).toBeTruthy();
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["secrets.store.set"]);
+    } finally {
+      stored.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(request).toHaveBeenCalledWith("tools.github.configure", expect.anything());
   });
 
   it("retires pending authorization-code copying only when its payload changes", async () => {
