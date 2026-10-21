@@ -46,6 +46,10 @@ suite.define(() => {
           .locator(".chat-attachment-thumb")
           .filter({ has: button(page, "Compress to fit") });
         await offer.waitFor();
+        const removeIcon = offer.locator(".chat-attachment-remove svg");
+        expect(await removeIcon.evaluate((element) => getComputedStyle(element).width)).toBe(
+          "13px",
+        );
         const normalBox = (await normal.boundingBox())!;
         const offerBox = (await offer.boundingBox())!;
         expect(normalBox.height).toBe(56);
