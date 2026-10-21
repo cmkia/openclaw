@@ -409,11 +409,9 @@ export function ChatModelPickerPanel(panel: {
                 }
                 onKeyDown={handleModelSearchKeydown}
               />
-              {panel.params.modelOptions.length > 0
-                ? renderCatalogStatus()(() => (
-                    <ChatModelCatalogRefresh state={panel.params.modelCatalogState} />
-                  ))
-                : undefined}
+              {panel.params.modelOptions.length > 0 ? (
+                <ChatModelCatalogRefresh state={panel.params.modelCatalogState} />
+              ) : undefined}
             </div>
           ) : undefined}
           {renderCatalogStatus()(() => (
