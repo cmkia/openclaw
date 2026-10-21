@@ -71,6 +71,62 @@ describe("Model setup refresh continuity", () => {
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("Rescan failed");
   });
 
+  it("keeps cached native choices usable through a failed refresh and retry", async () => {
+    const { context, client, request } = createFirstRunContext();
+    const model = {
+      provider: "acp-opencode",
+      id: "fixture-model",
+      name: "Cached fixture model",
+      available: true,
+      agentRuntime: { id: "acp-opencode", source: "implicit" as const },
+    };
+    const cached: ModelCatalogResult = { models: [model] };
+    const pending = createDeferred<ModelCatalogResult>();
+    const retry = createDeferred<ModelCatalogResult>();
+    let reads = 0;
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        return ++reads === 1 ? pending.promise : retry.promise;
+      }
+      throw new Error("Unexpected request: " + method);
+    });
+    const { page } = await mountDetection(context, client, inventory, false);
+    const scope = { view: "all" as const, agentId: "main" };
+    publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, cached);
+    const section = page.querySelector<HTMLElement>("[data-native-model-setup]")!;
+    const trigger = pageButton(section, ".picker-select__trigger")!;
+    const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
+    try {
+      trigger.click();
+      await waitForElement(section, option);
+      section.querySelector<HTMLElement>(option)!.click();
+      await page.updateComplete;
+      expect(trigger.textContent).toContain("Cached fixture model");
+      expect(pageButton(section, "button.primary")?.disabled).toBe(false);
+      expect(section.querySelector('p[role="status"]')).not.toBeNull();
+      expect(callsFor(request, "models.list")).toHaveLength(1);
+      pending.reject(new Error("Catalog refresh failed. Try again."));
+      await waitForFast(() =>
+        expect(section.querySelector('[role="alert"]')?.textContent).toContain(
+          "Catalog refresh failed",
+        ),
+      );
+      expect(pageButton(section, ".picker-select__trigger")).toBe(trigger);
+      expect(pageButton(section, "button.primary")?.disabled).toBe(false);
+      pageButton(section, '[role="alert"] button')!.click();
+      await waitForFast(() => expect(callsFor(request, "models.list")).toHaveLength(2));
+      retry.resolve({ models: [{ ...model, name: "Refreshed fixture model" }] });
+      await waitForFast(() => expect(trigger.textContent).toContain("Refreshed fixture model"));
+      expect(pageButton(section, ".picker-select__trigger")).toBe(trigger);
+      expect(pageButton(section, "button.primary")?.disabled).toBe(false);
+      expect(section.querySelector('p[role="status"]')).toBeNull();
+      expect(section.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      pending.resolve(cached);
+      retry.resolve(cached);
+    }
+  });
+
   it("reopens the published native inventory without restarting discovery and retries explicitly", async () => {
     const { context, client, request } = createFirstRunContext();
     const model = {
