@@ -17,6 +17,8 @@ import {
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 describeControlUiE2e("plugin install button progress", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
@@ -32,9 +34,14 @@ describeControlUiE2e("plugin install button progress", () => {
       const evidence = createControlUiE2eArtifactDir(`plugin-install-progress-${outcome}`);
       const context = await newContext(undefined, {
         hasTouch: true,
-        recordVideo: { dir: evidence },
+        recordVideo: captureUiProof ? { dir: evidence } : undefined,
       });
       const page = await context.newPage();
+      const captureScreenshot = async (name: string) => {
+        if (captureUiProof) {
+          await page.screenshot({ path: `${evidence}/${name}.png` });
+        }
+      };
       await page.clock.install();
       await page.emulateMedia({ colorScheme: "dark" });
       const methods = [...pluginMethods, "openclaw.chat", "openclaw.chat.history"];
@@ -89,7 +96,7 @@ describeControlUiE2e("plugin install button progress", () => {
                 })
                 .toBe(true);
             }
-            await page.screenshot({ path: `${evidence}/${prefix}-${width}.png` });
+            await captureScreenshot(`${prefix}-${width}`);
           }
         };
         const resolveInstall = async () => {
@@ -102,7 +109,7 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await card.count()).toBe(0);
         };
         await button.waitFor();
-        await page.screenshot({ path: `${evidence}/before.png` });
+        await captureScreenshot("before");
         await gateway.deferNext("plugins.install");
         await button.click();
         const request = await gateway.waitForRequest("plugins.install");
@@ -196,7 +203,7 @@ describeControlUiE2e("plugin install button progress", () => {
           });
           await page.getByText(label, { exact: true }).waitFor();
           expect(await countActivities("completed")).toBe(completed);
-          await page.screenshot({ path: `${evidence}/failure-state.png` });
+          await captureScreenshot("failure-state");
           expect((await button.textContent())?.trim()).toBe(
             outcome === "failure" ? "Retry install" : "View status",
           );
@@ -205,7 +212,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await page.clock.runFor(1100);
           expect(await timer.textContent()).toBe(stoppedAt);
           expect(await page.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
-          await page.screenshot({ path: `${evidence}/after.png` });
+          await captureScreenshot("after");
           await capture("failure", [1440, 1366, 768, 390], "both");
           if (outcome === "failure") {
             await expectText(card, "Plugin not installed");
@@ -236,7 +243,7 @@ describeControlUiE2e("plugin install button progress", () => {
             await publishInstalled();
             await resolveInstall();
             await expectInstallRequests(2);
-            await page.screenshot({ path: `${evidence}/retry-success.png` });
+            await captureScreenshot("retry-success");
           } else {
             await button.click();
             await expectInstallRequests(1);
@@ -251,7 +258,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await resolveInstall();
           await expectText(page.locator(".plugin-catalog-detail__actions"), "Ask OpenClaw");
           expect(await page.locator(".plugin-install-action__button").count()).toBe(0);
-          await page.screenshot({ path: `${evidence}/after.png` });
+          await captureScreenshot("after");
           await gateway.resolveDeferred("config.get");
         }
       } finally {
