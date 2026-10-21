@@ -590,9 +590,9 @@ it("preserves visible listing order and excludes retained generations", () => {
 
   const selected = byId("shared");
   expect(selected).toEqual(
-    sessions
-      .listSessionEntriesReadOnly({ ...scope, projection: "list" })
-      .find(({ entry }) => entry.sessionId === "shared"),
+    listSessionEntriesReadOnly({ ...scope, projection: "list" }).find(
+      ({ entry }) => entry.sessionId === "shared",
+    ),
   );
   expect(selected).toMatchObject({
     sessionKey: "agent:main:a-shared",

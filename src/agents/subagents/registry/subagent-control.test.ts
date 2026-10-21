@@ -1111,11 +1111,7 @@ describe("controlled subagent cancellation races", () => {
     "preserves recoverability when the kill %s cannot persist",
     async (phase) => {
       const sessionId = "sess-kill-write-failure";
-      const {
-        run: entry,
-        storePath,
-        childSessionKey,
-      } = await storedRun(
+      const { run, storePath, childSessionKey } = await storedRun(
         "kill-write-failure",
         {
           ...(phase === "intent" ? otherOwner : runOwner("agent:main:main")),
@@ -1156,18 +1152,18 @@ describe("controlled subagent cancellation races", () => {
       const result =
         phase === "intent"
           ? await adminKill(childSessionKey, storePath)
-          : await controlledKill([entry], storePath);
+          : await controlledKill([run], storePath);
       expect(result).toMatchObject({
         ...(phase === "intent"
-          ? { found: true, killed: false, runId: entry.runId, sessionKey: childSessionKey }
+          ? { found: true, killed: false, runId: run.runId, sessionKey: childSessionKey }
           : { status: "error" }),
         error: expect.stringContaining(`Failed to persist subagent kill ${phase}`),
       });
 
       expect(abortedLastRunWrites).toEqual([]);
-      expect(await latestRun(childSessionKey)).toMatchObject({
-        runId: entry.runId,
-        killIntent: phase === "intent" ? undefined : { reason: "killed", sessionId },
+      const persisted = await latestRun(childSessionKey);
+      expect(persisted).toMatchObject({
+        runId: run.runId,
         execution:
           phase === "intent"
             ? { status: "running" }
@@ -1176,7 +1172,10 @@ describe("controlled subagent cancellation races", () => {
                 restartRecovery: { phase: "reserved" },
               },
       });
-      expect((await latestRun(childSessionKey))?.execution.endedAt).toBeUndefined();
+      expect(persisted?.killIntent).toEqual(
+        phase === "intent" ? undefined : expect.objectContaining({ reason: "killed", sessionId }),
+      );
+      expect(persisted?.execution.endedAt).toBeUndefined();
     },
   );
 

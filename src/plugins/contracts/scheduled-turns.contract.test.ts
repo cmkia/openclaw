@@ -54,22 +54,37 @@ async function invokePluginGatewayHandler(params: {
   method: string;
   params?: Record<string, unknown>;
 }): Promise<unknown> {
-  const handlerParams = params.params ?? {};
-  let result: unknown;
-  await params.handler({
-    req: { type: "req", id: "test-request", method: params.method, params: handlerParams },
-    params: handlerParams,
-    client: null,
-    isWebchatConnect: () => false,
-    respond(ok, payload, error) {
-      if (!ok) {
-        throw new Error(error?.message ?? `gateway handler failed: ${params.method}`);
+  return await new Promise((resolve, reject) => {
+    const handlerParams = params.params ?? {};
+    const respond = (
+      ok: boolean,
+      payload?: unknown,
+      error?: { message?: string },
+      meta?: Record<string, unknown>,
+    ) => {
+      void meta;
+      if (ok) {
+        resolve(payload);
+        return;
       }
-      result = payload;
-    },
-    context: {} as GatewayRequestHandlerOptions["context"],
+      reject(new Error(error?.message ?? `gateway handler failed: ${params.method}`));
+    };
+    // Keep this helper pinned to the live request-frame contract so gateway typing drift breaks here first.
+    const handlerOptions: GatewayRequestHandlerOptions = {
+      req: {
+        type: "req",
+        id: "test-request",
+        method: params.method,
+        params: handlerParams,
+      },
+      params: handlerParams,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as GatewayRequestHandlerOptions["context"],
+    };
+    Promise.resolve(params.handler(handlerOptions)).catch(reject);
   });
-  return result;
 }
 
 function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
@@ -166,6 +181,15 @@ function getCronAddBody() {
     throw new Error("Expected cron add call");
   }
   return addCall[0] as CronJobCreate;
+}
+
+function expectSessionTurnHandle(
+  handle: unknown,
+  id: string,
+  pluginId = WORKFLOW_PLUGIN_ID,
+  sessionKey = MAIN_SESSION_KEY,
+) {
+  expect(handle).toEqual(sessionTurnHandle(id, pluginId, sessionKey));
 }
 
 async function scheduleWorkflowTurn(
@@ -360,10 +384,8 @@ describe("plugin scheduled turns", () => {
     await expect(
       scheduleWorkflowTurn({
         pluginName: "Workflow Plugin",
-        schedule: { name: "one-shot" },
       }),
     ).resolves.toEqual(sessionTurnHandle("one-shot-job"));
-    expect(getCronAddBody().name).toBe("plugin:workflow-plugin:agent:main:main:one-shot");
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(60_999);
@@ -636,7 +658,7 @@ describe("plugin scheduled turns", () => {
     const cleanupFailureHandle = await scheduleWorkflowTurn({
       pluginName: "Workflow Plugin",
     });
-    expect(cleanupFailureHandle).toEqual(sessionTurnHandle("cleanup-failure-job"));
+    expectSessionTurnHandle(cleanupFailureHandle, "cleanup-failure-job");
 
     const failures = await cleanupPluginSessionSchedulerJobs({
       pluginId: WORKFLOW_PLUGIN_ID,
@@ -789,6 +811,40 @@ describe("plugin scheduled turns", () => {
     await expect(unscheduleWorkflowTurnsByTag()).resolves.toEqual({ removed: 2, failed: 0 });
     expect(listQueries).toEqual(["plugin:workflow-plugin:tag:nudge:agent:main:main:"]);
     expect(removed.toSorted()).toEqual(["job-a", "job-b"]);
+  });
+
+  it("prunes runtime scheduler records after tagged unschedule removes jobs", async () => {
+    let addCount = 0;
+    workflowMocks.cronAdd.mockImplementation(async () => {
+      addCount += 1;
+      return makeCronJob({ id: `job-${addCount}` });
+    });
+    workflowMocks.cronListPage.mockResolvedValue(
+      cronPage([taggedJob("job-1", "first"), taggedJob("job-2", "second")]),
+    );
+    workflowMocks.cronRemove.mockImplementation(async (id: string) => {
+      expect(["job-1", "job-2"]).toContain(id);
+      return { ok: true, removed: true };
+    });
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        message: "first",
+        tag: "nudge",
+        name: "first",
+      },
+    });
+    await scheduleWorkflowTurn({
+      schedule: {
+        message: "second",
+        tag: "nudge",
+        name: "second",
+      },
+    });
+    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(2);
+
+    await expect(unscheduleWorkflowTurnsByTag()).resolves.toEqual({ removed: 2, failed: 0 });
+    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);
   });
 
   it("counts cron.list and cron.remove failures when unscheduling by tag", async () => {

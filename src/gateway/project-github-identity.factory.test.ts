@@ -67,6 +67,7 @@ let receiptPatch: Record<string, unknown>;
 let onRequest: ((path: string) => void) | undefined;
 let requests: string[];
 let brokerVerdict: unknown;
+let cleanupFails: boolean;
 const assertActive = () => {
   if (!active) {
     throw new Error("Session authority retired");
@@ -124,6 +125,7 @@ function readIssue(identity: NonNullable<Awaited<ReturnType<typeof prepare>>>) {
 beforeEach(() => {
   active = true;
   deny = false;
+  cleanupFails = false;
   receiptPatch = {};
   requests = [];
   brokerVerdict = undefined;
@@ -177,7 +179,7 @@ beforeEach(() => {
     }
     if (init.method === "DELETE") {
       expect(new Headers(init.headers).get("authorization")).toBe("Bearer synthetic-app-token");
-      return new Response(null, { status: 204 });
+      return new Response(null, { status: cleanupFails ? 503 : 204 });
     }
     const bodies: Record<string, unknown> = {
       "/app": { id: 101, slug: "factory", permissions },
@@ -321,7 +323,9 @@ describe("Factory project read admission composition", () => {
 
   it.each([
     ["denied", {}],
+    ["foreign repository", { repository: { id: 405, fullName: "other/project" } }],
     ["foreign host", { host: "other.ghe.com" }],
+    ["actor mismatch", { actor: { accountId: 43, profileId: "person-1" } }],
   ] as const)("rejects %s admission before any App token request", async (failure, patch) => {
     deny = failure === "denied";
     Object.assign(receiptPatch, patch);
@@ -368,5 +372,12 @@ describe("Factory project read admission composition", () => {
       await identity!.revoke?.();
     }
     expect(requests.at(-1)).toBe("DELETE /installation/token");
+  });
+
+  it("surfaces cleanup failure and closes the read identity before retrying any read", async () => {
+    const identity = await prepare();
+    cleanupFails = true;
+    await expect(identity!.revoke!()).rejects.toThrow("revocation failed");
+    await expect(identity!.revalidate()).rejects.toThrow("changed");
   });
 });

@@ -16,7 +16,10 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
@@ -26,20 +29,14 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   records,
+  requesterWakeDriver,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
-import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
 } from "./subagent-control-native.test-support.js";
-import {
-  beginControlAdmission,
-  controlController as controller,
-  controlSessionKey as childKey,
-  createControlRunFixture,
-  enqueueControlRun,
-} from "./subagent-control.fixtures.test-support.js";
 import {
   killAllControlledSubagentRuns as killRuns,
   killSubagentRunAdmin,
@@ -47,7 +44,10 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS as RETIRE_AFTER } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   activateSubagentRegistry,
@@ -68,15 +68,31 @@ import { resolveSubagentSessionStatus as status } from "./subagent-session-metri
 
 const fixture = useSubagentControlFixture();
 const { worker, gateway, wake, announce, capture, cleanup } = fixture;
-const { controllerSessionKey } = controller;
-const runs = createControlRunFixture(() => fixture.stateDir);
+const controllerSessionKey = "agent:main:main";
+const controller = {
+  controllerSessionKey,
+  controllerAgentId: "main",
+  callerSessionKey: controllerSessionKey,
+  callerIsSubagent: false,
+  controlScope: "children" as const,
+};
+const childKey = (runId: string) => `agent:main:subagent:${runId}`;
+const identity = (runId: string) => ({
+  sessionId: `${runId}-session`,
+  lifecycleRevision: `${runId}-revision`,
+});
 type Registration = Parameters<typeof registerSubagentRun>[0];
 function register(options: Pick<Registration, "runId"> & Partial<Registration>) {
-  return runs.register(options.runId, undefined, {
-    sessionEntry: {
-      sessionId: `${options.runId}-session`,
-      lifecycleRevision: `${options.runId}-revision`,
-    },
+  return registerSubagentRun({
+    childSessionKey: childKey(options.runId),
+    sessionEntry: identity(options.runId),
+    task: options.runId,
+    childAgentId: "main",
+    requesterSessionKey: controllerSessionKey,
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    cleanup: "keep",
+    expectsCompletionMessage: false,
     ...options,
   });
 }
@@ -98,7 +114,14 @@ function putSession(storePath: string, sessionKey: string, sessionId: string, re
 }
 function enqueue(runId: string, blocker?: string) {
   const start = vi.fn(async () => {});
-  enqueueControlRun(runId, runId, blocker ? [blocker] : [], start);
+  enqueueSwarmRun({
+    groupId: runId,
+    runId,
+    maxConcurrent: 1,
+    activeRunIds: blocker ? [blocker] : [],
+    start,
+    onStartFailure: () => true,
+  });
   return start;
 }
 async function registerTree(turnOwner = false, predecessor = false) {
@@ -140,6 +163,10 @@ it.each([
   );
   expect(await terminate({ runId: "ancestor", suppressTaskDelivery: true })).toBe(1);
   const ancestor = subagentRuns.get("ancestor")!;
+  expect(ancestor.killReconciliation).toMatchObject({
+    killedAt: now,
+    suppressTaskDelivery: true,
+  });
   const dispatch = enqueue("child", "blocker");
   let lateDispatch: ReturnType<typeof enqueue> | undefined;
   try {
@@ -152,12 +179,22 @@ it.each([
         clock.mockReturnValue(now + RETIRE_AFTER);
         let retirementRejected = false;
         if (transition === "retirement write rollback") {
-          fixture.interceptWorkerCommand((command) => {
-            if (isRegistryWrite(command) && command.input.deleteRunIds.includes("ancestor")) {
-              retirementRejected = true;
-              throw new Error("retirement write rejected");
-            }
-          });
+          worker.mockImplementation((context, operation, options) =>
+            runWorker(
+              context,
+              (scope) => {
+                const execute: typeof scope.execute = async (command) => {
+                  if (isRegistryWrite(command) && command.input.deleteRunIds.includes("ancestor")) {
+                    retirementRejected = true;
+                    throw new Error("retirement write rejected");
+                  }
+                  return scope.execute(command);
+                };
+                return operation({ ...scope, execute });
+              },
+              options,
+            ),
+          );
         }
         await testing.sweepOnceForTests();
         if (transition === "retirement write rollback") {
@@ -245,16 +282,21 @@ it.each([
   const ancestor = subagentRuns.get("ancestor")!;
   const child = subagentRuns.get("child")!;
   const entered = createDeferred();
-  const admission = await beginControlAdmission(
-    storePath,
-    ancestorKey,
-    "ancestor-session",
-    () => {
+  const admission = await beginSessionEffect({
+    scope: storePath,
+    identities: [ancestorKey, "ancestor-session"],
+    run: {
+      runId: ancestor.runId,
+      sessionKey: ancestorKey,
+      sessionId: "ancestor-session",
+      agentId: "main",
+    },
+    assertAllowed: () => {},
+    onInterrupt: () => {
       entered.resolve();
       return { runId: ancestor.runId };
     },
-    ancestor.runId,
-  );
+  });
   const dispatch = enqueue(child.runId, "draining-blocker");
   const cfg = getRuntimeConfig();
   const pending =
@@ -303,6 +345,7 @@ it.each([
     }
     const completion = subagentRuns.get(child.runId)?.collectorCompletion;
     expect(completion?.status, JSON.stringify(result)).toBe("killed");
+    expect(status(subagentRuns.get(child.runId))).toBe("killed");
     expect(dispatch).not.toHaveBeenCalled();
     expect(result).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
   } finally {
@@ -557,6 +600,7 @@ it.each([true, false])("keeps successor (pre-restore=%s)", async (beforeRestore)
   const originalBefore = savedRun(runId);
   const successorBefore = structuredClone(subagentRuns.get(successor.runId));
   const successorPersistedBefore = savedRun(successor.runId);
+  expect(successorBefore).toMatchObject({ runId: "successor-run", generation: 2 });
   expect(successorPersistedBefore).toMatchObject({
     runId: "successor-run",
     generation: 2,
@@ -591,4 +635,31 @@ it("keeps ordinary yielded wakes ahead of terminal cleanup", async () => {
   expect(saved.delivery).toEqual(input.subagent.delivery);
   expect(wake).toHaveBeenCalledOnce();
   expectNoExecutionReplay();
+});
+
+it.each([-1, 1])("ignores killed callbacks after cancellation cleanup (%ims)", async (offset) => {
+  const { input, runId } = historicalCancellation();
+  input.subagent.killReconciliation = undefined;
+  await persistRetiredOwner(input);
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  input.subagent = subagentRuns.get(runId)!;
+  const driver = requesterWakeDriver([input]);
+  const before = structuredClone(input.subagent);
+  try {
+    await driver.controller.completeSubagentRun({
+      runId,
+      expectedEntry: input.subagent,
+      endedAt: input.subagent.execution.endedAt! + offset,
+      reason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "stopped" },
+      triggerCleanup: true,
+    });
+
+    expect(input.subagent).toEqual(before);
+    expect(savedRun(runId)).toEqual(before);
+    expect(driver.wake).not.toHaveBeenCalled();
+    expectNoExecutionReplay();
+  } finally {
+    driver.controller.clearRuntimeState();
+  }
 });
