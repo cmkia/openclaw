@@ -3,7 +3,7 @@ import type { SkillStatusReport } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
-export type AgentSkillsRead = {
+type AgentSkillsRead = {
   agentId: string;
   result: Promise<SkillStatusReport | undefined>;
 };
