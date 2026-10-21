@@ -128,8 +128,10 @@ async function capture(page: Page, name: string, focus: Locator) {
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
-  await page.screenshot({ path: path.join(artifactDir, name + ".png") });
-  screenshots.push(name + ".png");
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({ path: path.join(artifactDir, name + ".png") });
+    screenshots.push(name + ".png");
+  }
   await saveProof();
 }
 
