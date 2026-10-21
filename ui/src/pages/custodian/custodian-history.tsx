@@ -1,6 +1,7 @@
 import type { SystemChangeEntry } from "@openclaw/gateway-protocol";
-import { For, Show } from "solid-js";
+import { Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../styles/settings.css";
@@ -53,29 +54,22 @@ function HistoryCard(props: { entry: SystemChangeEntry }) {
   );
 }
 
-export function CustodianChangeHistory(props: {
+export type HistorySnapshot = {
   entries: SystemChangeEntry[];
   error: string | null;
   loaded: boolean;
-  loading: boolean;
-  loadingMore: boolean;
   nextCursor: string | null;
-  onLoad: (reset: boolean) => void;
-}) {
+};
+
+function HistoryContent(
+  props: HistorySnapshot & {
+    loading: boolean;
+    loadingMore: boolean;
+    onLoad: (reset: boolean) => void;
+  },
+) {
   return (
-    <section class="custodian__history" aria-label={t("custodian.history.title")}>
-      <div class="custodian__history-heading">
-        <strong>{t("custodian.history.title")}</strong>
-        <span>{t("custodian.history.description")}</span>
-      </div>
-      <Show when={props.error}>
-        <div class="custodian__history-error" role="alert">
-          <span>{props.error}</span>
-          <button class="btn btn--sm" type="button" onClick={() => props.onLoad(true)}>
-            {t("common.retry")}
-          </button>
-        </div>
-      </Show>
+    <>
       <Show
         when={props.loading && props.entries.length === 0}
         fallback={
@@ -114,6 +108,68 @@ export function CustodianChangeHistory(props: {
           {t(props.loadingMore ? "custodian.history.loadingMore" : "custodian.history.loadMore")}
         </button>
       </Show>
+    </>
+  );
+}
+
+export function CustodianChangeHistory(props: {
+  read: () => HistorySnapshot;
+  request: { reset: boolean } | null;
+  previous: HistorySnapshot;
+  onLoad: (reset: boolean) => void;
+}) {
+  const readError = () => {
+    const error = props.read().error;
+    if (error) {
+      throw new Error(error);
+    }
+    return null;
+  };
+  return (
+    <section class="custodian__history" aria-label={t("custodian.history.title")}>
+      <div class="custodian__history-heading">
+        <strong>{t("custodian.history.title")}</strong>
+        <span>{t("custodian.history.description")}</span>
+      </div>
+      {/* Failed reads replace feedback while expanded cards retain their DOM. */}
+      <Show when={props.request} keyed>
+        <Errored
+          fallback={(error, reset) => (
+            <div class="custodian__history-error" role="alert">
+              <span>{formatUiError(error())}</span>
+              <button
+                class="btn btn--sm"
+                type="button"
+                onClick={() => {
+                  props.onLoad(true);
+                  reset();
+                }}
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+        >
+          <Loading>{readError()}</Loading>
+        </Errored>
+      </Show>
+      <Loading
+        fallback={
+          <HistoryContent
+            {...props.previous}
+            loading={props.request?.reset ?? true}
+            loadingMore={props.request?.reset === false}
+            onLoad={props.onLoad}
+          />
+        }
+      >
+        <HistoryContent
+          {...latest(props.read)}
+          loading={isPending(props.read) && (props.request?.reset ?? true)}
+          loadingMore={isPending(props.read) && props.request?.reset === false}
+          onLoad={props.onLoad}
+        />
+      </Loading>
     </section>
   );
 }
