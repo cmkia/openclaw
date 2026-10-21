@@ -410,7 +410,8 @@ successful `exec.approvals.get`, `exec.approvals.set`,
 `exec.approvals.native.commit`, `agents.list`, `skills.status`, `tools.invoke`,
 and `sessions.list` RPCs. Set alternates an unused synthetic rule, exercising
 semantic publication; native commit records real allowlist usage; tools.invoke
-verifies a second real echo execution. RPC timings are reported separately from
+reads `session_status` and verifies the same QA conversation's canonical session key.
+RPC timings are reported separately from
 the QA turn. Allocation and GC cover the complete turn-plus-RPC bundle, not the
 QA dispatch alone. Attached-environment and Board approval flows are not exercised.
 `evidence.json` includes sampled allocated
