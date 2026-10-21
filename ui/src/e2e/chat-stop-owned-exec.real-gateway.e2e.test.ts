@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, type RunnerTestSuite } from "vitest";
 import type { SessionsProcessesListResult } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -26,34 +26,97 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame, seedStorage } from "./sidebar-assertions.test-support.ts";
 
+let sharedInstance: OpenClawTestInstance | undefined;
+let sharedStart: Promise<OpenClawTestInstance> | undefined;
+const providers = new Map<string, Awaited<ReturnType<typeof startBackgroundWorkProvider>>>();
+let fileSuite: Readonly<RunnerTestSuite>;
+beforeAll((_, suite) => {
+  fileSuite = suite;
+});
+
 for (const stopMethod of ["button", "slash"] as const) {
   // This boundary covers composer Stop reaching real yielded exec and existing child-model cancellation.
   // The independent process-panel fixture owns deliberate background service behavior.
   let instance: OpenClawTestInstance;
   let provider: Awaited<ReturnType<typeof startBackgroundWorkProvider>>;
   let artifactDir: string;
+  let sessionCreated = false;
   const viewport = { width: 1440, height: 1000 };
+  const sessionKey = `${fixture.key}-${stopMethod}`;
+  const providerId = stopMethod === "button" ? "background-fixture" : "background-stop-slash";
+  const name = `Composer ${stopMethod} Stop owns ordinary yielded execution through a real Gateway`;
   const suite = createControlUiE2eSuite({
-    name: `Composer ${stopMethod} Stop owns ordinary yielded execution through a real Gateway`,
+    name,
     startServerBeforeBrowser: true,
     async startServer() {
       artifactDir = createControlUiE2eArtifactDir(`chat-stop-owned-exec-${stopMethod}`);
-      await fs.access("dist/control-ui/index.html");
-      provider = await startBackgroundWorkProvider({ ordinaryExec: true });
-      const cleanup = () =>
-        runQaGatewayFixture(
-          () => instance?.cleanup(),
-          () => provider.stop(),
-        );
-      try {
-        instance = await createBackgroundWorkInstance(provider.port, true);
-        await instance.startGateway();
-        return { baseUrl: `http://127.0.0.1:${instance.port}/`, close: cleanup };
-      } catch (error) {
-        return runQaGatewayFixture(async () => {
-          throw error;
-        }, cleanup);
-      }
+      sharedStart ??= (async () => {
+        try {
+          await fs.access("dist/control-ui/index.html");
+          for (const method of ["button", "slash"] as const) {
+            const createdProvider = await startBackgroundWorkProvider({
+              ordinaryExec: true,
+              providerId: method === "button" ? "background-fixture" : "background-stop-slash",
+              childLabel: `${fixture.childLabel} (${method})`,
+            });
+            providers.set(method, createdProvider);
+          }
+          sharedInstance = await createBackgroundWorkInstance(providers.get("button")!.port, true, {
+            "background-stop-slash": providers.get("slash")!.port,
+          });
+          await sharedInstance.startGateway();
+          return sharedInstance;
+        } catch (error) {
+          return runQaGatewayFixture(
+            async () => {
+              throw error;
+            },
+            () => sharedInstance?.cleanup(),
+            ...[...providers.values()].map((owner) => () => owner.stop()),
+          );
+        }
+      })();
+      instance = await sharedStart;
+      provider = providers.get(stopMethod)!;
+      const currentSuite = fileSuite.tasks.find(
+        (task) => task.type === "suite" && task.name === name,
+      )!;
+      return {
+        baseUrl: `http://127.0.0.1:${instance.port}/`,
+        close: () =>
+          runQaGatewayFixture(
+            async () => {
+              if (sessionCreated) {
+                await runCli([
+                  "gateway",
+                  "call",
+                  "sessions.abort",
+                  "--json",
+                  "--params",
+                  JSON.stringify({ key: sessionKey, clearQueued: true }),
+                ]);
+              }
+            },
+            async () => {
+              // Native enrollment includes filters and updates as sibling suites finish.
+              const hasPendingSuite = fileSuite.tasks.some(
+                (task) =>
+                  task.type === "suite" &&
+                  task !== currentSuite &&
+                  (task.mode === "run" || task.mode === "queued") &&
+                  (!task.result || task.result.state === "run" || task.result.state === "queued"),
+              );
+              if (hasPendingSuite) {
+                await provider.stop();
+              } else {
+                await runQaGatewayFixture(
+                  () => instance.cleanup(),
+                  ...[...providers.values()].map((owner) => () => owner.stop()),
+                );
+              }
+            },
+          ),
+      };
     },
   });
 
@@ -84,15 +147,21 @@ for (const stopMethod of ["button", "slash"] as const) {
         "sessions.create",
         "--json",
         "--params",
-        JSON.stringify({ key: fixture.key, agentId: "main", label: "Stop request proof" }),
+        JSON.stringify({
+          key: sessionKey,
+          agentId: "main",
+          label: `Stop request proof (${stopMethod})`,
+          model: `${providerId}/parent`,
+        }),
       ]);
+      sessionCreated = true;
       await pairFixture(page, instance);
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await waitForControlUiGatewayReady(page);
       const { pane, composer, send, stop } = chatControls(page);
-      const capture = async (name: string, content: Locator[]) => {
+      const capture = async (captureName: string, content: Locator[]) => {
         await assertFixtureSecretsAbsent(page, instance, "synthetic-background-fixture-key");
-        await captureFrame(artifactDir, name + ".png", pane, content);
+        await captureFrame(artifactDir, captureName + ".png", pane, content);
       };
       await composer.waitFor();
       await assertServedUi(page, suite.server.baseUrl);
@@ -143,8 +212,8 @@ for (const stopMethod of ["button", "slash"] as const) {
         request: {
           params:
             stopMethod === "slash"
-              ? { key: fixture.key, clearQueued: true }
-              : { sessionKey: fixture.key, runId: expect.any(String) },
+              ? { key: sessionKey, clearQueued: true }
+              : { sessionKey, runId: expect.any(String) },
         },
         response: {
           ok: true,

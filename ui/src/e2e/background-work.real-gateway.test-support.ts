@@ -27,7 +27,12 @@ export const backgroundWorkFixture = {
   nextReply: "This reply belongs to the new instruction.",
 };
 
-export async function createBackgroundWorkInstance(port: number, notifyOnExit = false) {
+export async function createBackgroundWorkInstance(
+  port: number,
+  notifyOnExit = false,
+  additionalProviderPorts: Record<string, number> = {},
+) {
+  const providerPorts = { "background-fixture": port, ...additionalProviderPorts };
   const instance = await createOpenClawTestInstance({
     name: "background-work",
     env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
@@ -46,23 +51,26 @@ export async function createBackgroundWorkInstance(port: number, notifyOnExit = 
         defaults: {
           workspace: "${OPENCLAW_WORKSPACE_DIR}",
           model: "background-fixture/parent",
-          modelPolicy: { allow: ["background-fixture/*"] },
+          modelPolicy: { allow: Object.keys(providerPorts).map((providerId) => `${providerId}/*`) },
         },
         entries: { main: { identity: { name: "Background work fixture" } } },
       },
       models: {
         catalogRefresh: { enabled: false },
-        providers: {
-          "background-fixture": {
-            api: "openai-responses",
-            apiKey: "synthetic-background-fixture-key",
-            baseUrl: "http://127.0.0.1:" + port + "/v1",
-            models: [
-              { id: "parent", name: "Fixture parent" },
-              { id: "child", name: "Fixture child" },
-            ],
-          },
-        },
+        providers: Object.fromEntries(
+          Object.entries(providerPorts).map(([providerId, providerPort]) => [
+            providerId,
+            {
+              api: "openai-responses",
+              apiKey: "synthetic-background-fixture-key",
+              baseUrl: "http://127.0.0.1:" + providerPort + "/v1",
+              models: [
+                { id: "parent", name: "Fixture parent" },
+                { id: "child", name: "Fixture child" },
+              ],
+            },
+          ]),
+        ),
       },
       plugins: { allow: [] },
     },
@@ -112,7 +120,9 @@ function beginPendingResponse(response: ServerResponse) {
 }
 
 /** Only the model provider is scripted. Gateway, exec, subagent, history and Stop are real. */
-export async function startBackgroundWorkProvider(options: { ordinaryExec?: boolean } = {}) {
+export async function startBackgroundWorkProvider(
+  options: { ordinaryExec?: boolean; providerId?: string; childLabel?: string } = {},
+) {
   const childStarted = createDeferred();
   const childClosed = createDeferred();
   const parentPending = createDeferred();
@@ -206,9 +216,9 @@ export async function startBackgroundWorkProvider(options: { ordinaryExec?: bool
                 mode: "run",
                 thread: false,
                 cleanup: "keep",
-                label: backgroundWorkFixture.childLabel,
+                label: options.childLabel ?? backgroundWorkFixture.childLabel,
                 task: backgroundWorkFixture.childTask,
-                model: "background-fixture/child",
+                model: `${options.providerId ?? "background-fixture"}/child`,
               }),
             );
             return;
