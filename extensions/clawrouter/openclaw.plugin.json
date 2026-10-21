@@ -70,6 +70,8 @@
     ]
   },
   "modelCatalog": {
+    "discovery": { "clawrouter": "runtime" },
+    "runtimeAugment": true,
     "providers": {
       "clawrouter": {
         "baseUrl": "https://clawrouter.openclaw.ai/v1",
