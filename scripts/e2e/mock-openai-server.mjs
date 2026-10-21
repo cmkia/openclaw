@@ -280,7 +280,19 @@ function readResponseControl() {
         : createHash("sha256")
             .update(JSON.stringify({ default: value.default, responses: value.responses }))
             .digest("hex");
-    return { defaultResponse, hold: value.hold ?? false, responses, version };
+    if (
+      value.execTurn !== undefined &&
+      (!Number.isSafeInteger(value.execTurn) || value.execTurn < 0)
+    ) {
+      throw new Error("mock response control execTurn is invalid");
+    }
+    return {
+      defaultResponse,
+      hold: value.hold ?? false,
+      responses,
+      version,
+      execTurn: value.execTurn,
+    };
   }
   return {
     hold: value.hold ?? false,
@@ -288,8 +300,7 @@ function readResponseControl() {
   };
 }
 
-function selectCurrentResponse() {
-  const control = readResponseControl();
+function selectCurrentResponse(control) {
   if (control.models) {
     return { models: control.models };
   }
@@ -826,9 +837,11 @@ const server = http.createServer((req, res) => {
               : "other";
     requests.ingress[route] += 1;
     const scriptedRoute = route === "responses" || route === "chatCompletions";
-    // Reserve before body reads or hold waits so concurrent turns consume the script
-    // in arrival order. The explicit version survives hold-only control rewrites.
-    const controlSelection = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
+    // Default scripts reserve in arrival order before body reads or hold waits.
+    // Exec benchmarks match after parsing so background inference cannot consume a slot.
+    const control = responseControl && scriptedRoute ? readResponseControl() : undefined;
+    let controlSelection =
+      control && control.execTurn === undefined ? selectCurrentResponse(control) : undefined;
 
     let bodyText;
     try {
@@ -851,6 +864,18 @@ const server = http.createServer((req, res) => {
       // marker instead of the text.
       requestLogBody = `[unparseable request body redacted: ${Buffer.byteLength(bodyText)} bytes]`;
     }
+    if (control?.execTurn !== undefined) {
+      const input = Array.isArray(body?.input) ? body.input : [];
+      const userText = input.map(readMockUserText).findLast((text) => text !== undefined) ?? "";
+      const marker = `Please give a short synthetic status report for measurement turn ${control.execTurn}.`;
+      const tools = Array.isArray(body?.tools) ? body.tools : [];
+      const hasExecTool = tools.some(
+        (tool) => tool?.name === "exec" || tool?.function?.name === "exec",
+      );
+      if (userText.includes(marker) && hasExecTool) {
+        controlSelection = selectCurrentResponse(control);
+      }
+    }
     // A model map does not reserve global script slots or override unmatched
     // automatic scenarios. Capture the map at arrival, select after parsing.
     const selectedResponse = controlSelection?.models
@@ -871,6 +896,9 @@ const server = http.createServer((req, res) => {
           ...summarizeRequestContent(body),
           ...(inferenceFacts ? { inferenceFacts } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
+          ...(selectedResponse && control?.execTurn !== undefined
+            ? { benchmarkExecTurn: control.execTurn }
+            : {}),
         },
       })
     ) {
@@ -880,7 +908,7 @@ const server = http.createServer((req, res) => {
       process.send?.({ type: "mock-openai:request-logged", seq: requestLogSeq });
     }
     if (selectedResponse) {
-      requests.selections[controlSelection.models ? "model" : "global"] += 1;
+      requests.selections[controlSelection?.models ? "model" : "global"] += 1;
       await waitForResponseRelease();
       if (selectedResponse.response.fail) {
         writeInjectedFailure(res, selectedResponse.response.fail);

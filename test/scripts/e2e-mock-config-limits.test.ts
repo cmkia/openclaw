@@ -898,6 +898,40 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
+  it("keeps background requests out of the scripted exec exchange", async (ctx) => {
+    const text = "Please give a short synthetic status report for measurement turn 80.";
+    await withControl(
+      ctx,
+      { execTurn: 80, responses: [{ text: "exec response" }, { text: "final response" }] },
+      async (baseUrl, { requestLog }) => {
+        const request = (userText: string, toolName: string) =>
+          requestResponse(
+            baseUrl,
+            [
+              { type: "function_call", name: "exec", call_id: "older", arguments: "{}" },
+              textMessage(userText),
+            ],
+            { tools: [functionTool(toolName)] },
+          );
+        expect(responseText(await request(text, "skill_workshop"))).toBe("OPENCLAW_E2E_OK");
+        expect(responseText(await request(text.replace("80", "19"), "exec"))).toBe(
+          "OPENCLAW_E2E_OK",
+        );
+        expect(responseText(await request(text, "exec"))).toBe("exec response");
+        expect(responseText(await request(text, "exec"))).toBe("final response");
+        const entries = parseEntries(await readFile(requestLog, "utf8"));
+        expect(entries.map((entry) => entry.benchmarkExecTurn)).toEqual([
+          undefined,
+          undefined,
+          80,
+          80,
+        ]);
+        expect(entries.slice(2).map((entry) => entry.scriptEntry.entryIndex)).toEqual([0, 1]);
+      },
+      true,
+    );
+  });
+
   it("records bounded media facts without provider payload bytes", async (ctx) => {
     const pdfBytes = "private-pdf-bytes";
     const pdfBase64 = Buffer.from(pdfBytes).toString("base64");

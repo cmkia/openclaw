@@ -452,6 +452,9 @@ function assertExecToolCompleted(turn: number, marker: string) {
   let completed = false;
   for (const record of records) {
     const logged = JSON.parse(record);
+    if (logged.benchmarkExecTurn !== turn) {
+      continue;
+    }
     if (logged.contentFactsTruncated) {
       throw new Error(`Provider history facts were truncated for turn ${turn}`);
     }
@@ -759,12 +762,7 @@ try {
   applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
   cfg.agents = {
     ...cfg.agents,
-    defaults: {
-      ...cfg.agents?.defaults,
-      skipBootstrap: true,
-      // Recaps must not consume the scripted exec exchange when conversations rotate.
-      ...(ruleCount ? { utilityModel: "" } : {}),
-    },
+    defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
   };
   cfg.agents.entries = { main: { workspace: path.join(fixture, "workspace") } };
   cfg.plugins = {
@@ -916,6 +914,7 @@ try {
       tool
         ? {
             scriptVersion: `exec-turn-${i}`,
+            execTurn: i,
             responses: [{ events: tool.events }, { text: reply, chunkDelayMs: 5 }],
           }
         : { text: reply, chunkDelayMs: 5 },
