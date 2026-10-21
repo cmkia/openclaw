@@ -242,6 +242,7 @@ export class PaletteSessionDraft {
   }
 
   close() {
+    this.preferences.retirePresentation();
     this.coldSubmit = undefined;
     const submission = this.draft?.submission;
     // A failed create or rejected turn retains the same retry/recovery draft.
