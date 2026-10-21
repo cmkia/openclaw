@@ -33,6 +33,13 @@ export function ChatToolOutput(props: Props) {
     loader: props.loadFullMessage,
     retry: retry(),
   }));
+  const lifetime = createMemo(
+    () => {
+      const { content, epoch, loader, retry: attempt } = target();
+      return [content?.sessionKey, content?.agentId, content?.card.id, epoch, loader, attempt];
+    },
+    { equals: (a, b) => a.every((value, index) => value === b[index]) },
+  );
   const [downloadFailed, setDownloadFailed] = createSignal(() => {
     target();
     return false;
@@ -150,7 +157,10 @@ export function ChatToolOutput(props: Props) {
     });
     return (
       <Errored fallback={() => <Output result={{ state: "error", card: null }} />}>
-        <Loading fallback={<Output result={{ state: "loading", card: null }} />}>
+        <Loading
+          on={resource.target}
+          fallback={<Output result={{ state: "loading", card: null }} />}
+        >
           <Output result={output()} />
         </Loading>
       </Errored>
@@ -158,8 +168,8 @@ export function ChatToolOutput(props: Props) {
   }
   return (
     <openclaw-chat-tool-output class={props.class}>
-      <Show when={target()} keyed>
-        {(current) => <Read target={current} />}
+      <Show when={lifetime()} keyed>
+        {(_current) => <Read target={target()} />}
       </Show>
     </openclaw-chat-tool-output>
   );
