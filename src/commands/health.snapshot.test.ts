@@ -59,9 +59,9 @@ function healthPlugin(
   return { ...createChannelTestPluginBase({ id, label }), config, status };
 }
 
-function accountPlugin(
+function accountPlugin<Account extends ChannelAccountSnapshot>(
   id: string,
-  account: ChannelAccountSnapshot,
+  account: Account,
   status: HealthTestPlugin["status"],
 ): HealthTestPlugin {
   const resolveAccount = () => account;

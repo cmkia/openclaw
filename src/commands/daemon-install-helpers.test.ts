@@ -331,12 +331,29 @@ describe("buildGatewayInstallPlan", () => {
     current: NodeJS.ProcessEnv;
     installed: NodeJS.ProcessEnv;
     expected: string | undefined;
-  }>`
-    label                     | platform   | current                                        | installed                                        | expected
-    ${"explicit empty CA"}    | ${"linux"} | ${{ NODE_EXTRA_CA_CERTS: "" }}                 | ${{ NODE_EXTRA_CA_CERTS: "/opt/installed.pem" }} | ${undefined}
-    ${"Windows caller CA"}    | ${"win32"} | ${{ node_extra_ca_certs: "/opt/current.pem" }} | ${{ NODE_EXTRA_CA_CERTS: "/opt/installed.pem" }} | ${"/opt/current.pem"}
-    ${"Windows installed CA"} | ${"win32"} | ${{}}                                          | ${{ node_extra_ca_certs: "/opt/installed.pem" }} | ${"/opt/installed.pem"}
-  `(
+  }>([
+    {
+      label: "explicit empty CA",
+      platform: "linux",
+      current: { NODE_EXTRA_CA_CERTS: "" },
+      installed: { NODE_EXTRA_CA_CERTS: "/opt/installed.pem" },
+      expected: undefined,
+    },
+    {
+      label: "Windows caller CA",
+      platform: "win32",
+      current: { node_extra_ca_certs: "/opt/current.pem" },
+      installed: { NODE_EXTRA_CA_CERTS: "/opt/installed.pem" },
+      expected: "/opt/current.pem",
+    },
+    {
+      label: "Windows installed CA",
+      platform: "win32",
+      current: {},
+      installed: { node_extra_ca_certs: "/opt/installed.pem" },
+      expected: "/opt/installed.pem",
+    },
+  ])(
     "preserves explicit and installed CA choices ($label)",
     async ({ platform, current, installed, expected }) => {
       const actual = await vi.importActual<typeof import("../daemon/service-env.js")>(

@@ -85,31 +85,58 @@ it("refuses non-interactive output before reading config or secrets", async () =
   expect(runtime.writeStdout).not.toHaveBeenCalled();
 });
 
-it.each<{ setup: () => void; message: string }>`
-  setup                                                                                                | message
-  ${() => setResolvedConfig({ gateway: { auth: { mode: "token", token: "__OPENCLAW_REDACTED__" } } })} | ${"openclaw doctor --fix"}
-  ${() => {
-    const config: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
-    setConfig(config);
-    setResolvedConfig(config);
-  }} | ${"openclaw doctor --generate-gateway-token"}
-  ${() => {
-    mocks.resolveCommandSecretRefsViaGateway.mockRejectedValue(new Error("gateway.auth.token SecretRef is unresolved"));
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-fallback");
-  }} | ${"gateway.auth.token SecretRef is unresolved"}
-`("does not reveal invalid or missing credentials: $message", async ({ setup, message }) => {
+it.each<{ setup: () => void; message: string }>([
+  {
+    setup: () =>
+      setResolvedConfig({ gateway: { auth: { mode: "token", token: "__OPENCLAW_REDACTED__" } } }),
+    message: "openclaw doctor --fix",
+  },
+  {
+    setup: () => {
+      const config: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
+      setConfig(config);
+      setResolvedConfig(config);
+    },
+    message: "openclaw doctor --generate-gateway-token",
+  },
+  {
+    setup: () => {
+      mocks.resolveCommandSecretRefsViaGateway.mockRejectedValue(
+        new Error("gateway.auth.token SecretRef is unresolved"),
+      );
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-fallback");
+    },
+    message: "gateway.auth.token SecretRef is unresolved",
+  },
+])("does not reveal invalid or missing credentials: $message", async ({ setup, message }) => {
   setup();
   await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow(message);
   expect(runtime.writeStdout).not.toHaveBeenCalled();
 });
 
-it.each<{ config: OpenClawConfig; message: string; env?: NodeJS.ProcessEnv }>`
-  config                                                                                                 | message                                 | env
-  ${{ gateway: { auth: { mode: "trusted-proxy", token: "stale-token", password: "active-password" } } }} | ${"Gateway auth mode is trusted-proxy"} | ${undefined}
-  ${{ gateway: { auth: { token: "candidate-token", password: "candidate-password" } } }}                 | ${"gateway.auth.mode"}                  | ${undefined}
-  ${{ gateway: { auth: { token: "inactive-token" } } }}                                                  | ${"Gateway auth mode is password"}      | ${{ OPENCLAW_GATEWAY_PASSWORD: "active-password" }}
-  ${{ gateway: { mode: "remote", auth: { mode: "token", token: "stale-local-token" } } }}                | ${"must run on the Gateway host"}       | ${undefined}
-`("refuses credential disclosure: $message", async ({ config, message, env }) => {
+it.each<{ config: OpenClawConfig; message: string; env?: NodeJS.ProcessEnv }>([
+  {
+    config: {
+      gateway: {
+        auth: { mode: "trusted-proxy", token: "stale-token", password: "active-password" },
+      },
+    },
+    message: "Gateway auth mode is trusted-proxy",
+  },
+  {
+    config: { gateway: { auth: { token: "candidate-token", password: "candidate-password" } } },
+    message: "gateway.auth.mode",
+  },
+  {
+    config: { gateway: { auth: { token: "inactive-token" } } },
+    message: "Gateway auth mode is password",
+    env: { OPENCLAW_GATEWAY_PASSWORD: "active-password" },
+  },
+  {
+    config: { gateway: { mode: "remote", auth: { mode: "token", token: "stale-local-token" } } },
+    message: "must run on the Gateway host",
+  },
+])("refuses credential disclosure: $message", async ({ config, message, env }) => {
   setConfig(config);
   await expectRefusal(message, env);
 });

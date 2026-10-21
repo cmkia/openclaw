@@ -190,6 +190,7 @@ describe("slackApprovalNativeRuntime", () => {
   it.each([
     { phase: "resolved", status: "processing", threadTs: "1712345678.000001" },
     { phase: "expired", status: "active", threadTs: "1712345678.000001" },
+    { phase: "resolved", status: "processing", threadTs: undefined },
   ] as const)(
     "tracks $phase approval session status with thread $threadTs",
     async ({ phase, status, threadTs }) => {
@@ -253,9 +254,11 @@ describe("slackApprovalNativeRuntime", () => {
         phase,
       });
 
-      expect(calls).toEqual(["deliver", "suspended", "update", status]);
+      expect(calls).toEqual(
+        threadTs ? ["deliver", "suspended", "update", status] : ["deliver", "update"],
+      );
       expect(apiCall.mock.calls).toEqual(
-        ["suspended", status].map((sessionStatus) => [
+        (threadTs ? ["suspended", status] : []).map((sessionStatus) => [
           "agents.sessions.setStatus",
           { channel_id: "C123", thread_ts: threadTs, status: sessionStatus },
         ]),

@@ -62,7 +62,7 @@ beforeEach(async () => {
   await writeSessionStore({ entries: {} });
 });
 
-test("write-scoped callers cannot reset conversations", async () => {
+test("write-scoped callers cannot reset conversations directly or via agent", async () => {
   const scope = await writeMainSessionEntry("sess-main-before-write-reset");
   const writeWs = new WebSocket(gatewaySuite.ws.url);
   trackConnectChallengeNonce(writeWs);
@@ -72,6 +72,24 @@ test("write-scoped callers cannot reset conversations", async () => {
     expect(await rpcReq(writeWs, "sessions.reset", { key: "main" })).toMatchObject({
       ok: false,
       error: { message: expect.stringContaining("missing scope: operator.admin") },
+    });
+    expect(
+      await rpcReq(writeWs, "agent", {
+        message: "/reset",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-write-reset",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      },
     });
     expect(loadSessionEntry(scope)?.sessionId).toBe("sess-main-before-write-reset");
     expect(agentCommandMock).not.toHaveBeenCalled();

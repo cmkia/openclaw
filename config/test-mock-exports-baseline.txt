@@ -6211,7 +6211,6 @@
 ["src/gateway/worker-environments/worker-session-tool-executor.test-support.ts","../../agents/tools/sessions-spawn-tool.js","9446ba77ed8af02a368759a96ac6b3681a0e14fc1f71651c07e51451b5865bcd",1]
 ["src/gateway/worker-environments/worker-session-tool-executor.test-support.ts","../../config/sessions/session-entry-read-runtime.js","f0d19ba06d60c9e7896b937ee7c9ea2a41eedcef3ae45dcffda75fe5c96a971e",1]
 ["src/gateway/worker-environments/worker-session-tool-executor.test-support.ts","../session-utils-store-worker.js","92675cda23511bd0a737f564ac82024143d778b17b4ce0c5863afa3c64c33b29",1]
-["src/gateway/worker-environments/worker-tool-authority.test.ts","../../agents/tools/gateway.js","f1967daf35d0139d126f7c70a72502ade9650dd33b34ae4637843138247bd489",1]
 ["src/gateway/worker-environments/worker-turn-launcher.lazy.test.ts","./worker-turn-execution.js","8114c9564cee596a4cd79b3bd87e69d3b9b0afbb1ae6065cd2d3e54c0f58dd1c",1]
 ["src/gateway/worker-environments/worker-turn-launcher.lazy.test.ts","./workspace-result-finalize.js","e0bbf5797e7ca6f116232a6ed6920bf6d0c4d8c34c229e564bdcfaeacca2e69b",1]
 ["src/gateway/worker-environments/worker-turn-payload.test.ts","../agent-runtime-identity-token.js","1fc7c18979548e3b143882e63bbb66e27a22836153c00761d9ad23acb40bd6c1",1]
