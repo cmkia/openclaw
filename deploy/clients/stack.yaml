@@ -1,0 +1,106 @@
+version: "3.8"
+
+services:
+  gateway:
+    image: ${OPENCLAW_IMAGE}
+    user: "1000:1000"
+    init: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export OPENCLAW_GATEWAY_TOKEN="$$(cat /run/secrets/gateway_token)"
+        export OMNIROUTE_API_KEY="$$(cat /run/secrets/omniroute_key)"
+        exec node dist/index.js gateway --bind lan --port 18789
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_DISABLE_BONJOUR: "1"
+      TZ: America/Sao_Paulo
+    volumes:
+      - state:/home/node/.openclaw
+      - auth:/home/node/.config/openclaw
+    secrets:
+      - source: gateway_token
+        target: gateway_token
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: omniroute_key
+        target: omniroute_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    networks:
+      - proxy
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        ["CMD", "curl", "--fail", "--silent", "--max-time", "5", "http://127.0.0.1:18789/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5m
+      retries: 5
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME}
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 3G
+        reservations:
+          memory: 512M
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+        monitor: 5m
+      rollback_config:
+        order: stop-first
+        monitor: 5m
+      restart_policy:
+        condition: any
+        delay: 10s
+      # List syntax interpolates router names as well as label values.
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=${PROXY_NETWORK}
+        - traefik.http.routers.oc-gateway-${TENANT}.rule=Host(`${GATEWAY_HOST}`)
+        - traefik.http.routers.oc-gateway-${TENANT}.entrypoints=websecure
+        - traefik.http.routers.oc-gateway-${TENANT}.tls.certresolver=${CERT_RESOLVER}
+        - traefik.http.routers.oc-gateway-${TENANT}.service=oc-gateway-${TENANT}
+        - traefik.http.services.oc-gateway-${TENANT}.loadbalancer.server.port=18789
+        - traefik.http.routers.oc-apps-${TENANT}.rule=Host(`${SANDBOX_HOST}`)
+        - traefik.http.routers.oc-apps-${TENANT}.entrypoints=websecure
+        - traefik.http.routers.oc-apps-${TENANT}.tls.certresolver=${CERT_RESOLVER}
+        - traefik.http.routers.oc-apps-${TENANT}.service=oc-apps-${TENANT}
+        - traefik.http.services.oc-apps-${TENANT}.loadbalancer.server.port=18790
+
+volumes:
+  state:
+    external: true
+    name: openclaw-${TENANT}-state
+  auth:
+    external: true
+    name: openclaw-${TENANT}-auth
+
+secrets:
+  gateway_token:
+    external: true
+    name: openclaw-${TENANT}-gateway-token-v1
+  omniroute_key:
+    external: true
+    name: openclaw-${TENANT}-omniroute-key-v1
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK}
