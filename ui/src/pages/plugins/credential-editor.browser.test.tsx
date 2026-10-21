@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
+import { nextFrame } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   PluginCredentialEditor,
@@ -132,7 +133,12 @@ async function open(editor: HTMLElement, text = "Edit reference") {
   await host.updateComplete;
   const dialog = host.querySelector("dialog")!;
   await vi.waitFor(() => expect(dialog.open).toBe(true));
-  await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+  const animations = dialog.getAnimations();
+  for (const animation of animations) {
+    animation.finish();
+  }
+  await Promise.all(animations.map((animation) => animation.finished));
+  await nextFrame();
   return { dialog, trigger };
 }
 function editInput(element: HTMLInputElement, value: string) {
