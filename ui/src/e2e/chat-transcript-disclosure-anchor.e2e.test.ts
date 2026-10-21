@@ -157,11 +157,13 @@ suite.define(() => {
         "after",
         `${reducedMotion}-${interruption}-${recoveryPosition}`,
       );
+      const captureUiProof = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      await fs.mkdir(artifactDir, { recursive: true });
       await suite.withPage(
         {
           reducedMotion,
           viewport: { width: 1440, height: 900 },
-          recordVideo: { dir: artifactDir },
+          ...(captureUiProof ? { recordVideo: { dir: artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.clock.install();
@@ -193,7 +195,9 @@ suite.define(() => {
           await page
             .locator('.chat-bubble[data-entry-id="sizing-message-1"]')
             .waitFor({ state: "visible" });
-          await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
+          }
           let during: { top: number; max: number };
           if (interruption === "synthetic-pointer") {
             // Check native gutter hit testing separately from animation timing.
@@ -476,7 +480,9 @@ suite.define(() => {
             };
           }, nextMessageId);
           const finalAnchor = await captureTopVisibleVirtualRow(thread);
-          await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
+          }
           await fs.writeFile(
             path.join(artifactDir, "interrupted-scroll.json"),
             JSON.stringify(
@@ -546,7 +552,9 @@ suite.define(() => {
           }, nextMessageId);
           expect(returned.height).toBe(final.height);
           expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
-          await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
+          }
           await thread.evaluate(
             (element, offset) => {
               element.scrollTop = offset;
@@ -554,7 +562,9 @@ suite.define(() => {
             final.returnOffset + Math.min(300, final.height / 2),
           );
           await waitForChatScrollIdle(page);
-          await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
+          }
         },
       );
     },
