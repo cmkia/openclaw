@@ -330,6 +330,9 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
     return frame;
   };
   let inner = createInner();
+  inner.srcdoc = "<!doctype html>";
+  inner.style.display = "none";
+  let warmingInner = inner;
   document.body.appendChild(inner);
   const widgetPortsOffered = new Set();
   const blockDescendantFrames = ${blockDescendantFrames};
@@ -361,6 +364,8 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           // the new wrapper's first private bridge-port offer.
           const nextInner = createInner(params.allowScripts !== false);
           nextInner.addEventListener("load", () => {
+            warmingInner?.remove();
+            warmingInner = null;
             if (inner !== nextInner || typeof params.renderId !== "string") return;
             window.parent.postMessage({
               jsonrpc: "2.0",
@@ -370,7 +375,9 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           }, { once: true });
           widgetPortsOffered.clear();
           nextInner.srcdoc = guardedHtml;
-          inner.replaceWith(nextInner);
+          // Keep the empty context alive until the new context selects its process.
+          if (inner === warmingInner) inner.after(nextInner);
+          else inner.replaceWith(nextInner);
           inner = nextInner;
         }
         return;

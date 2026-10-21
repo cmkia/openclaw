@@ -220,6 +220,7 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "process-trace": { type: "boolean", default: false },
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
     "color-scheme": { type: "string" },
@@ -565,7 +566,13 @@ const isolatedSandboxOrigin =
   values["dashboard-widget"] || values["dashboard-mcp-app"] || values["dashboard-paint-marker"]
     ? `http://127.0.0.1:${address.port}`
     : undefined;
-const chromiumArgs = isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : [];
+const chromiumArgs = isolatedSandboxOrigin
+  ? [
+      `--isolate-origins=${isolatedSandboxOrigin}`,
+      "--site-per-process",
+      "--enable-features=IsolateSandboxedIframes",
+    ]
+  : [];
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -1071,9 +1078,11 @@ try {
     }
     if (captureTrace) {
       await cdp.send("Tracing.start", {
-        categories: values["filmstrip-only"]
-          ? "loading,blink.user_timing,disabled-by-default-devtools.screenshot"
-          : "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8",
+        categories:
+          (values["filmstrip-only"]
+            ? "loading,blink.user_timing,disabled-by-default-devtools.screenshot"
+            : "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8") +
+          (values["process-trace"] ? ",navigation,renderer_host,startup,content" : ""),
         transferMode: "ReportEvents",
       });
     }
