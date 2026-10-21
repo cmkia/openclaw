@@ -1,10 +1,20 @@
 // OpenAI stream wrapper tests cover streamed text, tools, and reasoning fields.
+import {
+  createAiTransportHost,
+  getDefaultAiTransportHost,
+  runWithAiTransportHost,
+} from "@openclaw/ai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
+const logger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  isEnabled: vi.fn(() => false),
+}));
 
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => logger,
@@ -806,6 +816,41 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 });
 
 describe("createOpenAIAttributionHeadersWrapper", () => {
+  it("loads the default native transport and sends an attributed request", async () => {
+    const requests: Request[] = [];
+    const host = createAiTransportHost({
+      ...getDefaultAiTransportHost(),
+      buildModelFetch: () => async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(
+          'data: {"type":"response.completed","response":{"id":"resp_fixture","status":"completed","output":[]}}\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    await runWithAiTransportHost(host, async () => {
+      const stream = await createOpenAIAttributionHeadersWrapper(undefined)(
+        {
+          ...codexModel,
+          name: "Native transport fixture",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 128_000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        { apiKey: "synthetic-test-key", transport: "sse" },
+      );
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(requests).toHaveLength(1);
+      expect(new URL(requests[0]!.url).pathname).toBe("/backend-api/codex/responses");
+      expect(requests[0]!.headers.get("originator")).toBe("openclaw");
+      expect(requests[0]!.headers.get("User-Agent")).toMatch(/^openclaw\//);
+    });
+  });
+
   it("routes native Codex traffic through the OpenClaw transport so attribution survives OpenClaw defaults", () => {
     let codexCalls = 0;
     let capturedHeaders: Record<string, string> | undefined;

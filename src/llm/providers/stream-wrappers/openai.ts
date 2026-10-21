@@ -30,7 +30,6 @@ import {
   resolveOpenAITextVerbosity,
   type OpenAITextVerbosity,
 } from "../../../agents/openai-text-verbosity.js";
-import { createOpenAIResponsesTransportStreamFn } from "../../../agents/openai-transport-stream.js";
 import {
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
@@ -675,8 +674,13 @@ export function createOpenAIAttributionHeadersWrapper(
       readStringValue(model.api) === "openai-chatgpt-responses" &&
       capabilities.endpointClass === "openai" &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
-    const streamFn = shouldCreateCodexTransport
-      ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
+    const streamFn: StreamFn = shouldCreateCodexTransport
+      ? (opts?.codexNativeTransportStreamFn ??
+        ((...args) =>
+          import("../../../agents/openai-transport-stream.js").then(
+            ({ createOpenAIResponsesTransportStreamFn }) =>
+              createOpenAIResponsesTransportStreamFn()(...args),
+          )))
       : underlying;
     return streamFn(model, context, {
       ...options,
