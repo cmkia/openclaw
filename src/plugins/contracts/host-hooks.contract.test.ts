@@ -162,6 +162,13 @@ function policyRegistry(...evaluators: PluginTrustedToolPolicyRegistration["eval
   return registry;
 }
 
+function makePolicy(
+  id: string,
+  evaluate: PluginTrustedToolPolicyRegistration["evaluate"] = () => undefined,
+): PluginTrustedToolPolicyRegistration {
+  return { id, description: "Fixture policy", evaluate };
+}
+
 function requireFirstCommandRegistration(
   registry: ReturnType<typeof createPluginRegistryFixture>["registry"]["registry"],
 ) {
@@ -387,18 +394,7 @@ describe("host-hook fixture plugin contract", () => {
         origin: "workspace" as const,
         contracts: { trustedToolPolicies: ["workflow-budget"] },
       },
-      policies: [
-        {
-          id: "workflow-budget",
-          description: "First workflow budget policy",
-          evaluate: () => undefined,
-        },
-        {
-          id: "workflow-budget",
-          description: "Duplicate workflow budget policy",
-          evaluate: () => undefined,
-        },
-      ],
+      policies: [makePolicy("workflow-budget"), makePolicy("workflow-budget")],
       accepted: 1,
       messages: ["trusted tool policy already registered: workflow-budget (duplicate-policy)"],
     },
@@ -413,11 +409,7 @@ describe("host-hook fixture plugin contract", () => {
         activationSource: "default" as const,
       },
       policies: [
-        {
-          id: "deny",
-          description: "Declared external policy",
-          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
-        },
+        makePolicy("deny", () => ({ block: true, blockReason: "blocked by external policy" })),
       ],
       accepted: 0,
       messages: ["plugin must be explicitly enabled to register trusted tool policy: deny"],
@@ -446,11 +438,7 @@ describe("host-hook fixture plugin contract", () => {
         contracts: { trustedToolPolicies: ["shared-deny"] },
       },
       (api) => {
-        api.registerTrustedToolPolicy({
-          id: "shared-deny",
-          description: "Declared external policy",
-          evaluate: () => ({ allow: true }),
-        });
+        api.registerTrustedToolPolicy(makePolicy("shared-deny", () => ({ allow: true })));
       },
     );
     registerInto(
@@ -461,11 +449,9 @@ describe("host-hook fixture plugin contract", () => {
         origin: "bundled",
       },
       (api) => {
-        api.registerTrustedToolPolicy({
-          id: "shared-deny",
-          description: "Bundled policy",
-          evaluate: () => ({ block: true, blockReason: "bundled policy" }),
-        });
+        api.registerTrustedToolPolicy(
+          makePolicy("shared-deny", () => ({ block: true, blockReason: "bundled policy" })),
+        );
       },
     );
     setActivePluginRegistry(registry.registry);
@@ -558,12 +544,7 @@ describe("host-hook fixture plugin contract", () => {
       {
         pluginId: "shell-policy",
         source: "test",
-        policy: {
-          id: "shell-policy",
-          description: "covers shell tools",
-          matcher: ["exec"],
-          evaluate,
-        },
+        policy: { ...makePolicy("shell-policy", evaluate), matcher: ["exec"] },
       },
     ];
 
@@ -607,10 +588,8 @@ describe("host-hook fixture plugin contract", () => {
       pluginName: "Fuzz Plugin",
       source: "test",
       policy: {
-        id: "fuzzpolicy",
-        description: "synthetic trusted policy",
+        ...makePolicy("fuzzpolicy", evaluate),
         ...(failure === "matcher" ? { matcher: "exec" as never } : {}),
-        evaluate,
       },
     };
     if (failure === "policy" || failure === "pluginId") {

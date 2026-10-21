@@ -114,40 +114,23 @@ function readRepoSource(relativePath: string): string {
   return readCachedSource(resolve(REPO_ROOT, relativePath));
 }
 
-function collectNamedExportsFromClause(clause: string): string[] {
-  return clause
-    .split(",")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.replace(/^type\s+/u, ""))
-    .map((segment) => segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u)?.[1] ?? segment);
-}
-
 function collectNamedExportsFromSource(source: string): string[] {
   const names = new Set<string>();
-
-  const exportClausePattern =
-    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
-  for (const match of source.matchAll(exportClausePattern)) {
-    for (const name of collectNamedExportsFromClause(match[1] ?? "")) {
-      names.add(name);
-    }
-  }
-
-  for (const pattern of [
-    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
-    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
-    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
-    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
-    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
-  ]) {
-    for (const match of source.matchAll(pattern)) {
-      if (match[1]) {
-        names.add(match[1]);
+  for (const match of source.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gms)) {
+    for (const segment of (match[1] ?? "").split(",")) {
+      const name = segment.trim().replace(/^type\s+/u, "");
+      if (name) {
+        names.add(name.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u)?.[1] ?? name);
       }
     }
   }
-
+  const declarations =
+    /\bexport\s+(?:(?:declare\s+)?(?:async\s+)?function|(?:declare\s+)?const|type(?=\s+[A-Za-z_$][\w$]*\s*=)|interface|class)\s+([A-Za-z_$][\w$]*)/gu;
+  for (const match of source.matchAll(declarations)) {
+    if (match[1]) {
+      names.add(match[1]);
+    }
+  }
   return [...names].toSorted();
 }
 
@@ -414,42 +397,12 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps helper subpaths aligned", () => {
+    // Shipped exports are checked through the TypeScript graph by plugin-sdk:surface:check.
+    // Keep only additions outside that inventory and negative ownership boundaries here.
     expectSourceNames(
       {
         "expect-runtime": "expectDefined",
-        core: `
-        emptyPluginConfigSchema definePluginEntry defineChannelPluginEntry defineSetupPluginEntry
-        createChatChannelPlugin createChannelPluginBase isSecretRef optionalStringEnum
-      `,
-        routing: `
-        buildAgentSessionKey resolveThreadSessionKeys normalizeMessageChannel
-        resolveGatewayMessageChannel
-      `,
-        "reply-payload": `
-        buildMediaPayload deliverTextOrMediaReply resolveOutboundMediaUrls resolvePayloadMediaUrls
-        sendPayloadMediaSequenceAndFinalize sendPayloadMediaSequenceOrFallback sendTextMediaPayload
-        sendPayloadWithChunkedTextAndMedia
-      `,
-        "media-runtime": "createDirectTextMediaOutbound createScopedChannelMediaMaxBytesResolver",
-        "media-local-roots":
-          "getAgentScopedMediaLocalRoots getAgentScopedMediaLocalRootsForSources",
-        "approval-auth-runtime": `
-        createResolvedApproverActionAuthAdapter isImplicitSameChatApprovalAuthorization
-        markImplicitSameChatApprovalAuthorization resolveApprovalApprovers
-      `,
         "approval-reference-runtime": "buildApprovalResolutionRef",
-        "reply-chunking": "chunkText chunkTextWithMode",
-        "reply-history": `
-        buildInboundHistoryFromEntries buildInboundHistoryFromMap buildPendingHistoryContextFromMap
-        clearHistoryEntriesIfEnabled createChannelHistoryWindow recordPendingHistoryEntryIfEnabled
-      `,
-        "account-helpers": "createAccountListHelpers",
-        "channel-actions": "optionalStringEnum stringEnum",
-        "channel-secret-basic-runtime": `
-        createSimpleChannelSecretContract collectSimpleChannelFieldAssignments
-        collectConditionalChannelFieldAssignments collectSecretInputAssignment getChannelSurface
-        pushAssignment pushInactiveSurfaceWarning ResolverContext SecretTargetRegistryEntry
-      `,
         "channel-secret-tts-runtime": "collectNestedChannelTtsAssignments",
         "provider-web-search-contract": `
         createWebSearchProviderContractFields enablePluginInConfig getScopedCredentialValue
@@ -462,23 +415,6 @@ describe("plugin-sdk subpath exports", () => {
       `,
         "provider-web-fetch-contract": "enablePluginInConfig WebFetchProviderPlugin",
         "tool-payload": "extractToolPayload ToolPayloadCarrier",
-        "device-bootstrap": "approveDevicePairing issueDeviceBootstrapToken listDevicePairing",
-        "allowlist-config-edit":
-          "buildDmGroupAccountAllowlistAdapter createNestedAllowlistOverrideResolver",
-        "allow-from": `
-        addAllowlistUserEntriesFromConfigEntry buildAllowlistResolutionSummary
-        canonicalizeAllowlistWithResolvedIds mapAllowlistResolutionInputs mergeAllowlist
-        patchAllowlistUsersInConfigEntries summarizeMapping compileAllowlist firstDefined
-        formatAllowlistMatchMeta isSenderIdAllowed mergeDmAllowFromSources resolveAllowlistMatchSimple
-      `,
-        runtime: "createLoggerBackedRuntime",
-        "gateway-runtime": "createOperatorApprovalsGatewayClient",
-        "conversation-runtime":
-          "recordInboundSession recordInboundSessionMetaSafe resolveConversationLabel",
-        "directory-runtime": `
-        createChannelDirectoryAdapter createRuntimeDirectoryLiveAdapter
-        listDirectoryEntriesFromSources listResolvedDirectoryEntriesFromSources
-      `,
         "memory-core-host-engine-foundation": [
           'from "../../packages/memory-host-sdk/src/host/fs-utils.js"',
         ],
@@ -637,18 +573,6 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps channel runtime helpers on focused subpaths", () => {
     expectSourceNames(
       {
-        "channel-inbound": `
-        buildMentionRegexes createDirectDmPreCryptoGuardPolicy createChannelInboundDebouncer
-        createInboundDebouncer dispatchInboundDirectDmWithRuntime formatInboundEnvelope
-        formatInboundFromLabel formatLocationText implicitMentionKindWhen logInboundDrop
-        matchesMentionPatterns matchesMentionWithExplicit resolveInboundMentionDecision
-        normalizeMentionText resolveInboundDebounceMs resolveEnvelopeFormatOptions
-        resolveInboundSessionEnvelopeContext shouldDebounceTextInbound toLocationContext
-        createPreCryptoDirectDmAuthorizer resolveInboundDirectDmAccessWithRuntime
-      `,
-        "channel-setup": "createOptionalChannelSetupSurface createTopLevelChannelDmPolicy",
-        "channel-actions":
-          "createUnionActionGate listTokenSourcedAccounts resolveReactionMessageId",
         "channel-targets": `
         applyChannelMatchMeta buildChannelKeyCandidates buildMessagingTarget ChannelId
         createAllowedChatSenderMatcher ensureTargetId normalizeChannelId parseChatAllowTargetPrefixes
@@ -659,40 +583,11 @@ describe("plugin-sdk subpath exports", () => {
         resolveTargetsWithOptionalToken
       `,
         "channel-config-writes": "resolveChannelConfigWrites",
-        "channel-feedback": `
-        createStatusReactionController logAckFailure logTypingFailure removeAckReactionAfterReply
-        shouldAckReaction DEFAULT_EMOJIS shouldAckReactionForWhatsApp WhatsAppAckReactionMode
-      `,
-        "status-helpers": `
-        appendMatchMetadata asString collectIssuesForEnabledAccounts isRecord
-        resolveEnabledConfiguredAccountId
-      `,
-        "command-status": "buildCommandsMessage buildCommandsMessagePaginated buildHelpMessage",
-        "channel-send-result": "attachChannelToResult buildChannelSendResult",
-        "conversation-runtime": `
-        formatThreadBindingDisabledError resolveThreadBindingFarewellText
-        resolveThreadBindingConversationIdFromBindingId resolveThreadBindingEffectiveExpiresAt
-        resolveThreadBindingIdleTimeoutMs resolveThreadBindingIdleTimeoutMsForChannel
-        resolveThreadBindingIntroText resolveThreadBindingLifecycle resolveThreadBindingMaxAgeMs
-        resolveThreadBindingMaxAgeMsForChannel resolveThreadBindingSpawnPolicy
-        resolveThreadBindingThreadName resolveThreadBindingsEnabled formatThreadBindingDurationLabel
-        createScopedAccountReplyToModeResolver createStaticReplyToModeResolver
-        createTopLevelChannelReplyToModeResolver
-      `,
         "thread-bindings-runtime":
           "registerSessionBindingAdapter unregisterSessionBindingAdapter SessionBindingAdapter",
-        "ssrf-runtime": `
-        closeDispatcher createPinnedDispatcher resolvePinnedHostnameWithPolicy formatErrorMessage
-        isPrivateIpAddress assertHttpUrlTargetsPrivateNetwork
-        ssrfPolicyFromDangerouslyAllowPrivateNetwork ssrfPolicyFromAllowPrivateNetwork
-      `,
         "provider-setup": `
         applyProviderDefaultModel defineSelfHostedOpenAICompatibleProvider
         discoverOpenAICompatibleLocalModels discoverOpenAICompatibleSelfHostedProvider
-      `,
-        "provider-auth": `
-        buildOauthProviderAuthResult generateHexPkceVerifierChallenge generatePkceVerifierChallenge
-        toFormUrlEncoded
       `,
         "provider-model-shared": `
         DEFAULT_CONTEXT_TOKENS normalizeModelCompat cloneFirstTemplateModel
@@ -700,25 +595,11 @@ describe("plugin-sdk subpath exports", () => {
       `,
         "provider-catalog-shared":
           "buildSingleProviderApiKeyCatalog buildManifestProviderCatalogFamily",
-        setup: `
-        DEFAULT_ACCOUNT_ID createAllowFromSection createDelegatedSetupWizardProxy
-        createTopLevelChannelDmPolicy mergeAllowFromEntries
-      `,
-        "setup-tools": "formatCliCommand detectBinary formatDocsLink",
-        "lazy-runtime": "createLazyRuntimeSurface createLazyRuntimeModule",
         "agent-harness": ["./agent-harness-runtime.js"],
-        "agent-harness-runtime":
-          "AgentHarness EmbeddedAgentCompactResult agentHarnessStructuredInput",
         sandbox: "registerSandboxBackend runPluginCommandWithTimeout",
-        "secret-input":
-          "buildSecretInputSchema buildOptionalSecretInputSchema normalizeSecretInputString",
         "provider-http": `
         assertOkOrThrowHttpError normalizeBaseUrl postJsonRequest postTranscriptionRequest
         requireTranscriptionText
-      `,
-        "webhook-ingress": `
-        registerPluginHttpRoute resolveWebhookPath readRequestBodyWithLimit
-        readJsonWebhookBodyOrReject requestBodyErrorToText withResolvedWebhookRequestPipeline
       `,
       },
       true,

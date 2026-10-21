@@ -1,7 +1,9 @@
 // Plugin tool contract tests cover bundled plugin tool schemas and invocation contracts.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import * as ts from "typescript/ast";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -13,6 +15,8 @@ type PluginManifestFile = {
   id?: unknown;
   contracts?: { tools?: unknown };
 };
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function walkFiles(dir: string): string[] {
   return listGitFiles(dir, (line) => !isSkippedRepoPath(line));
@@ -45,80 +49,31 @@ function isProductionSource(filePath: string): boolean {
   return !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized);
 }
 
-function* topLevelTokens(source: string, start = 0): Generator<[string, number]> {
-  let depth = 0;
-  let quote: '"' | "'" | "`" | undefined;
-  let escaped = false;
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    if (!char) {
-      continue;
-    }
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(" || char === "{" || char === "[") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" || char === "}" || char === "]") {
-      depth -= 1;
-    }
-    if (depth === 0 && (char === ")" || char === ",")) {
-      yield [char, index];
-    }
+function listRegisterToolCalls(filePath: string, source: string): string[][] {
+  if (!source.includes("registerTool")) {
+    return [];
   }
-}
-
-function readBalancedCallArguments(source: string, openParenIndex: number): string | undefined {
-  for (const [char, index] of topLevelTokens(source, openParenIndex)) {
-    if (char === ")") {
-      return source.slice(openParenIndex + 1, index);
+  const sourceFile = parser.parseSourceFile(filePath, source);
+  const calls: string[][] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const callee = ts.isPropertyAccessExpression(node.expression)
+        ? node.expression.name
+        : node.expression;
+      if (ts.isIdentifier(callee) && callee.text === "registerTool") {
+        calls.push(
+          node.arguments
+            .slice(0, 2)
+            .map((argument) => argument.getText(sourceFile))
+            .filter((argument) => argument.startsWith("{"))
+            .flatMap(extractStaticRegisteredToolNamesFromObject),
+        );
+      }
     }
+    node.forEachChild(visit);
   }
-  return undefined;
-}
-
-function listRegisterToolCalls(source: string): string[] {
-  const calls: string[] = [];
-  const pattern = /\bregisterTool\s*\(/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    const openParenIndex = source.indexOf("(", match.index);
-    const args = readBalancedCallArguments(source, openParenIndex);
-    if (args !== undefined) {
-      calls.push(args);
-    }
-  }
+  visit(sourceFile);
   return calls;
-}
-
-function splitTopLevelArgs(args: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-  for (const [char, index] of topLevelTokens(args)) {
-    if (char === ",") {
-      parts.push(args.slice(start, index).trim());
-      start = index + 1;
-    }
-  }
-  parts.push(args.slice(start).trim());
-  return parts.filter(Boolean);
 }
 
 function extractStringLiterals(source: string): string[] {
@@ -135,17 +90,6 @@ function extractStaticRegisteredToolNamesFromObject(source: string): string[] {
         match[1] ? [match[1]] : [],
       ),
     ]),
-  ];
-}
-
-function extractStaticRegisteredToolNames(callArgs: string): string[] {
-  return [
-    ...new Set(
-      splitTopLevelArgs(callArgs)
-        .slice(0, 2)
-        .filter((arg) => arg.startsWith("{"))
-        .flatMap(extractStaticRegisteredToolNamesFromObject),
-    ),
   ];
 }
 
@@ -194,9 +138,9 @@ function collectToolContractFailures(extensionsDir: string): string[] {
 
     for (const filePath of walkFiles(pluginDir).filter(isProductionSource)) {
       const source = fs.readFileSync(filePath, "utf-8");
-      for (const call of listRegisterToolCalls(source)) {
+      for (const names of listRegisterToolCalls(filePath, source)) {
         registerCallCount += 1;
-        for (const name of extractStaticRegisteredToolNames(call)) {
+        for (const name of names) {
           registeredNames.add(name);
         }
       }

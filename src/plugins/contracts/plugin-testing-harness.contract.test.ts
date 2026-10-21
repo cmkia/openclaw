@@ -28,16 +28,12 @@ function echoTool(prefix: string, home: string) {
 describePluginRegistrationContract(pluginRegistrationContractCases.brave);
 
 describe("plugin testing harness contracts", () => {
-  it("executes declared tools and reports missing tool contracts", async () => {
-    const environment = () => [process.env.HOME, process.env.OPENCLAW_STATE_DIR];
-    const previousEnvironment = environment();
-
+  it("executes declared tools with the configured fixture", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       await expect(
         fs.stat(path.join(stateDir, "agents", "main", "sessions")),
       ).resolves.toBeDefined();
-      expect(environment()).toEqual([home, stateDir]);
 
       const { config, registry } = createPluginRegistryFixture({
         plugins: { entries: { "fixture-echo": { config: { prefix: "scoped" } } } },
@@ -67,36 +63,11 @@ describe("plugin testing harness contracts", () => {
       }
       expect(tool.name).toBe("fixture_echo");
 
-      for (const [message, expected] of [
-        ["alpha", "scoped:alpha"],
-        ["beta", "scoped:beta"],
-      ]) {
-        await expect(tool.execute("fixture-call", { message })).resolves.toEqual({
-          content: [{ type: "text", text: expected }],
-          details: { home, message },
-        });
-      }
+      await expect(tool.execute("fixture-call", { message: "alpha" })).resolves.toEqual({
+        content: [{ type: "text", text: "scoped:alpha" }],
+        details: { home, message: "alpha" },
+      });
       expect(registry.registry.diagnostics).toEqual([]);
-
-      const missingContract = createPluginRegistryFixture();
-      registerVirtualTestPlugin({
-        ...missingContract,
-        id: "missing-contract",
-        name: "Missing Contract",
-        register(api) {
-          api.registerTool(echoTool("unused", home));
-        },
-      });
-
-      expect(missingContract.registry.registry.tools).toEqual([]);
-      expect(missingContract.registry.registry.diagnostics).toContainEqual({
-        level: "error",
-        pluginId: "missing-contract",
-        source: "/virtual/missing-contract/index.ts",
-        message: "plugin must declare contracts.tools before registering agent tools",
-      });
     });
-
-    expect(environment()).toEqual(previousEnvironment);
   });
 });

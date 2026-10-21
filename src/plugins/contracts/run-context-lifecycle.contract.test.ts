@@ -10,11 +10,12 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-event
 import { getSessionEntry, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withPluginCommandExecution } from "../command-execution-lock.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
+  clearPluginRunContext,
   getPluginRunContext,
-  dispatchPluginAgentEventSubscriptions,
   registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "../host-hook-runtime.js";
@@ -26,9 +27,11 @@ import { runPluginRegisterSyncInRegistry } from "../loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
+  clearActivePluginRegistry,
   rollbackStagedPluginRegistry,
   setActivePluginRegistry,
   stageActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -108,6 +111,7 @@ describe("plugin run context lifecycle", () => {
 
   it("blocks stale plugin API run-context access after registry replacement", () => {
     const readContext = contextReader("stale-run-context-plugin", "stale-run");
+    const selection = { runId: "stale-run", namespace: "state" };
     let capturedApi: OpenClawPluginApi | undefined;
     const { registry } = createRegisteredPlugin("stale-run-context-plugin", (api) => {
       capturedApi = api;
@@ -117,8 +121,7 @@ describe("plugin run context lifecycle", () => {
 
     expect(
       capturedApi?.runContext?.setRunContext({
-        runId: "stale-run",
-        namespace: "state",
+        ...selection,
         value: { stale: true },
       }),
     ).toBe(false);
@@ -127,17 +130,16 @@ describe("plugin run context lifecycle", () => {
     expect(
       setPluginRunContext({
         pluginId: "stale-run-context-plugin",
-        patch: { runId: "stale-run", namespace: "state", value: { live: true } },
+        patch: { ...selection, value: { live: true } },
       }),
     ).toBe(true);
-    expect(
-      capturedApi?.runContext.getRunContext({ runId: "stale-run", namespace: "state" }),
-    ).toBeUndefined();
-    capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
+    expect(capturedApi?.runContext.getRunContext(selection)).toBeUndefined();
+    capturedApi?.runContext?.clearRunContext(selection);
     expect(readContext("state")).toEqual({ live: true });
   });
 
   it("allows run-context mutations after a previous registry is restored active", () => {
+    const selection = { runId: "restored-run", namespace: "state" };
     let capturedApi: OpenClawPluginApi | undefined;
     const { registry } = createRegisteredPlugin("restored-run-context-plugin", (api) => {
       capturedApi = api;
@@ -149,21 +151,16 @@ describe("plugin run context lifecycle", () => {
 
     expect(
       capturedApi?.runContext?.setRunContext({
-        runId: "restored-run",
-        namespace: "state",
+        ...selection,
         value: { restored: true },
       }),
     ).toBe(true);
-    expect(
-      capturedApi?.runContext?.getRunContext({
-        runId: "restored-run",
-        namespace: "state",
-      }),
-    ).toEqual({ restored: true });
+    expect(capturedApi?.runContext?.getRunContext(selection)).toEqual({ restored: true });
   });
 
   it("allows run-context initialization during activating plugin registration", () => {
     const readContext = contextReader("registration-run-context-plugin", "run-registration");
+    const selection = { runId: "run-registration", namespace: "state" };
     const { config, registry } = createPluginRegistryFixture();
     const record = createPluginRecord({
       id: "registration-run-context-plugin",
@@ -176,14 +173,13 @@ describe("plugin run context lifecycle", () => {
         expect(registry.registry.plugins).not.toContain(record);
         expect(
           api.runContext.setRunContext({
-            runId: "run-registration",
-            namespace: "state",
+            ...selection,
             value: { initialized: true },
           }),
         ).toBe(true);
         expect(readContext("state")).toEqual({ initialized: true });
 
-        api.runContext.clearRunContext({ runId: "run-registration", namespace: "state" });
+        api.runContext.clearRunContext(selection);
         expect(readContext("state")).toBeUndefined();
       },
       api,
@@ -667,30 +663,104 @@ describe("plugin run context lifecycle", () => {
     }
   });
 
-  it("blocks setting run context after a run is closed", () => {
-    expect(
+  it("clears only the selected run-context namespace", () => {
+    for (const namespace of ["selected", "retained"]) {
       setPluginRunContext({
-        pluginId: "closed-run-plugin",
-        patch: { runId: "run-closed", namespace: "state", value: { before: true } },
-      }),
-    ).toBe(true);
-    dispatchPluginAgentEventSubscriptions({
-      registry: createEmptyPluginRegistry(),
-      isLive: () => true,
-      event: {
-        runId: "run-closed",
-        seq: 1,
-        stream: "lifecycle",
-        ts: Date.now(),
-        data: { phase: "end" },
-      },
+        pluginId: "cleanup-contract",
+        patch: { runId: "cleanup-run", namespace, value: namespace },
+      });
+    }
+    clearPluginRunContext({
+      pluginId: "cleanup-contract",
+      runId: "cleanup-run",
+      namespace: "selected",
     });
-
-    expect(
-      setPluginRunContext({
-        pluginId: "closed-run-plugin",
-        patch: { runId: "run-closed", namespace: "state", value: { after: true } },
-      }),
-    ).toBe(false);
+    const read = (namespace: string) =>
+      getPluginRunContext({
+        pluginId: "cleanup-contract",
+        get: { runId: "cleanup-run", namespace },
+      });
+    expect(read("selected")).toBeUndefined();
+    expect(read("retained")).toBe("retained");
   });
+  it.each([
+    { withSuccessor: false, heldWork: false, clear: false },
+    { withSuccessor: true, heldWork: false, clear: false },
+    { withSuccessor: true, heldWork: true, clear: false },
+    { withSuccessor: true, heldWork: true, clear: true },
+  ])(
+    "preserves scheduler jobs across delayed cleanup (successor=$withSuccessor, heldWork=$heldWork, clear=$clear)",
+    async ({ withSuccessor, heldWork, clear }) => {
+      const commandRelease = createDeferredCore();
+      const cleanupStarted = createDeferredCore();
+      const cleanupRelease = createDeferredCore();
+      const schedulerCleanup = vi.fn();
+      const retiredSchedulerCleanup = vi.fn();
+      const pluginId = "delayed-restored-registry-plugin";
+      const createFixture = (retiring: boolean) => {
+        const fixture = createPluginRegistryFixture();
+        registerTestPlugin({
+          ...fixture,
+          record: createPluginRecord({ id: pluginId, name: "Delayed Restored Registry Plugin" }),
+          register(api) {
+            if (retiring) {
+              api.registerRuntimeLifecycle({
+                id: "delayed-cleanup",
+                async cleanup() {
+                  cleanupStarted.resolve();
+                  await cleanupRelease.promise;
+                },
+              });
+            }
+            api.registerSessionSchedulerJob({
+              id: "live-job",
+              sessionKey: "agent:main:main",
+              kind: "session-turn",
+              cleanup: retiring ? retiredSchedulerCleanup : schedulerCleanup,
+            });
+          },
+        });
+        return fixture;
+      };
+      const previous = createFixture(true);
+      setActivePluginRegistry(previous.registry.registry);
+      const commandWork = heldWork
+        ? withPluginCommandExecution(previous.registry.registry, () => commandRelease.promise)
+        : undefined;
+      const clearing = clear ? clearActivePluginRegistry(previous.registry.registry) : undefined;
+      if (!clear) {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      }
+      try {
+        if (!heldWork) {
+          await cleanupStarted.promise;
+        }
+        if (withSuccessor) {
+          const successor = createFixture(false);
+          setActivePluginRegistry(successor.registry.registry);
+        }
+
+        commandRelease.resolve();
+        await commandWork;
+        await cleanupStarted.promise;
+        cleanupRelease.resolve();
+        await waitForPluginRegistryRetirement(previous.registry.registry);
+        await clearing;
+
+        expect(retiredSchedulerCleanup).toHaveBeenCalledTimes(heldWork ? 0 : 1);
+        expect(schedulerCleanup).not.toHaveBeenCalled();
+        expect(listPluginSessionSchedulerJobs(pluginId)).toEqual(
+          withSuccessor
+            ? [{ id: "live-job", pluginId, sessionKey: "agent:main:main", kind: "session-turn" }]
+            : [],
+        );
+      } finally {
+        commandRelease.resolve();
+        cleanupRelease.resolve();
+        await commandWork;
+        await waitForPluginRegistryRetirement(previous.registry.registry);
+        await clearing;
+      }
+    },
+  );
 });
