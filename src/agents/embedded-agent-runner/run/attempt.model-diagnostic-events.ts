@@ -44,6 +44,7 @@ function observeModelCallIterator<T>(
   let started = false;
   let returning: Promise<IteratorResult<T>> | undefined;
   const observed = observe();
+  const advance = () => observed.next();
   return {
     [Symbol.asyncIterator]() {
       return this;
@@ -53,7 +54,7 @@ function observeModelCallIterator<T>(
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
       started = true;
-      return lifecycle.runInTransportContext(() => observed.next());
+      return lifecycle.runInTransportContext(advance);
     },
     return(value) {
       returning ??= lifecycle.runInTransportContext(() =>

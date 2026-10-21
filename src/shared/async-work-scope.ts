@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "./async-store.js";
 import "./detached-async-context.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
@@ -13,7 +14,7 @@ const currentWorkScope = resolveGlobalSingleton(
 // Keep the shipped owner carrier intact when replacement chunks join a live process.
 const currentWorkScopeAncestry = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScopeAncestry"),
-  () => new AsyncLocalStorage<AsyncWorkScopeFrame>(),
+  () => new AsyncLocalStorage<AsyncWorkScopeFrame | undefined>(),
 );
 
 // Replacement chunks reject through the same class so callers can classify lifecycle refusals.
@@ -55,9 +56,11 @@ export class AsyncWorkScope {
     }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
-    return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
-      currentWorkScope.run(this, run),
-    );
+    return runWithAsyncStore(currentWorkScopeAncestry, { scope: this, parent }, () => {
+      // The runner restores both shipped carriers together with the caller's frame.
+      currentWorkScope.enterWith(this);
+      return run();
+    });
   }
 
   /** Enters synchronous work without inspecting or assimilating its return value. */
@@ -241,11 +244,12 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
 /** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
 export function runOutsideAsyncWorkScope<T>(run: () => T): T {
   if (currentWorkScope.getStore() === undefined) {
-    return currentWorkScopeAncestry.getStore() === undefined
-      ? run()
-      : currentWorkScopeAncestry.exit(run);
+    return runWithAsyncStore(currentWorkScopeAncestry, undefined, run);
   }
-  return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
+  return runWithAsyncStore(currentWorkScope, undefined, () => {
+    currentWorkScopeAncestry.enterWith(undefined);
+    return run();
+  });
 }
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {

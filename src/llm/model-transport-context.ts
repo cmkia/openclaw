@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 
 type ModelTransportContext = {
   sessionKey?: string;
@@ -11,7 +12,7 @@ type ModelTransportContext = {
 const modelTransportContext = new AsyncLocalStorage<ModelTransportContext>();
 
 export function withModelTransportContext<T>(context: ModelTransportContext, run: () => T): T {
-  return modelTransportContext.run(context, run);
+  return runWithAsyncStore(modelTransportContext, context, run);
 }
 
 export function getModelTransportContext(): ModelTransportContext | undefined {
