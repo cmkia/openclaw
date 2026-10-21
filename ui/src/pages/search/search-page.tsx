@@ -1,6 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { Errored, Loading, Show, createMemo, createSignal, isPending, onCleanup } from "solid-js";
+import { Errored, Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -48,7 +48,8 @@ export function SearchPage() {
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
   const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> } | null>(null);
   const loadCompletion = createMemo(() => loadRequest()?.promise.then(() => null) ?? null);
-  const loading = () => isPending(loadCompletion);
+  // isPending's first-use runtime hooks eagerly link the shared Markdown/menu chunk.
+  const [loading, setLoading] = createSignal(false);
   const [testing, setTesting] = createSignal(false);
   const [testResult, setTestResult] = createSignal<WebSearchTestResult | null>(null);
   const [testError, setTestError] = createSignal("");
@@ -161,6 +162,7 @@ export function SearchPage() {
     }
     invalidateTest();
     loadingActive = true;
+    setLoading(true);
     const selected = selection(modelValue);
     const current = () =>
       active() &&
@@ -205,8 +207,11 @@ export function SearchPage() {
         }
       } finally {
         loadingActive = false;
-        if (active() && !current() && gateway.connected) {
-          void load();
+        if (active()) {
+          setLoading(false);
+          if (!current() && gateway.connected) {
+            void load();
+          }
         }
       }
     })();

@@ -119,8 +119,10 @@ describe("Search settings", () => {
 
     refresh.reject(new Error("Search status unavailable"));
     await fixture.settle();
-    expect(fixture.element.querySelector('[role="alert"]')?.textContent).toContain(
-      "Search status unavailable",
+    await waitForSolid(() =>
+      expect(fixture.element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Search status unavailable",
+      ),
     );
     expect(fixture.input("Search query")).toBe(query);
     expect(query.value).toBe("Keep my search draft");
