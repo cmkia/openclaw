@@ -175,8 +175,8 @@ function AttachmentTile(props: {
                             disabled={props.controls.disabled}
                             onClick={() => props.entry.read.compress?.()}
                           >
-                            <Icon name="minimize" />
-                            {t("chat.attachments.compressToFit")}
+                            <span>{t("chat.attachments.compressToFit")}</span>
+                            <Icon name="chevronRight" />
                           </button>
                         </span>
                       ) : (

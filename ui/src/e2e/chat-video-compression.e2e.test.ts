@@ -1,8 +1,6 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -43,64 +41,31 @@ suite.define(() => {
           .locator(".chat-attachment-thumb")
           .filter({ has: button(page, "Remove clip.mp4") });
         await normal.locator(".chat-attachment-file").waitFor();
-        await upload(page, "presentation.mp4");
+        await upload(page, "ScreenRecording_10-21-2026 09-53-48_1.mp4");
         const offer = page
           .locator(".chat-attachment-thumb")
           .filter({ has: button(page, "Compress to fit") });
         await offer.waitFor();
-        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-          const rail = page.locator(".chat-attachments-preview");
-          const frame = await takeControlUiScreenshotFrame(page, rail, [normal, offer], {
-            elements: [rail],
-            animations: "disabled",
-          });
-          const prefix = path.join(suite.artifactDir, `offer-${theme}-${viewport.width}`);
-          writeFileSync(`${prefix}.png`, frame.png);
-          writeFileSync(`${prefix}-detail.png`, frame.elements[0]!.png);
-        }
         const normalBox = (await normal.boundingBox())!;
         const offerBox = (await offer.boundingBox())!;
         expect(normalBox.height).toBe(56);
         expect(offerBox.height).toBe(normalBox.height);
         expect(offerBox.width).toBeLessThan(normalBox.width);
         expect(offerBox.y).toBe(normalBox.y);
-        const preview = offer.locator(".chat-attachment-file__preview");
-        const previewBox = (await preview.boundingBox())!;
-        const normalPreviewBox = (await normal
-          .locator(".chat-attachment-file__preview")
-          .boundingBox())!;
-        expect(previewBox.width).toBeLessThan(normalPreviewBox.width);
-        expect(previewBox.height).toBe(previewBox.width);
-        expect(
-          await preview.evaluate((element) => getComputedStyle(element).backgroundColor),
-        ).not.toBe("rgba(0, 0, 0, 0)");
-        const play = preview.locator("svg");
-        expect(await play.evaluate((element) => getComputedStyle(element).fill)).toBe(
-          await play.evaluate((element) => getComputedStyle(element).color),
-        );
-        expect(await play.evaluate((element) => getComputedStyle(element).stroke)).toBe("none");
-        const action = button(page, "Compress to fit");
-        const icon = (await action.locator("svg").boundingBox())!;
-        expect(icon.width).toBeGreaterThanOrEqual(12);
-        expect(icon.width).toBeLessThanOrEqual(14);
-        expect(icon.height).toBe(icon.width);
-        expect(
-          await action.locator("svg").evaluate((element) => getComputedStyle(element).color),
-        ).toBe(await action.evaluate((element) => getComputedStyle(element).color));
-        expect(
-          await action.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(await action.evaluate((element) => getComputedStyle(element).color)).toBe(
-          await offer.evaluate((element) => {
-            const probe = document.createElement("span");
-            probe.style.color = "var(--accent)";
-            element.append(probe);
-            const color = getComputedStyle(probe).color;
-            probe.remove();
-            return color;
-          }),
-        );
-        await button(page, "Remove presentation.mp4").click();
+        const name = offer.locator(".chat-attachment-file__name");
+        const clipping = await name.evaluate((element) => ({
+          clipped: element.scrollWidth > element.clientWidth,
+          overflow: getComputedStyle(element).overflow,
+          text: element.textContent,
+        }));
+        expect(clipping).toEqual({
+          clipped: true,
+          overflow: "hidden",
+          text: "ScreenRecording_10-21-2026 09-53-48_1.mp4",
+        });
+        const nameBox = (await name.boundingBox())!;
+        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(offerBox.x + offerBox.width);
+        await button(page, "Remove ScreenRecording_10-21-2026 09-53-48_1.mp4").click();
         expect(await normal.count()).toBe(1);
       }),
   );

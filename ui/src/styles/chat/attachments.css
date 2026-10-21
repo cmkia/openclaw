@@ -83,6 +83,11 @@ openclaw-chat-svg-attachment {
   text-decoration: none;
 }
 
+.chat-attachment-compress > span {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .chat-attachment-compress svg {
   width: 12px;
   height: 12px;
