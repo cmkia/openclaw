@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
@@ -19,8 +20,6 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
-import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
-import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 // These page-only fixtures bypass the selector/router that prepares the pending view.
 beforeAll(async () => {
@@ -71,13 +70,6 @@ it.each(["admission", "rollback"] as const)(
     const router = createRouter({ routes: [] });
     Object.assign(context, { basePath: "", router, navigate: vi.fn(), replace: vi.fn() });
     await context.agents.ensureList();
-    // Finish empty-cache initialization before the retention assertions start.
-    await readStoredChatSnapshotRecord(
-      resolveChatSnapshotKey(
-        { settings: context.theme.settings, client: context.gateway.snapshot.client },
-        { sessionKey: previousKey },
-      ),
-    );
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
     const view = mountSolid(
@@ -95,7 +87,10 @@ it.each(["admission", "rollback"] as const)(
         container.querySelector<HTMLElementTagNameMap["openclaw-chat-page"]>("openclaw-chat-page"),
         "chat page",
       );
-      await vi.waitFor(() => expect(page.textContent).toContain("Previous transcript"));
+      // Cold startup may await the bounded 2s snapshot read before rendering history.
+      await waitForSolid(() => expect(page.textContent).toContain("Previous transcript"), {
+        timeout: 5_000,
+      });
       const previousPane = expectDefined(
         page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
         "previous pane",
