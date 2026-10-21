@@ -21,6 +21,7 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
+const { finalizeCliMcpGrant } = await import("../agents/cli-runner/mcp-grant-context.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
 
@@ -136,6 +137,28 @@ describe("admitScheduledOccurrence", () => {
     expect(() => context?.assertCurrent()).not.toThrow();
     admission.close();
     expect(admission.readScheduledExecution()).toBeUndefined();
+  });
+
+  it("reaches the CLI loopback through the run's grant", async () => {
+    const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
+    const admission = prepareCronRunAdmission({
+      cfg: {},
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:cron:job-1:run:s1",
+      jobId: "job-1",
+      deliveryAttemptFence: null,
+      scheduledExecution: minted,
+    });
+    const admitted = await admission.preparedRunAdmission.admit("gateway");
+    const grant = finalizeCliMcpGrant({ runId: "run-1" } as never, undefined, false, {
+      admittedRunContext: admitted,
+    });
+    // The loopback server resolves tools with this same admitted run (mcp-http.runtime.ts),
+    // which the minted context is bound to.
+    expect(grant?.admittedRunContext).toBe(admitted);
+    expect(admission.readScheduledExecution()?.jobId).toBe("job-1");
+    admission.close();
   });
 
   it("holds the parent generation for a linked job and releases it", async () => {
