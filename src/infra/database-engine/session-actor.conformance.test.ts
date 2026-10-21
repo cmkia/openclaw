@@ -177,7 +177,7 @@ describe
           },
           { assertCurrent() {}, assertReadable() {} },
         );
-        const scope = { ...options, storePath: database.path, sessionKey, sessionId };
+        const scope = { agentId: options.agentId, storePath: database.path, sessionKey, sessionId };
         const append = (input: Parameters<typeof appendSessionManagerActor>[0]["append"]) =>
           appendSessionManagerActor({
             actor,
