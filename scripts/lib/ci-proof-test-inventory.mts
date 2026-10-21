@@ -1204,6 +1204,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/harness/native-hook-relay-store.test.ts",
   "src/agents/harness/native-hook-relay.imports.test.ts",
   "src/agents/harness/native-hook-relay.lifecycle.test.ts",
+  "src/agents/harness/native-hook-relay.observations.test.ts",
   "src/agents/harness/native-hook-relay.test.ts",
   "src/agents/harness/provider-route-selection.test.ts",
   "src/agents/harness/runtime-plugin.test.ts",
