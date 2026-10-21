@@ -48,7 +48,7 @@ describe("WorkboardView", () => {
     picker.onSelect("main");
     renderView();
     requireButton(container, "Apply changes").click();
-    await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+    await waitForFast(() => expect(state.bulkSaving).toBe(false));
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.cards.find((card) => card.id === first.id)?.agentId).toBe("main");
     expect(state.cards.find((card) => card.id === second.id)?.agentId).toBe("writer");
@@ -63,7 +63,7 @@ describe("WorkboardView", () => {
       );
     });
     requireButton(container, "Apply changes").click();
-    await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+    await waitForFast(() => expect(state.bulkSaving).toBe(false));
     expect(request.mock.calls).toEqual(
       [first, second, second].map((card) => [
         "workboard.cards.update",
@@ -105,7 +105,7 @@ describe("WorkboardView", () => {
         "bulk assignment",
       );
       picker.onSelect("main");
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
       expect(state.bulkSaving).toBe(true);
       const connection = workboardTestHost().connection;
       if (change === "disconnect") {
@@ -116,7 +116,7 @@ describe("WorkboardView", () => {
         workboardTestHost().dispose();
       }
       firstWrite.resolve({ card: { ...first, agentId: "main", updatedAt: first.updatedAt + 1 } });
-      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+      await waitForFast(() => expect(state.bulkSaving).toBe(false));
       expect(request).toHaveBeenCalledTimes(1);
       expect(request).toHaveBeenCalledWith("workboard.cards.update", {
         id: first.id,
@@ -157,10 +157,10 @@ describe("WorkboardView", () => {
       container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
       '.workboard-bulk-dialog button[type="submit"]',
     ).click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
     setWorkboardCards(state, [first, outside]);
     pending.resolve({ deleted: true });
-    await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+    await waitForFast(() => expect(state.bulkSaving).toBe(false));
     expect(request).toHaveBeenCalledTimes(1);
     expect(state.cards.find((card) => card.id === second.id)).toEqual(outside);
     expect(state.selectedCardIds.size).toBe(0);
@@ -233,7 +233,7 @@ describe("WorkboardView", () => {
         container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
         '.workboard-bulk-dialog button[type="submit"]',
       ).click();
-      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+      await waitForFast(() => expect(state.bulkSaving).toBe(false));
       expect(request).toHaveBeenCalledTimes(2);
       expect(request).toHaveBeenNthCalledWith(2, "workboard.cards.delete", {
         id: child.id,
@@ -293,7 +293,7 @@ describe("WorkboardView", () => {
           ).click();
         }
       }
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
       // Refresh while processing the first card must not replace the observed revision.
       setWorkboardCards(state, [first, newer]);
       pending.resolve(
@@ -308,7 +308,7 @@ describe("WorkboardView", () => {
               },
             },
       );
-      await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+      await waitForFast(() => expect(state.bulkSaving).toBe(false));
       expect(request).toHaveBeenCalledTimes(2);
       expect(request).toHaveBeenNthCalledWith(
         2,
