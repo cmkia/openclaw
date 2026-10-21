@@ -2,9 +2,10 @@ import { createMemo, createSignal, createStore, onSettled, Show } from "solid-js
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../styles/chat/session-diff-mobile.css";
 import "../../../styles/session-panel-rail.css";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
 import {
   expandSessionDiffGap,
@@ -19,7 +20,7 @@ import { parseSessionDiffPatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../../../lib/reactive/visible-poll.ts";
 import type { DiffPresentation } from "./chat-diff-render.solid.tsx";
 import type { SessionDiffScope, SessionDiffProps } from "./chat-sidebar-content-types.ts";
@@ -41,6 +42,8 @@ import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { createSessionDiffResultViews } from "./session-diff-result-view.tsx";
 import { SessionDiffSyncMobile } from "./session-diff-sync-mobile.tsx";
 import type { DiffValue, FileSource, FileView } from "./session-diff-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function shellArgument(value: string) {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;

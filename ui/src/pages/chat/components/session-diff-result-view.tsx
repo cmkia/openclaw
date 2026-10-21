@@ -3,12 +3,15 @@ import { createSignal, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { SessionDiffTree } from "./session-diff-tree.tsx";
 import type { DiffValue, FileView } from "./session-diff-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function createSessionDiffResultViews(
   bindings: SessionDiffViewBindings,

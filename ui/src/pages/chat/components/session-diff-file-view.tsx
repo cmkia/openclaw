@@ -3,9 +3,10 @@ import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { pairSessionDiffLines } from "../../../lib/chat/session-diff-split.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { createDiffPresentation } from "./chat-diff-render.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
@@ -16,6 +17,8 @@ import { FILE_STATUS_LABELS, diffStat, splitPath } from "./session-diff-presenta
 import { SessionDiffFileBody } from "./session-diff-render.tsx";
 import { ReviewFilename } from "./session-diff-tree.tsx";
 import type { FileView } from "./session-diff-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
   const {
