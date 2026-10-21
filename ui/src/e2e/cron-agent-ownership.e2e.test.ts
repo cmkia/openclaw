@@ -56,11 +56,18 @@ const agents = (name: string) => ({
   mainKey: "main",
   scope: "agent",
 });
-const screenshot = (page: Page, name: string) =>
-  page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const screenshot = async (page: Page, name: string) => {
+  if (captureUiProof) {
+    await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+  }
+};
 const withPage = (recordVideo: boolean, run: Parameters<typeof suite.withPage>[1]) =>
   suite.withPage(
-    { ...pageOptions, ...(recordVideo ? { recordVideo: { dir: suite.artifactDir } } : {}) },
+    {
+      ...pageOptions,
+      ...(recordVideo && captureUiProof ? { recordVideo: { dir: suite.artifactDir } } : {}),
+    },
     run,
   );
 async function openDraft(page: Page, name: string) {
