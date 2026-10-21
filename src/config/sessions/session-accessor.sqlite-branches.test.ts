@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
@@ -77,27 +78,14 @@ function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
 
 function trackBranchSummaryReads(): () => number {
   let reads = 0;
-  const postMessage: unknown = Object.getOwnPropertyDescriptor(
-    Worker.prototype,
-    "postMessage",
-  )?.value;
-  if (typeof postMessage !== "function") {
-    throw new Error("expected Worker.postMessage to be an own method");
-  }
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the worker receiver.
+  const postMessage = Worker.prototype.postMessage;
   vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
     this: Worker,
     ...args: Parameters<Worker["postMessage"]>
   ) {
     const [message] = args;
-    if (
-      message &&
-      typeof message === "object" &&
-      "input" in message &&
-      message.input &&
-      typeof message.input === "object" &&
-      "kind" in message.input &&
-      message.input.kind === "branch-summaries"
-    ) {
+    if (isRecord(message) && isRecord(message.input) && message.input.kind === "branch-summaries") {
       reads++;
     }
     Reflect.apply(postMessage, this, args);
@@ -396,28 +384,13 @@ describe("SQLite session branches", () => {
       const branchReads = trackBranchSummaryReads();
       await listSessionBranches({ agentId, env, sessionKey });
 
+      const source = { agentId, env, sessionKey };
       const result =
         mode === "rewind"
-          ? await rewindSessionToMessage({
-              agentId,
-              env,
-              entryId: "user-2",
-              sessionKey,
-            })
+          ? await rewindSessionToMessage({ ...source, entryId: "user-2" })
           : mode === "switch"
-            ? await switchSessionBranch({
-                agentId,
-                env,
-                leafEntryId: "off-path-user",
-                sessionKey,
-              })
-            : await forkSessionAtMessage({
-                agentId,
-                env,
-                entryId: "user-2",
-                sessionKey,
-                targetKey,
-              });
+            ? await switchSessionBranch({ ...source, leafEntryId: "off-path-user" })
+            : await forkSessionAtMessage({ ...source, entryId: "user-2", targetKey });
       expect(result.status).toBe("created");
 
       const readsBeforeAliasRead = branchReads();

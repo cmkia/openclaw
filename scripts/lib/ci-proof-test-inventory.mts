@@ -4581,7 +4581,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/config/sessions/incognito-session-transcript.test.ts",
   "src/config/sessions/provider-review-store.test.ts",
   "src/config/sessions/session-accessor.question-answer-transcript.test.ts",
-  "src/config/sessions/session-accessor.sqlite-excluded-rows.test.ts",
   "src/config/sessions/session-accessor.sqlite-maintenance-worker.test.ts",
   "src/config/sessions/session-entry-read.worker.test.ts",
   "src/config/sessions/session-history-eviction.lifecycle-contention.test.ts",

@@ -31,7 +31,7 @@ import {
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
-import { prepareTranscriptPayload } from "./transcript-payload.js";
+import { createTranscriptEventInserter, prepareTranscriptPayload } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -160,7 +160,7 @@ const cases: Array<{
   },
 ];
 
-async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
+async function seedStoredBranchEvents(events: Record<string, unknown>[], canonical = false) {
   setRuntimeConfigSnapshot({});
   const agentId = "main";
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-branch-summary-") };
@@ -171,31 +171,23 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
     sessionKey: "agent:main:branch-summary",
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  expect(
-    replaceTranscriptEventsSync(scope, [{ type: "session", id: scope.sessionId, version: 3 }]),
-  ).toBe(true);
-  if (events.length === 0) {
-    return scope;
-  }
+  const header = { type: "session", id: scope.sessionId, version: 3 };
+  expect(replaceTranscriptEventsSync(scope, canonical ? [header, ...events] : [header])).toBe(true);
   // Seed stored rows directly so append-time deduplication cannot erase reader compatibility cases.
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      executeSqliteQuerySync(
-        database.db,
-        getSessionKysely(database.db)
-          .insertInto("transcript_events")
-          .values(
-            events.map((event, index) => ({
-              session_id: scope.sessionId,
-              seq: index + 2,
-              ...prepareTranscriptPayload(database.db, JSON.stringify(event)),
-              created_at: 1,
-            })),
-          ),
-      );
-    },
-    { agentId, env },
-  );
+  if (!canonical && events.length) {
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        createTranscriptEventInserter(db, scope.sessionId).batch(
+          events.map((event, index) => ({
+            seq: index + 2,
+            eventJson: JSON.stringify(event),
+            createdAt: 1,
+          })),
+        );
+      },
+      { agentId, env },
+    );
+  }
   return scope;
 }
 
@@ -205,14 +197,8 @@ it.each(cases)("$name", async ({ events, branches }) => {
   expect((await loadTranscriptEvents(scope)).slice(1)).toEqual(events);
 });
 
-async function seedCanonicalBranchEvents(events: Record<string, unknown>[]) {
-  const scope = await seedStoredBranchEvents([]);
-  replaceTranscriptEventsSync(scope, [
-    { type: "session", id: scope.sessionId, version: 3 },
-    ...events,
-  ]);
-  return scope;
-}
+const seedCanonicalBranchEvents = (events: Record<string, unknown>[]) =>
+  seedStoredBranchEvents(events, true);
 
 function branchSnapshot(
   scope: Awaited<ReturnType<typeof seedStoredBranchEvents>>,
@@ -310,17 +296,14 @@ it("reads only the newest usable appended headline while retaining cached histor
         ? "headlines"
         : null,
   );
-  try {
-    expect(read()).toMatchObject({
-      status: "ok",
-      appendSafe: true,
-      branches: [branch("tool", "latest visible answer", 6, true)],
-    });
-    expect(tracked.counts.headlines).toBe(3);
-    expect(tracked.textBytes.headlines).toBeLessThan(1_000);
-  } finally {
-    tracked.restore();
-  }
+  using _ = { [Symbol.dispose]: tracked.restore };
+  expect(read()).toMatchObject({
+    status: "ok",
+    appendSafe: true,
+    branches: [branch("tool", "latest visible answer", 6, true)],
+  });
+  expect(tracked.counts.headlines).toBe(3);
+  expect(tracked.textBytes.headlines).toBeLessThan(1_000);
 });
 
 it("rescans an unindexed legacy prefix after an append reuses one of its IDs", async () => {
