@@ -234,8 +234,10 @@ function prepareBlockedSubagentCompletion(
   // A recovered requester already exhausted its turn. A system event would start
   // another model turn just to report that failure; retain it on delivery instead.
   const requesterRecoveryFailed =
-    requesterOutcome?.reason === "visible_reply_missing" &&
-    requesterOutcome.disposition === "permanent_failure";
+    (requesterOutcome?.reason === "visible_reply_missing" &&
+      requesterOutcome.disposition === "permanent_failure") ||
+    (subagent.delivery?.lastDropReason === "visible_reply_missing" &&
+      isCompletedRequesterDeliveryBlocked(subagent));
   const text =
     successful &&
     !requesterRecoveryFailed &&
