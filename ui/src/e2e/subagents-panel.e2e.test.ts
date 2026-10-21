@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -432,15 +429,6 @@ suite.define(() => {
           { match: panelQuery },
         );
         await panel.getByText("Child list temporarily unavailable", { exact: false }).waitFor();
-        const retained = await takeControlUiScreenshotFrame(page, panel, [panel], {
-          elements: [panel],
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "subagents-read-failure.png"), retained.png);
-        await writeFile(
-          path.join(suite.artifactDir, "subagents-read-failure-panel.png"),
-          retained.elements[0]!.png,
-        );
         expect(await panel.locator(".subagents-desktop__row").count()).toBe(5);
         await panel.getByRole("button", { name: "Retry", exact: true }).click();
         await panel

@@ -23,55 +23,18 @@ suite.define(() => {
         sessionKey,
         revision: 1,
         updatedAt: Date.now(),
-        steps: [
-          { step: "Review checkout error handling", status: "completed" },
-          { step: "Verify saved progress recovery", status: "in_progress" },
-          { step: "Confirm the review is ready", status: "pending" },
-        ],
+        steps: [{ step: "Saved progress", status: "in_progress" }],
       };
       const gateway = await installMockGateway(page, {
-        agentModel: "example/preview-model",
-        models: [
-          {
-            id: "preview-model",
-            provider: "example",
-            name: "Preview model",
-            contextWindow: 128_000,
-          },
-        ],
+        agentModel: "example/model",
+        models: [{ id: "model", provider: "example", name: "Example" }],
         sessions: [
           {
             key: sessionKey,
             sessionId: "details-progress-read",
             kind: "direct",
-            label: "Checkout recovery review",
-            displayName: "Checkout recovery review",
-            updatedAt: 1,
-            hasActiveRun: false,
-            model: "preview-model",
-            modelProvider: "example",
             contextTokens: 128_000,
             totalTokens: 24_800,
-          },
-        ],
-        historyMessages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Review how checkout changes and saved task progress recover after a temporary connection failure. Keep the last valid result visible.",
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "I reviewed the checkout reader and its connection handling. The saved task plan records the completed review and the remaining recovery checks. I am checking that a failed read preserves the saved result without starting the task again.",
-              },
-            ],
           },
         ],
         deferredMethods: ["progressCard.get"],
@@ -88,9 +51,6 @@ suite.define(() => {
           },
         },
       });
-      const artifacts = createControlUiE2eArtifactDir(
-        `details-progress-read-${mobile ? "mobile" : "desktop"}`,
-      );
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("progressCard.get");
@@ -107,10 +67,6 @@ suite.define(() => {
         await progressSurface
           .getByRole("status", { name: "Loading session progress…", exact: true })
           .waitFor({ state: "hidden" });
-        await page.screenshot({
-          path: path.join(artifacts, "first-read-failure.png"),
-          animations: "disabled",
-        });
         expect(
           await progressSurface
             .getByText("Session progress is unavailable.", { exact: true })
@@ -134,10 +90,6 @@ suite.define(() => {
         expect(
           await progressSurface.getByRole("button", { name: "Retry", exact: true }).count(),
         ).toBe(0);
-        await page.screenshot({
-          path: path.join(artifacts, "empty-read-recovered.png"),
-          animations: "disabled",
-        });
         await gateway.deferNext("progressCard.get");
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(3);
@@ -158,22 +110,14 @@ suite.define(() => {
         await progressSurface
           .getByText("Couldn't load task progress. Try again.", { exact: true })
           .waitFor();
-        await page.screenshot({
-          path: path.join(artifacts, "persistent-read-failure.png"),
-          animations: "disabled",
-        });
         await gateway.deferNext("progressCard.get");
         await retry.click();
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(5);
         await gateway.resolveDeferred("progressCard.get", { card });
         // Commit the recovered card and its queued layout frames under the paused clock.
         await page.clock.runFor(32);
-        await page.screenshot({
-          path: path.join(artifacts, "read-recovered.png"),
-          animations: "disabled",
-        });
         await progressSurface
-          .getByText("Verify saved progress recovery", { exact: true })
+          .getByText("Saved progress", { exact: true })
           .filter({ visible: true })
           .first()
           .waitFor();

@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -109,15 +107,6 @@ suite.define(() => {
           retryable: true,
         });
         await panel.getByText("Connection temporarily unavailable", { exact: false }).waitFor();
-        const retained = await takeControlUiScreenshotFrame(page, panel, [panel], {
-          elements: [panel],
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "processes-read-failure.png"), retained.png);
-        await writeFile(
-          path.join(suite.artifactDir, "processes-read-failure-panel.png"),
-          retained.elements[0]!.png,
-        );
         expect(await panel.getByText(process.name, { exact: true }).count()).toBe(1);
         await gateway.emitGatewayEvent("sessions.processes.changed", {
           sessionKey: key,

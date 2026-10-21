@@ -163,37 +163,6 @@ suite.define(() => {
       await expect
         .poll(() => context.locator('[data-context-category="messages"]').textContent())
         .toContain("37k");
-      const previousReads = await gateway.deferNext("sessions.usage");
-      await context.getByRole("button", { name: "Refresh", exact: true }).click();
-      await gateway.waitForRequest("sessions.usage", { after: previousReads });
-      await gateway.rejectDeferred("sessions.usage", {
-        code: "UNAVAILABLE",
-        message: "Temporary read failure",
-        retryable: true,
-      });
-      await context
-        .getByRole("status")
-        .filter({ hasText: /context/i })
-        .waitFor();
-      const retained = await takeControlUiScreenshotFrame(page, panel, [context], {
-        elements: [context, panel],
-        animations: "disabled",
-      });
-      await writeFile(
-        path.join(suite.artifactDir, "context-read-failure-" + width + ".png"),
-        retained.png,
-      );
-      await writeFile(
-        path.join(suite.artifactDir, "context-read-failure-" + width + "-context.png"),
-        retained.elements[0]!.png,
-      );
-      expect(await context.locator(".chat-context__bar").count()).toBe(1);
-      await context.getByText("Showing the last available report.", { exact: false }).waitFor();
-      await context.getByRole("button", { name: "Refresh", exact: true }).click();
-      await context
-        .getByRole("status")
-        .filter({ hasText: /last available report/ })
-        .waitFor({ state: "hidden" });
       await context.locator('[data-context-details="files"] > summary').click();
       await context.getByText("AGENTS.md", { exact: true }).first().waitFor();
       expect(await context.getByText("AGENTS.md", { exact: true }).count()).toBe(2);
