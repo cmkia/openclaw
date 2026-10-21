@@ -1,6 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -8,6 +11,7 @@ import {
   controlUiE2eWaitTimeoutMs,
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
+  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
@@ -23,6 +27,26 @@ const homeKey = "agent:main:main";
 const entryKey = "agent:main:entry-proof";
 const chooseSession = "Choose the session in the sidebar.";
 const text = (value: string) => ({ type: "text", text: value });
+const sidebarPages = new Map<
+  "light" | "dark",
+  { page: Page; gateway: Awaited<ReturnType<typeof installMockGateway>>; pageErrors: string[] }
+>();
+
+function entryMessages(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    role: index % 2 ? "assistant" : "user",
+    content: [
+      text(
+        `Entry checkpoint ${index + 1}. ${index % 2 ? "The transcript should appear in its final position." : "Review this session and preserve the reading position."}`,
+      ),
+    ],
+    timestamp: Date.UTC(2026, 8, 10, 12, index),
+    __openclaw: { id: `entry-${index}`, seq: index + 1 },
+  }));
+}
+
+const sidebarKey = (count: number, width: number, motion: string, scheme: string) =>
+  `${entryKey}-${count}-${width}-${motion}-${scheme}`;
 
 declare global {
   interface Window {
@@ -35,6 +59,68 @@ const suite = createControlUiE2eSuite({
   browserLaunchOptions: {
     channel: "chromium",
     args: ["--font-render-hinting=none", "--force-color-profile=srgb"],
+  },
+  resources: {
+    run: async () => {
+      for (const colorScheme of ["light", "dark"] as const) {
+        const context = await suite.newBrowserContext({
+          ...createControlUiE2eContextOptions(),
+          viewport: { width: 1440, height: 900 },
+          deviceScaleFactor: 2,
+          reducedMotion: "no-preference",
+          colorScheme,
+        });
+        const page = await context.newPage();
+        await installControlUiE2eRendererStallProbe(page);
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          const targets = scenarios
+            .filter((scenario) => scenario[0] === "sidebar" && scenario[4] === colorScheme)
+            .map(([, count, width, motion, scheme]) => ({
+              key: sidebarKey(count, width, motion, scheme),
+              messages: entryMessages(count),
+            }));
+          const gateway = await installMockGateway(page, {
+            sessionKey: homeKey,
+            sessionTranscripts: {
+              [homeKey]: { messages: [{ role: "assistant", content: [text(chooseSession)] }] },
+              ...Object.fromEntries(targets.map(({ key, messages }) => [key, { messages }])),
+            },
+            sessions: [
+              { key: homeKey, label: "Home", kind: "direct", updatedAt: 1000 },
+              ...targets.map(({ key }) => ({
+                key,
+                label: "Entry proof",
+                kind: "direct",
+                updatedAt: 2000,
+              })),
+            ],
+            models: [{ id: "mock-model", name: "Mock model", provider: "mock" }],
+            agentModel: "mock/mock-model",
+          });
+          await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          await page.addInitScript(
+            ({ key, ...settings }) => localStorage.setItem(key, JSON.stringify(settings)),
+            {
+              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+              theme: "claw",
+              themeMode: colorScheme,
+            },
+          );
+          sidebarPages.set(colorScheme, { page, gateway, pageErrors });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+          await page.getByText(chooseSession).waitFor();
+        } catch (error) {
+          await captureControlUiE2eFailureDiagnostics(page, {
+            error: error instanceof Error ? error : new Error(String(error)),
+            label: "Chat sidebar entry setup",
+          });
+          throw error;
+        }
+      }
+    },
   },
 });
 const scenarios = (["boot", "direct", "sidebar"] as const).flatMap((entry) =>
@@ -166,47 +252,67 @@ function assertEntryFrames(frames: EntryFrame[], lastEntryId: string) {
 
 suite.define(() => {
   for (const [entry, count, width, reducedMotion, colorScheme] of scenarios) {
-    it(`opens the session frame at its final position: ${entry}, ${count} messages, ${width} px, ${reducedMotion}, ${colorScheme}`, async () => {
-      await suite.withPage(
-        {
-          ...createControlUiE2eContextOptions(),
-          viewport: { width, height: 900 },
-          deviceScaleFactor: 2,
-          reducedMotion,
-          colorScheme,
-        },
-        async ({ page }) => {
-          const pageErrors: string[] = [];
+    it(`opens the session frame at its final position: ${entry}, ${count} messages, ${width} px, ${reducedMotion}, ${colorScheme}`, async (testContext) => {
+      const contextOptions = {
+        ...createControlUiE2eContextOptions(),
+        viewport: { width, height: 900 },
+        deviceScaleFactor: 2,
+        reducedMotion,
+        colorScheme,
+      };
+      const runCase = async ({ page }: { page: Page }) => {
+        const pageErrors = entry === "sidebar" ? sidebarPages.get(colorScheme)!.pageErrors : [];
+        if (entry !== "sidebar") {
           page.on("pageerror", (error) => pageErrors.push(error.message));
-          const target = entry === "boot" ? homeKey : entryKey;
-          const messages = Array.from({ length: count }, (_, index) => ({
-            role: index % 2 ? "assistant" : "user",
-            content: [
-              text(
-                `Entry checkpoint ${index + 1}. ${index % 2 ? "The transcript should appear in its final position." : "Review this session and preserve the reading position."}`,
-              ),
-            ],
-            timestamp: Date.UTC(2026, 8, 10, 12, index),
-            __openclaw: { id: `entry-${index}`, seq: index + 1 },
-          }));
-          const gateway = await installMockGateway(page, {
-            sessionKey: target,
-            sessionTranscripts:
-              entry === "sidebar"
-                ? {
-                    [homeKey]: {
-                      messages: [{ role: "assistant", content: [text(chooseSession)] }],
-                    },
-                    [target]: { messages },
-                  }
-                : { [target]: { messages } },
-            sessions: [
-              { key: homeKey, label: "Home", kind: "direct", updatedAt: 1000 },
-              { key: entryKey, label: "Entry proof", kind: "direct", updatedAt: 2000 },
-            ],
-            models: [{ id: "mock-model", name: "Mock model", provider: "mock" }],
-            agentModel: "mock/mock-model",
+        }
+        const target =
+          entry === "boot"
+            ? homeKey
+            : entry === "sidebar"
+              ? sidebarKey(count, width, reducedMotion, colorScheme)
+              : entryKey;
+        const messages = entryMessages(count);
+        const gateway =
+          entry === "sidebar"
+            ? sidebarPages.get(colorScheme)!.gateway
+            : await installMockGateway(page, {
+                sessionKey: target,
+                sessionTranscripts: { [target]: { messages } },
+                sessions: [
+                  { key: homeKey, label: "Home", kind: "direct", updatedAt: 1000 },
+                  { key: entryKey, label: "Entry proof", kind: "direct", updatedAt: 2000 },
+                ],
+                models: [{ id: "mock-model", name: "Mock model", provider: "mock" }],
+                agentModel: "mock/mock-model",
+              });
+        if (entry === "sidebar") {
+          await page.bringToFront();
+          await page.evaluate(() => {
+            if (window.sessionEntryRecorder) {
+              window.sessionEntryRecorder.done = true;
+            }
           });
+          await navigateToControlUiSession(page, homeKey);
+          await page.setViewportSize({ width, height: 900 });
+          await page.emulateMedia({ reducedMotion, colorScheme });
+          await page.waitForFunction(
+            ({ width: expectedWidth, reducedMotion: expectedMotion }) =>
+              innerWidth === expectedWidth &&
+              matchMedia("(prefers-reduced-motion: reduce)").matches ===
+                (expectedMotion === "reduce") &&
+              document
+                .querySelector(".chat-split-view")
+                ?.classList.contains("chat-split-view--narrow") ===
+                (expectedWidth === 390),
+            { width, reducedMotion },
+          );
+          // Each target is unseen; a retained pane would skip the entry being measured.
+          await page.evaluate(recordEntryFrames, {
+            target,
+            enabled: false,
+            lastEntryId: `entry-${count - 1}`,
+          });
+        } else {
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
           await page.addInitScript(
             ({ key, ...settings }) => localStorage.setItem(key, JSON.stringify(settings)),
@@ -219,54 +325,90 @@ suite.define(() => {
           );
           await page.addInitScript(recordEntryFrames, {
             target,
-            enabled: entry !== "sidebar",
+            enabled: true,
             lastEntryId: `entry-${count - 1}`,
           });
-          const url = controlUiSessionUrl(
-            suite.server.baseUrl,
-            entry === "sidebar" ? homeKey : target,
-          );
+          const url = controlUiSessionUrl(suite.server.baseUrl, target);
           await page.goto(entry === "boot" ? `${suite.server.baseUrl}chat` : url);
-          if (entry === "sidebar") {
-            await page.getByText(chooseSession).waitFor();
-            if (width === 390) {
-              await navigationDrawerToggle(page).click();
-            }
-            const link = page.locator(
-              `[data-session-key="${target}"] a.sidebar-recent-session__link`,
-            );
-            await link.waitFor();
-            await page.evaluate(() => {
-              window.sessionEntryRecorder.enabled = true;
-            });
-            await link.click();
+        }
+        if (entry === "sidebar") {
+          await page.getByText(chooseSession).waitFor();
+          if (width === 390) {
+            await navigationDrawerToggle(page).click();
           }
-          await page.waitForFunction(() => window.sessionEntryRecorder.done, undefined, {
-            timeout: controlUiE2eWaitTimeoutMs,
-          });
-          expect(pageErrors).toEqual([]);
-          const frames = await page.evaluate(() => window.sessionEntryRecorder.frames);
-          await writeFile(
-            path.join(suite.artifactDir, "entry-frames.json"),
-            JSON.stringify(frames, null, 2),
+          const link = page.locator(
+            `[data-session-key="${target}"] a.sidebar-recent-session__link`,
           );
-          expect(
-            await page.evaluate(() => ({
-              width: innerWidth,
-              theme: document.documentElement.dataset.themeMode,
-              reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-              colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
-            })),
-          ).toEqual({
-            width,
-            theme: colorScheme,
-            reducedMotion: reducedMotion === "reduce",
-            colorScheme,
+          await link.waitFor();
+          await page.evaluate(() => {
+            window.sessionEntryRecorder.enabled = true;
           });
-          expect((await gateway.getRequests("chat.startup")).length).toBeGreaterThan(0);
-          assertEntryFrames(frames, `entry-${count - 1}`);
-        },
-      );
+          await link.click();
+        }
+        await page.waitForFunction(() => window.sessionEntryRecorder.done, undefined, {
+          timeout: controlUiE2eWaitTimeoutMs,
+        });
+        expect(pageErrors).toEqual([]);
+        const frames = await page.evaluate(() => window.sessionEntryRecorder.frames);
+        await writeFile(
+          path.join(suite.artifactDir, "entry-frames.json"),
+          JSON.stringify(frames, null, 2),
+        );
+        expect(
+          await page.evaluate(() => ({
+            width: innerWidth,
+            theme: document.documentElement.dataset.themeMode,
+            reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+            colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+          })),
+        ).toEqual({
+          width,
+          theme: colorScheme,
+          reducedMotion: reducedMotion === "reduce",
+          colorScheme,
+        });
+        const startups = await gateway.getRequests("chat.startup");
+        expect(startups.length).toBeGreaterThan(0);
+        if (entry === "sidebar") {
+          expect(await gateway.getRequests("chat.startup", { sessionKey: target })).not.toEqual([]);
+        }
+        assertEntryFrames(frames, `entry-${count - 1}`);
+      };
+      if (entry !== "sidebar") {
+        await suite.withPage(contextOptions, runCase);
+        return;
+      }
+      const { page } = sidebarPages.get(colorScheme)!;
+      let failedClose: Promise<void> | undefined;
+      const closeAfterFailure = (error: unknown) => {
+        failedClose ??= (async () => {
+          await captureControlUiE2eFailureDiagnostics(page, {
+            error: error instanceof Error ? error : new Error(String(error)),
+            label: "Chat sidebar entry",
+          });
+          await suite.closeBrowserContext(page.context());
+        })();
+        return failedClose;
+      };
+      const onAbort = () => void closeAfterFailure(testContext.signal.reason).catch(() => {});
+      testContext.signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        await suite.runScenario(testContext, {
+          run: async () => {
+            try {
+              await runCase({ page });
+            } catch (error) {
+              void closeAfterFailure(error).catch(() => {});
+              throw error;
+            }
+          },
+          close: async () => {
+            await failedClose;
+          },
+        });
+      } finally {
+        testContext.signal.removeEventListener("abort", onAbort);
+      }
     });
   }
 });
