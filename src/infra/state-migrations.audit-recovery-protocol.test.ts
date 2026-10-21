@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import {
   parseAuditRecoveryRestoreJournal as parseJournal,
   serializeAuditRecoveryRestoreJournal as serializeJournal,
 } from "./state-migrations.audit-recovery-protocol.js";
+import { writeAuditRestoreJournal } from "./state-migrations.audit.test-support.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 const sourceRaw = Buffer.from("legacy audit row\n");
@@ -39,42 +39,35 @@ it("recovers released numeric restore journals and refuses replacement files", a
       { replaced: true },
       { replaced: false, observedIno: "9007199254740993", upgrade: true },
       { replaced: true, observedIno: "9007199254740993", exact: true },
-      { replaced: false, observedIno: "-1", storedIno: 18_446_744_073_709_552_000, upgrade: true },
+      {
+        replaced: false,
+        observedIno: "-1",
+        storedIno: 18_446_744_073_709_552_000,
+        upgrade: true,
+      },
       { replaced: true, observedIno: "-1", storedIno: "-2", exact: true },
     ];
     async function makeCase(scenario: (typeof scenarios)[number]) {
       const { replaced } = scenario;
       const directory = fixture.createTempDir("legacy-audit-restore-");
       const file = path.join(directory, "config-audit.jsonl.migrated.raw");
-      const restorePath = `${file}.doctor-scrub-restore`;
-      const progressPath = `${file}.doctor-scrub-progress`;
       await fs.writeFile(file, sourceRaw, { mode: 0o600 });
       const identity = await fs.stat(file);
       const legacyIno = scenario.observedIno ? Number(scenario.observedIno) : identity.ino;
       const ino = scenario.storedIno ?? (scenario.exact ? "9007199254740992" : legacyIno);
       // This is the v2026.10.2 writer's schema, independent of today's serializer.
-      const journal = `${JSON.stringify({
-        schemaVersion: scenario.exact ? 7 : 6,
-        rawBase64: sourceRaw.toString("base64"),
-        scrubPatternBase64: scrubPattern.toString("base64"),
-        target: {
-          dev: scenario.exact ? String(identity.dev) : identity.dev,
-          ino,
-          size: sourceRaw.length,
+      const journal = await writeAuditRestoreJournal(
+        file,
+        sourceRaw,
+        { restoredBytes: 0, scrubbedBytes: sourceRaw.length },
+        {
+          schemaVersion: scenario.exact ? 7 : 6,
+          target: {
+            dev: scenario.exact ? String(identity.dev) : identity.dev,
+            ino,
+            size: sourceRaw.length,
+          },
         },
-      })}\n`;
-      await fs.writeFile(restorePath, journal, { mode: 0o600 });
-      await fs.writeFile(
-        progressPath,
-        JSON.stringify({
-          schemaVersion: 1,
-          journalHash: createHash("sha256").update(journal).digest("hex"),
-          direction: "scrubbing",
-          committedBytes: sourceRaw.length,
-          pendingEnd: sourceRaw.length,
-          extentBytes: sourceRaw.length,
-        }),
-        { mode: 0o600 },
       );
       await fs.writeFile(file, scrubbed);
       if (replaced) {
@@ -92,13 +85,7 @@ it("recovers released numeric restore journals and refuses replacement files", a
       runNodeScript(
         (workerArgv) => [
           ...workerArgv(resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.auditRecovery)),
-          JSON.stringify(
-            cases.map(({ directory, observedIno, upgrade }) => ({
-              directory,
-              observedIno,
-              upgrade,
-            })),
-          ),
+          JSON.stringify(cases),
         ],
         process.env,
         undefined,

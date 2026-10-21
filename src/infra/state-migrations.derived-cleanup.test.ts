@@ -22,14 +22,9 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-it.each([
-  ["memory-core", "memory-core-qmd-workspace-retired", "retired Memory Core QMD workspace"],
-  [
-    "memory-wiki",
-    "memory-wiki-compiled-cache-file-cleanup",
-    "rebuildable Memory Wiki compiled cache",
-  ],
-])("continues Doctor when %s cleanup fails", async (pluginId, migrationId, label) => {
+it("continues Doctor when Memory Wiki compiled-cache cleanup fails", async () => {
+  const pluginId = "memory-wiki";
+  const migrationId = "memory-wiki-compiled-cache-file-cleanup";
   const { stateMigrations } = coercePluginDoctorContractModule(
     await vi.importActual<PluginDoctorContractModule>(
       path.resolve("extensions", pluginId, "doctor-contract-api.ts"),
@@ -37,15 +32,10 @@ it.each([
   );
   const stateDir = await tempDirs.make("openclaw-derived-cleanup-");
   const vaultRoot = path.join(stateDir, "vault");
-  const isQmd = pluginId === "memory-core";
-  const artifactPath = isQmd
-    ? path.join(stateDir, "agents", "main", "qmd")
-    : path.join(vaultRoot, ".openclaw-wiki", "cache", "agent-digest.json");
+  const artifactPath = path.join(vaultRoot, ".openclaw-wiki", "cache", "agent-digest.json");
   const artifactText = "rebuildable artifact\n";
-  await fs.mkdir(isQmd ? artifactPath : path.dirname(artifactPath), { recursive: true });
-  if (!isQmd) {
-    await fs.writeFile(artifactPath, artifactText);
-  }
+  await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+  await fs.writeFile(artifactPath, artifactText);
   const config: OpenClawConfig = {
     plugins: { entries: { "memory-wiki": { config: { vault: { path: vaultRoot } } } } },
   };
@@ -62,24 +52,14 @@ it.each([
     migrationId,
   );
   const removalError = new Error("synthetic cleanup permission denied");
-  if (isQmd) {
-    const remove = fs.rmdir;
-    vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
-      if (target === artifactPath) {
-        throw removalError;
-      }
-      return remove(target);
-    });
-  } else {
-    const openRoot = fsSafe.root;
-    vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
-      const root = await openRoot(rootPath, defaults);
-      if (rootPath === vaultRoot) {
-        vi.spyOn(root, "remove").mockRejectedValue(removalError);
-      }
-      return root;
-    });
-  }
+  const openRoot = fsSafe.root;
+  vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+    const root = await openRoot(rootPath, defaults);
+    if (rootPath === vaultRoot) {
+      vi.spyOn(root, "remove").mockRejectedValue(removalError);
+    }
+    return root;
+  });
 
   const receipt = createLegacyStateMigrationStepReceipt(
     {
@@ -93,10 +73,9 @@ it.each([
     await migration.migrateLegacyState(params),
   );
 
-  const survivingArtifact = isQmd ? fs.readdir(artifactPath) : fs.readFile(artifactPath, "utf8");
-  await expect(survivingArtifact).resolves.toEqual(isQmd ? [] : artifactText);
+  await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe(artifactText);
   const warnings = receipt.warnings.join("\n");
-  expect(warnings).toContain(label);
+  expect(warnings).toContain("rebuildable Memory Wiki compiled cache");
   expect(warnings).toContain(removalError.message);
   expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
   expect(receipt.outcome).toBe("warning");

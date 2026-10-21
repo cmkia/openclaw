@@ -12,7 +12,6 @@ import {
   detectLegacyStateMigrations,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
-import { createLegacyStateMigrationStepReceipt } from "./state-migrations.messages.js";
 import { captureLegacyStateSnapshotIdentity } from "./state-migrations.plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -149,27 +148,16 @@ it.each([
         failures: requiredFailure ? [requiredWarning] : [],
       },
     });
-    const receipt = createLegacyStateMigrationStepReceipt(
-      {
-        id: "migration-detection",
-        phase: "shared",
-        source: [],
-        target: [],
-        requiredness: "required",
-        reversibility: "not-applicable",
-      },
-      { ...detected, changes: [] },
-    );
-    expect(receipt.outcome).toBe(refused ? "refused" : "deferred");
-    expect(receipt.warnings).toContainEqual(
+    expect(detected.warningDisposition).toBe(refused ? undefined : "recoverable");
+    expect(detected.outcome).toBe(refused ? undefined : "deferred");
+    expect(detected.warnings).toContainEqual(
       expect.stringContaining(database ? "ownership metadata is missing" : "select an agent owner"),
     );
     if (refused) {
-      expect(receipt.refusal?.message).toContain(
+      expect(detected.warnings.join("\n")).toContain(
         requiredFailure ? requiredWarning : "ownership metadata is missing",
       );
     } else {
-      expect(receipt.refusal).toBeUndefined();
       const snapshot = { homeDir: root, stateDir, configPath };
       const identityBefore = await captureLegacyStateSnapshotIdentity(snapshot);
       const plan = await planLegacyStateMigrationsReadOnly({
@@ -178,7 +166,7 @@ it.each([
         snapshot,
         env,
       });
-      expect(plan.warnings).toEqual(expect.arrayContaining(receipt.warnings));
+      expect(plan.warnings).toEqual(expect.arrayContaining(detected.warnings));
       expect(plan.steps.find((step) => step.id === "migration-detection")?.refusal).toBeUndefined();
       expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
       expect(await captureLegacyStateSnapshotIdentity(snapshot)).toEqual(identityBefore);

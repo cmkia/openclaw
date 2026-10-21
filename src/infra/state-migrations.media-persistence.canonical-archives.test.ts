@@ -168,6 +168,8 @@ function fixture(
     env,
     read,
     recoveryDirectories,
+    migrate: () => migrateLegacyMediaPersistence({ env }),
+    bytes: () => fs.readFileSync(archivePath),
   };
 }
 
@@ -309,9 +311,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
       }
       return prepare.call(this, sql);
     });
-    const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
-      observed.mockRestore(),
-    );
+    const result = await f.migrate().finally(() => observed.mockRestore());
     expect(result.warningDisposition).toBe("recoverable");
     expect(result.warnings).toHaveLength(6);
     expect(result.warnings[0]).toContain("Missing 121 canonical transcript archive file(s)");
@@ -345,7 +345,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
         Array.from({ length: 40 }, (_, index) => String(index).padStart(3, "0")),
       );
     }
-    expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
+    expect(await f.migrate()).toEqual({
       changes: [],
       warnings: result.warnings,
       warningDisposition: "recoverable",
@@ -360,8 +360,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
     async (_label, encoding, content, fileContent) => {
       const f = fixture({ encoding, content, fileContent });
       const before = f.read();
-      const originalFile = fs.readFileSync(f.archivePath);
-      const result = await migrateLegacyMediaPersistence({ env: f.env });
+      const originalFile = f.bytes();
+      const result = await f.migrate();
       expect(result.warnings).toEqual([]);
       const backups = f.recoveryDirectories();
       expect(backups).toHaveLength(1);
@@ -376,9 +376,9 @@ describe("media migration of canonical SQLite transcript archives", () => {
       expectCanonical(after);
       expectPreservedIdentity(before, after);
       expect(after.published_at).toBe(publishedAt);
-      expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(after.archive_blob));
+      expect(f.bytes()).toEqual(Buffer.from(after.archive_blob));
       if (fileContent === canonicalContent) {
-        expect(fs.readFileSync(f.archivePath)).toEqual(originalFile);
+        expect(f.bytes()).toEqual(originalFile);
         expect(Buffer.from(after.archive_blob)).toEqual(originalFile);
       }
       expect(
@@ -390,9 +390,9 @@ describe("media migration of canonical SQLite transcript archives", () => {
         }),
       ).toBe(f.archivePath);
 
-      expectNoChanges(await migrateLegacyMediaPersistence({ env: f.env }));
+      expectNoChanges(await f.migrate());
       expect(f.read()).toEqual(after);
-      expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(after.archive_blob));
+      expect(f.bytes()).toEqual(Buffer.from(after.archive_blob));
       expect(f.recoveryDirectories()).toEqual(backups);
     },
   );
@@ -420,12 +420,12 @@ describe("media migration of canonical SQLite transcript archives", () => {
   ])("preserves an owned file when its canonical $failure is invalid", async (options) => {
     const f = fixture({ ...options, fileContent: legacyContent });
     const before = f.read();
-    const ownedFile = fs.readFileSync(f.archivePath);
-    const result = await migrateLegacyMediaPersistence({ env: f.env });
+    const ownedFile = f.bytes();
+    const result = await f.migrate();
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(f.read()).toEqual(before);
     // Falling through to the standalone legacy-file pass would silently mutate this file.
-    expect(fs.readFileSync(f.archivePath)).toEqual(ownedFile);
+    expect(f.bytes()).toEqual(ownedFile);
   });
 
   it("repairs earlier archives before reporting an unreadable later copy", async () => {
@@ -443,36 +443,34 @@ describe("media migration of canonical SQLite transcript archives", () => {
       }
       return readFileSync(file, options);
     });
-    const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
-      reads.mockRestore(),
-    );
+    const result = await f.migrate().finally(() => reads.mockRestore());
     expect(result.warnings.join("\n")).toContain("synthetic unreadable archive copy");
     expect(
       f.read().archive_sha256,
       "earlier archive must commit before a later unreadable copy",
     ).toBe(sha256(Buffer.from(canonicalContent)));
     expectCanonical(f.read());
-    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(canonicalContent));
+    expect(f.bytes()).toEqual(Buffer.from(canonicalContent));
   });
 
   it("keeps a verified canonical archive byte-identical", async () => {
     const content = ` ${JSON.stringify(canonicalEvent)} \n ${JSON.stringify(preservedEvent)} `;
     const f = fixture({ content });
     const before = f.read();
-    expectNoChanges(await migrateLegacyMediaPersistence({ env: f.env }));
+    expectNoChanges(await f.migrate());
     expect(f.read()).toEqual(before);
-    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
+    expect(f.bytes()).toEqual(Buffer.from(before.archive_blob));
     expect(f.recoveryDirectories()).toEqual([]);
 
     const reads = vi.spyOn(fs, "readFileSync");
-    expectNoChanges(await migrateLegacyMediaPersistence({ env: f.env }));
+    expectNoChanges(await f.migrate());
     expect(reads.mock.calls.filter(([file]) => file === f.archivePath)).toEqual([]);
     reads.mockRestore();
 
     // A restored legacy copy invalidates the fact even at the same application version.
     fs.writeFileSync(f.archivePath, legacyContent);
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
-    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
+    expect((await f.migrate()).warnings).toEqual([]);
+    expect(f.bytes()).toEqual(Buffer.from(before.archive_blob));
 
     {
       using database = openDatabase(f.databasePath);
@@ -481,7 +479,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
         .prepare("UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ?")
         .run(bytes, sha256(bytes));
     }
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
+    expect((await f.migrate()).warnings).toEqual([]);
     expectCanonical(f.read());
     {
       using database = openDatabase(f.databasePath);
@@ -489,7 +487,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
         .prepare("UPDATE session_transcript_archives SET archive_blob = ?")
         .run(Buffer.from("corrupt"));
     }
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings.join("\n")).toContain(
+    expect((await f.migrate()).warnings.join("\n")).toContain(
       "Canonical SQLite transcript archive is corrupt",
     );
   });
@@ -515,7 +513,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
 
   it("retains a normalized pending blob after publication fails and recovers on the next pass", async () => {
     const f = fixture();
-    const originalFile = fs.readFileSync(f.archivePath);
+    const originalFile = f.bytes();
     const renameSync = fs.renameSync;
     let failed = false;
     const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
@@ -525,7 +523,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
       }
       return renameSync(source, destination);
     });
-    const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() => {
+    const result = await f.migrate().finally(() => {
       rename.mockRestore();
     });
     expect(failed).toBe(true);
@@ -534,10 +532,10 @@ describe("media migration of canonical SQLite transcript archives", () => {
     expectCanonical(pending);
     expect(pending.published_at).toBeNull();
     // A second standalone attempt would succeed after the one-shot failure and violate this state.
-    expect(fs.readFileSync(f.archivePath)).toEqual(originalFile);
+    expect(f.bytes()).toEqual(originalFile);
 
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
+    expect((await f.migrate()).warnings).toEqual([]);
     expectCanonical(f.read());
-    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(pending.archive_blob));
+    expect(f.bytes()).toEqual(Buffer.from(pending.archive_blob));
   });
 });

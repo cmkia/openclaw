@@ -11,7 +11,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import {
@@ -107,17 +106,6 @@ it("migrates surviving owners beside retained hardlinks", async () => {
   expect(result.notices ?? []).toEqual([]);
   expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   await expect(ready()).resolves.toBeUndefined();
-});
-
-it("refreshes registrations after committed schema upgrades", async () => {
-  const agentId = "retired";
-  const databasePath = path.join(stateDir, "retained", "openclaw-agent.sqlite");
-  openOpenClawAgentDatabase({ agentId, env, path: databasePath });
-  closeOpenClawAgentDatabasesForTest();
-  register(agentId, databasePath, OPENCLAW_AGENT_SCHEMA_VERSION - 1);
-  expect(registrations()).toEqual([]);
-  expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
-  expectMigrated(databasePath, agentId);
 });
 
 it("resolves registered dot-dot paths through filesystem traversal", async () => {

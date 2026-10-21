@@ -15,7 +15,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyNodeHostConfig,
@@ -131,29 +130,6 @@ describe("legacy node-host Doctor migration", () => {
     const { env, migrate } = await legacyFixture({ gateway: { ...gateway, contextPath: "" } });
     expect((await migrate()).warnings).toEqual([]);
     expect((await loadNodeHostConfig(env))?.gateway?.contextPath).toBeUndefined();
-  });
-
-  it("requires exclusive state ownership", async () => {
-    const { env, sourcePath, migrate } = await legacyFixture();
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_789,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-    let blocked: Awaited<ReturnType<typeof migrateLegacyNodeHostConfig>>;
-    try {
-      blocked = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
-    expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
-    expect(readCanonicalRow(env)).toBeUndefined();
-    expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
   it.each([

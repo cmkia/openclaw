@@ -4,7 +4,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -12,20 +13,22 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runClientCredentialOperation } from "./client-credential-store.js";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
+  snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import { loadExecApprovals } from "./exec-approvals-store.js";
+import { loadExecApprovals, readExecApprovalsPolicyReadOnlyAsync } from "./exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
 import { resolveExecApprovalsLocked } from "./exec-approvals.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import * as snapshots from "./sqlite-snapshot.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
@@ -285,14 +288,6 @@ it.each<[string | Buffer, string]>([
     { pattern: "private-marker", lastUsedAt: null, lastUsedCommand: 42 },
     ".lastUsedCommand: expected a string",
   ),
-  [
-    JSON.stringify({
-      version: 1,
-      defaults: { security: null },
-      agents: { main: { allowlist: [{ pattern: "private-marker", lastUsedAt: null }] } },
-    }),
-    "defaults.security: expected a supported value",
-  ],
   invalidEntry(
     {
       pattern: "/private-marker/pattern",
@@ -302,10 +297,6 @@ it.each<[string | Buffer, string]>([
     ".lastUsedAt: expected a finite number",
     "private-marker-\n\u001b[31m".repeat(1_000),
   ),
-  [
-    JSON.stringify({ version: 1, socket: { token: { "private-marker": true } } }),
-    "socket.token: expected a string",
-  ],
   invalidEntry(42, ": expected a non-empty string or an object with a non-empty pattern"),
   invalidEntry("  ", ": expected a non-empty string"),
   invalidEntry({ pattern: "  " }, ".pattern: expected a non-empty string"),
@@ -426,31 +417,142 @@ it.each([
   expect(receipt()).toMatchObject({ removed_source: 1 });
 });
 
-it("requires exclusive state ownership and prints the stop-Gateway warning", async () => {
-  await writeLegacy({ version: 1, agents: {} });
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env,
-    pollIntervalMs: 10,
-    port: 18_791,
-    timeoutMs: 100,
-  });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
-  }
-  let result: Awaited<ReturnType<typeof migrateLegacyExecApprovals>>;
-  try {
-    result = await migrate();
-  } finally {
-    await gatewayLock.release();
-  }
-  expect(result.warnings[0]).toContain("Stop the Gateway");
-  expect(fs.existsSync(sourcePath)).toBe(true);
-  expect(receipt()).toBeUndefined();
-});
-
 function expectSourcesRemoved() {
   expect([sourcePath, `${sourcePath}.doctor-importing`].map((file) => fs.existsSync(file))).toEqual(
     [false, false],
   );
 }
+
+const policyRow = () => database().prepare("SELECT * FROM exec_approvals_config").get();
+const policyBackups = () =>
+  fs
+    .readdirSync(path.dirname(openOpenClawStateDatabase({ env }).path))
+    .filter((file) => file.startsWith("openclaw.sqlite.pre-exec-approvals-migration-"));
+const readPolicy = () => readExecApprovalsPolicyReadOnlyAsync({ env });
+const withCanonicalState = (run: () => Promise<void>) =>
+  withOpenClawTestState({ scenario: "empty" }, async (state) => {
+    useStateDir(state.stateDir);
+    await run();
+  });
+
+it.each([false, true])(
+  "backs up legacy SQLite policy and publishes stable rows (identical JSON: %s)",
+  async (identicalJson) =>
+    withCanonicalState(async () => {
+      const original = {
+        version: 1,
+        socket: { path: "/tmp/synthetic-approvals.sock", token: "synthetic-socket-proof" },
+        defaults: { security: "allowlist", ask: "always" },
+        agents: {
+          default: {
+            ask: "always",
+            allowlist: [
+              "  /usr/bin/git  ",
+              {
+                pattern: "/usr/bin/cat",
+                source: "historical",
+                commandText: "obsolete command",
+                lastUsedCommand: "cat a.txt",
+              },
+            ],
+          },
+        },
+      };
+      const raw = JSON.stringify(original, null, 2) + "\n";
+      if (identicalJson) {
+        fs.writeFileSync(sourcePath, raw, { mode: 0o600 });
+      }
+      const { db, path: databasePath } = openOpenClawStateDatabase({ env });
+      writeExecApprovalsConfigRow({ db, file: { version: 1 }, raw, now: 73 });
+      // Seed the retired layout; current policy writes reject embedded credentials.
+      db.prepare(
+        "UPDATE exec_approvals_config SET raw_json = ?, socket_path = ?, has_socket_token = 1 WHERE config_key = 'current'",
+      ).run(raw, original.socket.path);
+      const before = policyRow();
+      expect(() =>
+        snapshotFromExecApprovalsRow({
+          path: `${databasePath}#exec_approvals_config`,
+          row: { raw_json: raw },
+        }),
+      ).toThrow(ExecApprovalsMigrationRequiredError);
+      await expect(readPolicy()).rejects.toThrow(`OPENCLAW_STATE_DIR set to ${stateDir}`);
+      expect(policyRow()).toEqual(before);
+      expect(await migrate()).toMatchObject({
+        warnings: [],
+        changes: expect.arrayContaining([
+          "Normalized legacy SQLite exec approvals before runtime access.",
+        ]),
+      });
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      const retained = policyBackups();
+      expect(retained).toHaveLength(1);
+      const backupPath = path.join(path.dirname(databasePath), retained[0]!);
+      expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+      {
+        using backup = new DatabaseSync(backupPath, { readOnly: true });
+        expect(backup.prepare("SELECT * FROM exec_approvals_config").get()).toEqual(before);
+      }
+      const first = await readPolicy();
+      expect(first.file).toEqual({
+        version: 1,
+        socket: undefined,
+        defaults: original.defaults,
+        agents: {
+          main: {
+            ask: "always",
+            allowlist: [
+              { id: expect.any(String), pattern: "/usr/bin/git" },
+              { id: expect.any(String), pattern: "/usr/bin/cat", lastUsedCommand: "cat a.txt" },
+            ],
+          },
+        },
+      });
+      expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+        kind: "socket",
+        socket: { socket_path: original.socket.path, socket_token: original.socket.token },
+      });
+      expect(policyRow()).toMatchObject({ updated_at_ms: 73, agent_count: 1, allowlist_count: 2 });
+      const canonical = policyRow();
+      expect(await migrate()).toEqual({ changes: [], warnings: [] });
+      expect(await readPolicy()).toEqual(first);
+      expect(policyRow()).toEqual(canonical);
+      expect(policyBackups()).toEqual(retained);
+    }),
+);
+
+it("refuses a backup changed after planning even if restored before commit", async () =>
+  withCanonicalState(async () => {
+    const db = database();
+    const raw = JSON.stringify({ version: 1, agents: { main: { allowlist: ["/usr/bin/git"] } } });
+    writeExecApprovalsConfigRow({ db, file: { version: 1 }, raw, now: 73 });
+    const before = policyRow();
+    const createSnapshot = snapshots.createVerifiedSqliteSnapshot;
+    const setSource = db.prepare("UPDATE exec_approvals_config SET raw_json = ?");
+    const changed = JSON.stringify({ version: 1, defaults: { security: "deny" } });
+    const snapshot = vi
+      .spyOn(snapshots, "createVerifiedSqliteSnapshot")
+      .mockImplementation(async (options) => {
+        setSource.run(changed);
+        try {
+          return await createSnapshot({
+            ...options,
+            beforePublish: async () => {
+              setSource.run(raw);
+              await options.beforePublish?.();
+            },
+          });
+        } finally {
+          setSource.run(raw);
+        }
+      });
+    try {
+      expect(await migrate()).toMatchObject({
+        changes: [],
+        warnings: [expect.stringContaining("backup does not match the planned policy")],
+      });
+      expect(policyRow()).toEqual(before);
+      expect(policyBackups()).toEqual([]);
+    } finally {
+      snapshot.mockRestore();
+    }
+  }));

@@ -132,13 +132,18 @@ export async function writeAuditRestoreJournal(
     restoredBytes: 0,
     scrubbedBytes: 0,
   },
-): Promise<void> {
+  identity?: {
+    schemaVersion: 6 | 7;
+    target: { dev: number | string; ino: number | string; size: number };
+  },
+): Promise<string> {
   const stat = await fs.stat(rawPath);
   const journal = jsonLine({
     schemaVersion: 6,
     rawBase64: sourceRaw.toString("base64"),
     scrubPatternBase64: AUDIT_SCRUB_PATTERN.toString("base64"),
     target: { dev: stat.dev, ino: stat.ino, size: sourceRaw.length },
+    ...identity,
   });
   await fs.writeFile(
     `${rawPath}.doctor-scrub-progress`,
@@ -150,8 +155,14 @@ export async function writeAuditRestoreJournal(
       pendingEnd: progress.restoredBytes || progress.scrubbedBytes,
       extentBytes: progress.restoredBytes > 0 ? progress.scrubbedBytes : sourceRaw.length,
     }),
+    identity ? { mode: 0o600 } : undefined,
   );
-  await fs.writeFile(`${rawPath}.doctor-scrub-restore`, journal);
+  await fs.writeFile(
+    `${rawPath}.doctor-scrub-restore`,
+    journal,
+    identity ? { mode: 0o600 } : undefined,
+  );
+  return journal;
 }
 
 function onStateRoot(

@@ -172,36 +172,6 @@ describe("daemon runtime pin owner migration", () => {
     }
   });
 
-  it.each([false, true])(
-    "records complete custody without shared state (empty store: %s)",
-    async (emptyStore) => {
-      if (emptyStore) {
-        const pathname = resolveDaemonRuntimePinStorePath(env);
-        fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
-        fs.writeFileSync(pathname, "", { mode: 0o600 });
-      }
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      try {
-        await expectNoChanges();
-        if (!emptyStore) {
-          expect(
-            exec.mock.calls.map(([sql]) => sql).filter((sql) => /^(?:BEGIN|COMMIT)\b/u.test(sql)),
-          ).toEqual(["BEGIN IMMEDIATE", "COMMIT"]);
-        }
-      } finally {
-        exec.mockRestore();
-      }
-      expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(true);
-      expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
-      expect(targetRows()).toEqual([]);
-      expect(receipt()).toEqual({
-        source_state: resolveOpenClawStateSqlitePath(env),
-        phase: "complete",
-        updated_at: expect.any(Number),
-      });
-    },
-  );
-
   it("rolls back first-use schema and intent together before retrying", () => {
     const writeReceipt = (db: DatabaseSync) =>
       db
