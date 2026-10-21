@@ -233,8 +233,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared database-engine host and worker adapters.
       // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
       // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
-      // +1: approved Tavily wire-normalization facade shared by Tavily and ClawRouter.
-      158,
+      157,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -293,8 +292,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared message-tool source-reply finality resolver.
       // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
-      // +2: shared Tavily result-URL and search-response normalizers; no transport/auth exports.
-      3815,
+      3813,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -338,8 +336,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
       // +1: the same awaited web_search policy preparation.
       // +2: the same shared Decisions support predicate and evaluator.
-      // +2: the same two Tavily wire-normalization functions.
-      2212,
+      2210,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

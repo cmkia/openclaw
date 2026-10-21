@@ -484,7 +484,8 @@
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
-    "!dist/plugin-sdk/terminal-safe-text.d.ts"
+    "!dist/plugin-sdk/terminal-safe-text.d.ts",
+    "!dist/plugin-sdk/provider-web-search-tavily.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1609,7 +1610,6 @@
       "default": "./dist/plugin-sdk/provider-web-search.js"
     },
     "./plugin-sdk/provider-web-search-tavily": {
-      "types": "./dist/plugin-sdk/provider-web-search-tavily.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search-tavily.js"
     },
     "./plugin-sdk/retry-runtime": {

@@ -249,11 +249,17 @@ it("keeps a persisted automation profile and endpoint when another ClawRouter pr
           });
           // A later route change cannot send the standing account to a different endpoint.
           const callsBeforeRouteChange = paths.length;
-          await expect(
-            search(savedBinding.profileId, "https://other-router.example/v1"),
-          ).resolves.toMatchObject({
-            details: { error: "provider_error" },
-          });
+          for (const selectedUrl of [
+            "https://other-router.example/v1",
+            "https://other-router.example/v1/native/anthropic",
+            origin.replace("://", "://user:pass@") + "/v1/native/anthropic",
+            origin + "/v1/native/google/v1beta?token=bad",
+            origin + "/v1/native/anthropic#fragment",
+          ]) {
+            await expect(search(savedBinding.profileId, selectedUrl)).resolves.toMatchObject({
+              details: { error: "provider_error" },
+            });
+          }
           expect(paths).toHaveLength(callsBeforeRouteChange);
           const cancelled = new AbortController();
           cancelled.abort(new Error("cancel selected automation"));

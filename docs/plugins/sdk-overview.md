@@ -156,15 +156,6 @@ See [docked link readers](/plugins/sdk-overview/host-hooks#docked-link-readers) 
   </Card>
 </CardGroup>
 
-## Tavily wire response normalization
-
-`openclaw/plugin-sdk/provider-web-search-tavily` shares
-`normalizeTavilySearchResponse` and `normalizeTavilyResultUrl` between native
-Tavily and router adapters. It bounds and wraps untrusted source content while
-preserving citation URLs, scores, and publication dates. It does not resolve
-credentials, choose endpoints, fetch URLs, or own caches; those remain with the
-calling provider.
-
 ## Provider-backed search accounts
 
 A search provider declaring `authProviderId` receives the active model’s selected

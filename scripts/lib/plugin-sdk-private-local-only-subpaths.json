@@ -154,6 +154,7 @@
   "provider-web-search",
   "provider-web-search-config-contract",
   "provider-web-search-contract",
+  "provider-web-search-tavily",
   "qa-channel",
   "qa-channel-protocol",
   "qa-lab",

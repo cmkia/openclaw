@@ -83,15 +83,22 @@ export async function searchClawRouterTavily(params: {
       );
     }
     const baseUrl = root.href.endsWith("/") ? root.href.slice(0, -1) : root.href;
-    // A standing automation account belongs to its selected model route, not a later default.
-    if (
-      params.authProfile?.baseUrl &&
-      normalizeClawRouterRootUrl(params.authProfile.baseUrl) !==
-        normalizeClawRouterRootUrl(provider?.baseUrl)
-    ) {
-      throw new Error(
-        "ClawRouter search endpoint changed for the selected account; explicitly select the account again.",
-      );
+    // Native Claude/Gemini model URLs include a transport suffix, not a different router.
+    // Only compare roots; keep the original selected route for locked-profile resolution.
+    if (params.authProfile?.baseUrl) {
+      const selected = new URL(params.authProfile.baseUrl);
+      selected.pathname = selected.pathname.replace(/\/v1(?:\/native\/[^/]+(?:\/.*)?)?\/?$/u, "");
+      if (
+        selected.username ||
+        selected.password ||
+        selected.search ||
+        selected.hash ||
+        selected.href.replace(/\/$/u, "") !== baseUrl
+      ) {
+        throw new Error(
+          "ClawRouter search endpoint changed for the selected account; explicitly select the account again.",
+        );
+      }
     }
     const auth = await resolveApiKeyForProvider({
       provider: "clawrouter",

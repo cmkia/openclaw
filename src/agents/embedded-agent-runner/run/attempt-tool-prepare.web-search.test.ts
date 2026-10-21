@@ -8,7 +8,10 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "../../../plugin-sdk/plugin-test-contracts.js";
+import { withServer } from "../../../plugin-sdk/test-env.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../../plugins/web-provider-public-artifacts.explicit.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,6 +23,7 @@ import {
 } from "../../admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { persistAuthProfileBatch } from "../../auth-profiles/upsert-with-lock.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createWebSearchTool } from "../../tools/web-search.js";
@@ -339,5 +343,178 @@ it.each(["clawrouter", "other-provider"])(
         },
       );
     });
+  },
+);
+
+it.each([
+  {
+    api: "anthropic-messages" as const,
+    route: "/v1/native/anthropic",
+    modelId: "anthropic/claude-fixture",
+  },
+  {
+    api: "google-generative-ai" as const,
+    route: "/v1/native/google/v1beta",
+    modelId: "google/gemini-fixture",
+  },
+])(
+  "searches with the selected attempt account on the $api native route",
+  async ({ api, route, modelId }) => {
+    const native = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: ["clawrouter"],
+      manifestRecords: loadPluginManifestRegistryCore().plugins,
+    })?.find((provider) => provider.id === "clawrouter-tavily");
+    assert(native);
+    const seen: Array<{ path: string | undefined; auth: string | undefined }> = [];
+    await withServer(
+      (request, response) => {
+        seen.push({ path: request.url, auth: request.headers.authorization });
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify(
+            request.url === "/v1/catalog"
+              ? {
+                  version: "clawrouter.client-catalog.v1",
+                  providers: [
+                    {
+                      id: "tavily",
+                      allowed: true,
+                      executable: true,
+                      nativeBaseUrl: "/v1/native/tavily",
+                      routes: [
+                        {
+                          path: "/search",
+                          methods: ["POST"],
+                          requestFormat: "tavily.search",
+                          responseFormat: "tavily.search",
+                        },
+                      ],
+                      models: [
+                        { id: "tavily/search", upstream: "search", capabilities: ["web.search"] },
+                      ],
+                    },
+                  ],
+                }
+              : {
+                  results: [
+                    {
+                      title: "Native source",
+                      content: "Evidence",
+                      url: "https://example.com/native",
+                    },
+                  ],
+                },
+          ),
+        );
+      },
+      async (origin) => {
+        const profileId = "clawrouter:native-attempt-fixture";
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId: "clawrouter:default-fixture",
+              credential: {
+                type: "api_key",
+                provider: "clawrouter",
+                key: "synthetic-default-native-key",
+              },
+            },
+            {
+              profileId,
+              credential: {
+                type: "api_key",
+                provider: "clawrouter",
+                key: "synthetic-selected-native-key",
+              },
+            },
+          ],
+          order: { clawrouter: ["clawrouter:default-fixture", profileId] },
+        });
+        const config: OpenClawConfig = {
+          tools: {
+            codeMode: false,
+            toolSearch: { enabled: false },
+            web: { search: { provider: "clawrouter-tavily" } },
+          },
+          plugins: { entries: { clawrouter: { enabled: true } } },
+          models: {
+            providers: {
+              clawrouter: {
+                baseUrl: origin + "/v1",
+                models: [],
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+          auth: {
+            profiles: {
+              [profileId]: { provider: "clawrouter", mode: "api_key" },
+              "clawrouter:default-fixture": { provider: "clawrouter", mode: "api_key" },
+            },
+            order: { clawrouter: ["clawrouter:default-fixture", profileId] },
+          },
+        };
+        const registry = createPluginRegistryFixture(config);
+        registerVirtualTestPlugin({
+          ...registry,
+          id: "clawrouter",
+          name: "ClawRouter",
+          contracts: { webSearchProviders: ["clawrouter-tavily"] },
+          register(plugin) {
+            plugin.registerWebSearchProvider(native);
+          },
+        });
+        // Isolate unrelated coding tools, not preparation, provider selection, auth, or transport.
+        codingTools.mockImplementation((options) => {
+          const tool = createWebSearchTool(options);
+          return tool ? [tool] : [];
+        });
+        for (const key of [
+          "CLAWROUTER_API_KEY",
+          "HTTP_PROXY",
+          "HTTPS_PROXY",
+          "ALL_PROXY",
+          "http_proxy",
+          "https_proxy",
+          "all_proxy",
+        ]) {
+          vi.stubEnv(key, "");
+        }
+        try {
+          await withPluginRuntimeRegistryScope(registry.registry.registry, async () => {
+            await using fixture = await createFixture({
+              config,
+              agentDir: state.agentDir(),
+              provider: "clawrouter",
+              modelId,
+              authProfileId: profileId,
+              authProfileIdSource: "user",
+              model: makeProviderModelFixture({
+                id: modelId,
+                provider: "clawrouter",
+                api,
+                baseUrl: origin + route,
+              }),
+            });
+            const tool = fixture.result.toolsRaw.find((entry) => entry.name === "web_search");
+            assert(tool);
+            await expect(
+              tool.execute("native-attempt-search", { query: "native citation" }),
+            ).resolves.toMatchObject({
+              details: {
+                provider: "clawrouter-tavily",
+                results: [{ url: "https://example.com/native" }],
+              },
+            });
+          });
+        } finally {
+          vi.unstubAllEnvs();
+        }
+        expect(seen).toEqual([
+          { path: "/v1/catalog", auth: "Bearer synthetic-selected-native-key" },
+          { path: "/v1/native/tavily/search", auth: "Bearer synthetic-selected-native-key" },
+        ]);
+      },
+    );
   },
 );
