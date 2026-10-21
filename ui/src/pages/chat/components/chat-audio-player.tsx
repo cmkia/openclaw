@@ -1,5 +1,6 @@
-import { createMemo, createStore, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -438,13 +439,16 @@ function ChatAudioPlayerContent(
       />
     );
     const Waveform = () => {
-      onCleanup(() => {
-        waveformResizeObserver?.disconnect();
-        waveformResizeObserver = null;
-        waveformElement = null;
+      const waveformRef = elementRef((element: HTMLDivElement) => {
+        setWaveform(element);
+        return () => {
+          waveformResizeObserver?.disconnect();
+          waveformResizeObserver = null;
+          waveformElement = null;
+        };
       });
       return (
-        <div class="chat-audio-player__waveform" ref={setWaveform}>
+        <div class="chat-audio-player__waveform" ref={[waveformRef]}>
           <svg
             viewBox={`0 0 ${displayedPeaks().length} 24`}
             preserveAspectRatio="none"
@@ -485,7 +489,7 @@ function ChatAudioPlayerContent(
       waveformVisible = true;
       void prepareWaveformAudio().catch(() => undefined);
     });
-    onCleanup(() => {
+    const playerRef = elementRef<HTMLDivElement>(() => () => {
       waveformVisible = false;
       waveformController?.abort();
       waveformController = null;
@@ -506,7 +510,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={[viewport, copyRef]}
+        ref={[viewport, copyRef, playerRef]}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)

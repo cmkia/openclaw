@@ -314,7 +314,7 @@ export function ChatClawHubCard(props: Props) {
                         notify();
                       }}
                       onError={() => {
-                        state.failedImages = new Set([...state.failedImages, src]);
+                        state.failedImages.add(src);
                         notify();
                       }}
                     />
