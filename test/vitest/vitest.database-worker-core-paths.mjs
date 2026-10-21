@@ -59,6 +59,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/owner-fragments.conformance.test.ts",
   "src/infra/database-engine/profile-authority.conformance.test.ts",
   "src/infra/database-engine/schema-readers.conformance.test.ts",
+  "src/infra/database-engine/reserved-incognito.conformance.test.ts",
   "src/infra/database-engine/skills-store.conformance.test.ts",
   "src/infra/database-engine/update-run-admission.conformance.test.ts",
   "src/infra/database-engine/web-push-store.conformance.test.ts",
