@@ -65,14 +65,13 @@ export class AsyncWorkScope {
     if (this.phase === "closed") {
       throw new AsyncWorkScopeClosedError();
     }
-    // Synchronous work is removed in finally and needs no promise cleanup reactions.
-    const operation = createDeferredCore();
-    this.pending.add(operation.promise);
+    // A reentrant drain yields until this stack unwinds, even for a settled promise.
+    const operation = Promise.resolve();
+    this.pending.add(operation);
     try {
       return this.enter(run);
     } finally {
-      operation.resolve();
-      this.pending.delete(operation.promise);
+      this.pending.delete(operation);
     }
   }
 
