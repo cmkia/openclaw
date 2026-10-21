@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
@@ -17,6 +18,7 @@ import {
   waitForElement,
   pageButton,
 } from "./model-setup-first-run.test-support.ts";
+import { createNativeModelSetup } from "./native-model-setup.tsx";
 import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 const inventory: SystemAgentSetupDetectResult = {
@@ -85,7 +87,30 @@ describe("Model setup refresh continuity", () => {
     expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
-  it("keeps cached native choices usable through a failed refresh and retry", async () => {
+  it("admits native catalog refresh before its asynchronous read is observed", () => {
+    const { context, client, request } = createFirstRunContext();
+    request.mockResolvedValue({ models: [] });
+    const { owner, dispose } = createRoot((disposeRoot) => ({
+      owner: createNativeModelSetup({
+        getContext: () => context,
+        getConnection: () => null,
+        canUseSetup: (candidate) => candidate === client,
+        blocked: () => false,
+        onSelected: () => {},
+      }),
+      dispose: disposeRoot,
+    }));
+    try {
+      owner.open();
+      expect(callsFor(request, "models.list")).toHaveLength(1);
+      owner.open();
+      expect(callsFor(request, "models.list")).toHaveLength(1);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("admits one native refresh on open and keeps cached choices through failure and retry", async () => {
     const { context, client, request } = createFirstRunContext();
     const model = {
       provider: "acp-opencode",
@@ -118,6 +143,7 @@ describe("Model setup refresh continuity", () => {
       expect(trigger.textContent).toContain("Cached fixture model");
       expect(pageButton(section, "button.primary")?.disabled).toBe(false);
       expect(section.querySelector('p[role="status"]')).not.toBeNull();
+      await selectManualProvider(page, "fixture-key");
       expect(callsFor(request, "models.list")).toHaveLength(1);
       pending.reject(new Error("Catalog refresh failed. Try again."));
       await waitForFast(() =>

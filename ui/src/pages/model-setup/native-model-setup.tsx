@@ -40,8 +40,7 @@ export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 type NativeCatalogRequest = {
   client: GatewayBrowserClient;
   scope: { view: "all"; agentId?: string };
-  refresh: boolean;
-  controller: AbortController;
+  result: Promise<ModelCatalogResult>;
 };
 
 export function createNativeModelSetup(options: NativeModelSetupOptions) {
@@ -71,20 +70,9 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
   let generation = 0;
   let nativeModelsAbort: AbortController | null = null;
   let nativeModelsUnsubscribe: (() => void) | null = null;
-  const result = createMemo<ModelCatalogResult>(() => {
-    const read = request();
-    return read
-      ? loadModelCatalog(read.client, {
-          ...read.scope,
-          refresh: read.refresh,
-          signal: read.controller.signal,
-        }).finally(() => {
-          if (nativeModelsAbort === read.controller) {
-            nativeModelsAbort = null;
-          }
-        })
-      : { models: [] };
-  });
+  const result = createMemo<ModelCatalogResult>(
+    () => request()?.result ?? Promise.resolve({ models: [] }),
+  );
 
   function reset() {
     generation += 1;
@@ -176,7 +164,18 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     nativeModelsAbort?.abort();
     const controller = new AbortController();
     nativeModelsAbort = controller;
-    const read = { client, scope, refresh, controller };
+    const completion = loadModelCatalog(client, {
+      ...scope,
+      refresh,
+      signal: controller.signal,
+    }).finally(() => {
+      if (nativeModelsAbort === controller) {
+        nativeModelsAbort = null;
+      }
+    });
+    // Scope retirement may discard the receipt before its async reader observes it.
+    void completion.catch(() => {});
+    const read = { client, scope, result: completion };
     catalog.replaceSource(read);
     setRequest(read);
   }
