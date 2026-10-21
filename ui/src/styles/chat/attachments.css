@@ -93,8 +93,3 @@ openclaw-chat-svg-attachment {
   height: 12px;
   flex: none;
 }
-
-.chat-attachment-thumb--preparation .chat-attachment-remove {
-  opacity: 1;
-  transform: none;
-}
