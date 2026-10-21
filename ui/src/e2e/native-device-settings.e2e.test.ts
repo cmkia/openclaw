@@ -217,7 +217,10 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
-        recordVideo: { dir: artifactDir, size: viewport },
+        recordVideo:
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? { dir: artifactDir, size: viewport }
+            : undefined,
       },
       async ({ page }) => {
         const snapshot = createNativeDeviceSettingsSnapshot();
@@ -386,7 +389,10 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
-        recordVideo: { dir: artifactDir, size: viewport },
+        recordVideo:
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? { dir: artifactDir, size: viewport }
+            : undefined,
       },
       async ({ page }) => {
         const snapshot = createNativeDeviceSettingsSnapshot();
