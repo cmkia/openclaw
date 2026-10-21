@@ -503,6 +503,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-rpc.gateway-tools.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-publication.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-reconnect.test.ts",
+  "src/gateway/worker-environments/worker-turn-rpc.live-ack.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.transcript.test.ts",
   "src/gateway/worker-environments/worker-turn-run-owner.test.ts",
