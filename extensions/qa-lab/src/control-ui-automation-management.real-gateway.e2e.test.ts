@@ -304,8 +304,29 @@ suite.define(() => {
         "create",
         disabledJob(automationName, "Complete this synthetic reminder."),
       );
+      const creationLogMark = gateway.markLogs();
       await send("100001", "create", "Create a disabled hourly reminder.");
-      await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
+      try {
+        await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
+      } catch (error) {
+        console.error(
+          "Telegram automation creation stalled",
+          redactQaGatewayDebugText(
+            JSON.stringify(
+              {
+                ...provider.diagnostics("create"),
+                outboundMessages: transport.state
+                  .getSnapshot()
+                  .messages.filter((message) => message.direction === "outbound"),
+                gatewayLog: gateway.readLogsSince(creationLogMark),
+              },
+              null,
+              2,
+            ),
+          ),
+        );
+        throw error;
+      }
       const created = readResult(provider.results.get("create") ?? "null");
       expect(created).toMatchObject({
         id: expect.any(String),
