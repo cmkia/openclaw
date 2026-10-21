@@ -1,12 +1,4 @@
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  Errored,
-  Loading,
-  Show,
-} from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
@@ -166,10 +158,8 @@ export function ChatPermissionCard(props: {
         </Show>
         <Show when={!busy() && operation()} keyed>
           {({ promise }) => {
-            const outcome = createMemo(async () => {
-              await promise;
-              return null;
-            });
+            // Only failure renders; successful native actions have no content.
+            const outcome = createMemo(() => promise, { loadingValue: undefined });
             return (
               <Errored
                 fallback={(error) => {
@@ -180,7 +170,7 @@ export function ChatPermissionCard(props: {
                   return <p role="alert">{message()}</p>;
                 }}
               >
-                <Loading>{outcome()}</Loading>
+                {void outcome()}
               </Errored>
             );
           }}
