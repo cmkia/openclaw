@@ -29,7 +29,9 @@ export function resolvePausedOccurrence(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
 ): CronJobExecutionResult | undefined {
-  if (!occurrence.pause) {
+  // Command jobs keep running when their parent is gone until the go-forward
+  // policy is decided; they still consume the occurrence.
+  if (!occurrence.pause || job.payload.kind === "command") {
     return undefined;
   }
   return {

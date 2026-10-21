@@ -213,6 +213,14 @@ describe("scheduled occurrence admission", () => {
         ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
         ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
       });
+      if (kind === "command") {
+        // Command jobs do not pause on a missing parent; they still run with the occurrence.
+        expect(result).not.toHaveProperty("parentUnavailable");
+        if (sessionTarget !== "main") {
+          expect(seen.map((call) => call.executor)).toContain("runCommandJob");
+        }
+        return;
+      }
       expect(seen).toEqual([]);
       expect(state.deps.requestHeartbeatAndWait).not.toHaveBeenCalled();
       expect(result).toMatchObject({

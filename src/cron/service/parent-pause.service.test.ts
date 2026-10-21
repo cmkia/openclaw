@@ -60,3 +60,40 @@ it("pauses once when the parent is gone, and again after a re-enable while it is
     }
   });
 });
+
+it("keeps a command job running when its parent is gone", async () => {
+  await withOpenClawTestState({ label: "cron-parent-pause-command" }, async (fixture) => {
+    const now = Date.now();
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const job = {
+      ...createDueIsolatedJob({ id: "command-job", nowMs: now - 2000, nextRunAtMs: now - 1000 }),
+      payload: { kind: "command" as const, argv: ["echo", "synthetic"] },
+      // Recurring, so only the pause can disable it.
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" },
+    };
+    const runner = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronRegressionState({
+      storePath,
+      nowMs: () => now,
+      defaultAgentId: "main",
+      isAgentAvailable: () => true,
+      runCommandJob: runner,
+      runIsolatedAgentJob: runner,
+      admitScheduledOccurrence: async () => ({
+        ...unadmittedScheduledOccurrence("parent gone"),
+        pause: { reason: "removed", parentSessionKey: PARENT_KEY },
+      }),
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    await list(state);
+    try {
+      await run(state, job.id, "force");
+      expect(runner).toHaveBeenCalledOnce();
+      expect((await loadCronStore(storePath)).jobs[0]?.enabled).toBe(true);
+    } finally {
+      stop(state);
+      await state.op;
+    }
+  });
+});
