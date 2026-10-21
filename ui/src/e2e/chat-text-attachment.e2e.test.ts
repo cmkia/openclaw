@@ -4,7 +4,11 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { newChatPage } from "./chat-flow-fixtures.test-support.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const text =
@@ -92,9 +96,11 @@ suite.define(() => {
         });
         await expect.poll(() => downloadAction.count()).toBe(1);
         await downloadAction.waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}.png`),
-        });
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${extension}-preview-${width}.png`),
+          });
+        }
         const scroller = width === 390 ? reader : panel.locator(".sidebar-content");
         expect(
           await scroller.evaluate((element) => element.clientHeight < element.scrollHeight),
@@ -129,9 +135,11 @@ suite.define(() => {
             return false;
           }),
         ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}-bottom.png`),
-        });
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${extension}-preview-${width}-bottom.png`),
+          });
+        }
         if (extension === "md") {
           await scroller.evaluate((element) => {
             element.scrollTop = 0;
@@ -147,9 +155,11 @@ suite.define(() => {
             .locator("pre")
             .evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}-readable.png`),
-        });
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${extension}-preview-${width}-readable.png`),
+          });
+        }
         const [download] = await Promise.all([
           page.waitForEvent("download"),
           downloadAction.click(),
