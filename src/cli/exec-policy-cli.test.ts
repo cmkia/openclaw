@@ -6,16 +6,21 @@ import { ConfigReadOnlyError } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import type {
+  ReadonlyExecApprovalsFile,
+  ReadonlyExecApprovalsSnapshot,
+} from "../infra/exec-approvals.js";
 import { registerExecPolicyCli } from "./exec-policy-cli.js";
 
-const cautiousDefaults: NonNullable<ExecApprovalsFile["defaults"]> = {
+const cautiousDefaults: NonNullable<ReadonlyExecApprovalsFile["defaults"]> = {
   security: "allowlist",
   ask: "on-miss",
   askFallback: "deny",
 };
 
-function approvalsSnapshot(overrides: Partial<ExecApprovalsSnapshot> = {}): ExecApprovalsSnapshot {
+function approvalsSnapshot(
+  overrides: Partial<ReadonlyExecApprovalsSnapshot> = {},
+): ReadonlyExecApprovalsSnapshot {
   return {
     path: "/tmp/exec-approvals.json",
     exists: true,
@@ -61,7 +66,7 @@ function readLastJsonWrite(): Record<string, unknown> {
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
   const { defaultRuntime, runtimeErrors } = createCliRuntimeMock(vi);
-  const state: { config: OpenClawConfig; approvals: ExecApprovalsFile; hash: string } = {
+  const state: { config: OpenClawConfig; approvals: ReadonlyExecApprovalsFile; hash: string } = {
     config: {},
     approvals: { version: 1 },
     hash: "approvals-hash",
@@ -83,9 +88,9 @@ const mocks = await vi.hoisted(async () => {
     replaceConfigFile: vi.fn(replaceConfig),
     readConfigFileSnapshot:
       vi.fn<() => Promise<{ path: string; hash: string; config: OpenClawConfig }>>(),
-    readExecApprovalsSnapshot: vi.fn<() => ExecApprovalsSnapshot>(),
+    readExecApprovalsSnapshot: vi.fn<() => ReadonlyExecApprovalsSnapshot>(),
     restoreExecApprovalsSnapshot:
-      vi.fn<(snapshot: ExecApprovalsSnapshot, baseHash: string) => Promise<boolean>>(),
+      vi.fn<(snapshot: ReadonlyExecApprovalsSnapshot, baseHash: string) => Promise<boolean>>(),
     updateExecApprovals: vi.fn(
       async ({
         baseHash,
@@ -175,7 +180,7 @@ describe("exec-policy CLI", () => {
     mocks.readExecApprovalsSnapshot.mockReset().mockImplementation(() => approvalsSnapshot());
     mocks.restoreExecApprovalsSnapshot
       .mockReset()
-      .mockImplementation(async (snapshot: ExecApprovalsSnapshot, baseHash: string) => {
+      .mockImplementation(async (snapshot: ReadonlyExecApprovalsSnapshot, baseHash: string) => {
         if (baseHash !== "written-approvals-hash") {
           return false;
         }
@@ -570,9 +575,9 @@ describe("exec-policy CLI", () => {
   it.each<{
     name: string;
     args: string[];
-    originalDefaults?: ExecApprovalsFile["defaults"];
-    concurrent: Pick<ExecApprovalsFile, "defaults" | "agents">;
-    expectedDefaults?: ExecApprovalsFile["defaults"];
+    originalDefaults?: ReadonlyExecApprovalsFile["defaults"];
+    concurrent: Pick<ReadonlyExecApprovalsFile, "defaults" | "agents">;
+    expectedDefaults?: ReadonlyExecApprovalsFile["defaults"];
     rollbackError?: boolean;
   }>([
     {
@@ -609,9 +614,10 @@ describe("exec-policy CLI", () => {
   ])(
     "$name when the config write fails",
     async ({ args, originalDefaults, concurrent, expectedDefaults, rollbackError }) => {
-      const originalApprovals = structuredClone(mocks.state.approvals);
+      const originalApprovals = originalDefaults
+        ? { ...mocks.state.approvals, defaults: originalDefaults }
+        : mocks.state.approvals;
       if (originalDefaults) {
-        originalApprovals.defaults = originalDefaults;
         mocks.state.approvals = originalApprovals;
       }
       const originalSnapshot = approvalsSnapshot({
@@ -622,10 +628,11 @@ describe("exec-policy CLI", () => {
       mocks.state.hash = originalSnapshot.hash;
       mocks.readExecApprovalsSnapshot.mockImplementationOnce(() => originalSnapshot);
       mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
-        const next = structuredClone(mocks.state.approvals);
-        next.defaults = { ...next.defaults, ...concurrent.defaults };
-        next.agents = { ...next.agents, ...concurrent.agents };
-        mocks.state.approvals = next;
+        mocks.state.approvals = {
+          ...mocks.state.approvals,
+          defaults: { ...mocks.state.approvals.defaults, ...concurrent.defaults },
+          agents: { ...mocks.state.approvals.agents, ...concurrent.agents },
+        };
         mocks.state.hash = "concurrent-write-hash";
         if (rollbackError) {
           mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval rollback failed"));
