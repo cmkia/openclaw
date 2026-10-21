@@ -150,6 +150,7 @@ suite.define(() => {
     "keeps the saved preference through startup, fallback, reload, and recovery at %ipx",
     async (width) => {
       const artifactDir = suite.artifactDir;
+      const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
       await suite.withPage(
         {
           viewport: { width, height: 900 },
@@ -194,7 +195,9 @@ suite.define(() => {
           await trigger.click();
           await expect.poll(() => selected.getAttribute("aria-selected")).toBe("true");
           await trigger.click();
-          await page.screenshot({ path: `${artifactDir}/active-fallback-model.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${artifactDir}/active-fallback-model.png` });
+          }
           await composer
             .locator(".agent-chat__composer-combobox textarea")
             .fill("Try the selected model again.");
@@ -206,13 +209,17 @@ suite.define(() => {
           expect(await trigger.textContent()).not.toContain(activeModel.name);
           expect(await trigger.getAttribute("aria-busy")).toBe("false");
           expect(await trigger.locator(".btn__spinner").count()).toBe(0);
-          await page.screenshot({ path: `${artifactDir}/send-admission-model.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${artifactDir}/send-admission-model.png` });
+          }
           await gateway.resolveDeferred("chat.send");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           await expectText(trigger, selectedModel.name);
           expect(await trigger.textContent()).not.toContain("Model pending");
           expect(await trigger.getAttribute("aria-busy")).toBe("false");
-          await page.screenshot({ path: `${artifactDir}/pending-executing-model.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${artifactDir}/pending-executing-model.png` });
+          }
           const startedAt = Date.now();
           for (const [index, model] of [selectedModel, activeModel].entries()) {
             const running = {
@@ -247,9 +254,11 @@ suite.define(() => {
             await expect.poll(() => trigger.getAttribute("aria-busy")).toBe("false");
             expect(await trigger.locator(".btn__spinner").count()).toBe(0);
             expect(await selected.getAttribute("aria-selected")).toBe("true");
-            await page.screenshot({
-              path: `${artifactDir}/running-${index === 0 ? "primary" : "fallback"}-model.png`,
-            });
+            if (captureUiProof) {
+              await page.screenshot({
+                path: `${artifactDir}/running-${index === 0 ? "primary" : "fallback"}-model.png`,
+              });
+            }
           }
           await page.reload();
           await gateway.waitForRequest("chat.startup");
@@ -258,7 +267,9 @@ suite.define(() => {
           await trigger.click();
           expect(await selected.getAttribute("aria-selected")).toBe("true");
           await trigger.click();
-          await page.screenshot({ path: `${artifactDir}/refreshed-fallback-model.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${artifactDir}/refreshed-fallback-model.png` });
+          }
           const recovered = {
             ...session,
             hasActiveRun: false,
@@ -340,7 +351,9 @@ suite.define(() => {
             await page.locator(".chat-text").getByText(message.content, { exact: true }).waitFor();
             await expectText(trigger, selectedModel.name);
             expect(await selected.getAttribute("aria-selected")).toBe("true");
-            await page.screenshot({ path: `${artifactDir}/recovered-model.png` });
+            if (captureUiProof) {
+              await page.screenshot({ path: `${artifactDir}/recovered-model.png` });
+            }
           } finally {
             await releaseLists.evaluate((release) => release());
             await releaseLists.dispose();
