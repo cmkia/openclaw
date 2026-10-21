@@ -3,17 +3,20 @@ import { createSignal, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import { createSessionDiffChrome } from "./session-diff-chrome.tsx";
+import { createSessionDiffFileView } from "./session-diff-file-view.tsx";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { SessionDiffTree } from "./session-diff-tree.tsx";
 import type { DiffValue, FileView } from "./session-diff-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
-export function createSessionDiffResultViews(
+function createSessionDiffResultViews(
   bindings: SessionDiffViewBindings,
   renderers: {
     File: (props: { view: FileView; result: SessionsDiffResult }) => JSX.Element;
@@ -301,4 +304,93 @@ export function createSessionDiffResultViews(
     );
   }
   return { MobileResultBody, ResultBody };
+}
+
+export function createSessionDiffPanelFrame(
+  bindings: Omit<SessionDiffViewBindings, "loading">,
+  setMotionInstant: (instant: boolean) => void,
+  awaitingDestination: () => boolean,
+) {
+  return function Panel(panel: { pending: boolean; showResult?: boolean; children?: JSX.Element }) {
+    const viewBindings: SessionDiffViewBindings = { ...bindings, loading: () => panel.pending };
+    const { MobileRail, MobileSummary, DesktopSummary, Summary } =
+      createSessionDiffChrome(viewBindings);
+    const File = createSessionDiffFileView(viewBindings);
+    const { MobileResultBody, ResultBody } = createSessionDiffResultViews(viewBindings, {
+      File,
+      MobileSummary,
+      DesktopSummary,
+      Summary,
+    });
+    return (
+      <div
+        class={[
+          "session-diff",
+          {
+            "session-diff--wrap": bindings.mobile() ? bindings.mobileWrap() : bindings.wrap(),
+            "session-diff--desktop": bindings.desktop(),
+            "session-diff--mobile": bindings.mobile(),
+          },
+        ]}
+        aria-busy={panel.pending ? "true" : "false"}
+        data-instant={bindings.desktop() && bindings.motionInstant() ? "true" : undefined}
+        onPointerDown={() => {
+          if (bindings.desktop()) {
+            setMotionInstant(false);
+          }
+        }}
+        onKeyDown={() => {
+          if (bindings.desktop()) {
+            setMotionInstant(true);
+          }
+        }}
+      >
+        <Show when={bindings.mobile()}>
+          <MobileRail />
+        </Show>
+        {panel.showResult ? (
+          <Show
+            when={panel.pending && awaitingDestination()}
+            fallback={
+              <Show when={bindings.value()}>
+                {(current) => (
+                  <Show when={bindings.mobile()} fallback={<ResultBody value={current()} />}>
+                    <MobileResultBody value={current()} />
+                  </Show>
+                )}
+              </Show>
+            }
+          >
+            <PanelLoadingSkeleton variant="review" label={t("chat.sessionDiff.loading")} />
+          </Show>
+        ) : (
+          panel.children
+        )}
+      </div>
+    );
+  };
+}
+
+export function SessionDiffNativeGaps(props: {
+  value: () => DiffValue | null;
+  refresh: () => void;
+}) {
+  onSettled(() => {
+    let changed = false;
+    for (const { source } of props.value()?.views ?? []) {
+      const { parsed, expandedGaps } = source;
+      if (!parsed || !expandedGaps?.size) {
+        continue;
+      }
+      // Native fully expanded gaps keep their context without a disclosure
+      // marker. Retaining the desktop marker would insert that context twice.
+      parsed.lines = parsed.lines.filter((line) => !expandedGaps.has(line));
+      expandedGaps.clear();
+      changed = true;
+    }
+    if (changed) {
+      props.refresh();
+    }
+  });
+  return null;
 }
