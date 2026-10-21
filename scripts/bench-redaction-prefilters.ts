@@ -1,6 +1,6 @@
 // Run on baseline and candidate: node --import ./scripts/tsx.mjs scripts/bench-redaction-prefilters.ts
 // Add --large for 1/64/200 KiB text and content fields, with and without synthetic credentials.
-// Add --logs --expose-gc (Node flag) for real console/tail allocation and byte-identity samples.
+// Log records: node --expose-gc --import ./scripts/tsx.mjs scripts/bench-redaction-prefilters.ts --logs
 // Synthetic warm-path CPU timings; this does not estimate total Gateway CPU savings.
 import { createHash } from "node:crypto";
 import type { HeapProfiler } from "node:inspector";
@@ -19,6 +19,10 @@ import {
 import { loggingState } from "../src/logging/state.js";
 
 async function measureLogRecords() {
+  const collectGarbage = globalThis.gc;
+  if (!collectGarbage) {
+    throw new Error("Log allocation samples require node --expose-gc.");
+  }
   loggingState.appliedConfig = {};
   const records = Array.from({ length: 16 }, (_, id) => ({
     id,
@@ -60,7 +64,7 @@ async function measureLogRecords() {
       }
       const samples = [];
       for (let sample = 0; sample < sampleCount; sample++) {
-        globalThis.gc?.();
+        collectGarbage();
         await session.post("HeapProfiler.startSampling", {
           samplingInterval: 1024,
           includeObjectsCollectedByMajorGC: true,
