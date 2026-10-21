@@ -856,7 +856,6 @@ async function childMain(fixturePath: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    process.disconnect?.();
   }
 }
 
@@ -1167,6 +1166,7 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
               fixture.startBarrier = options.startBarrier;
               fixture.startSample = options.warmup + 1;
               fixture.samplingInterval = options.samplingInterval;
+              fixture.timeoutMs = options.timeoutMs;
             }
             if (options.prepareRoot) {
               await fs.writeFile(fixtureFile, JSON.stringify(fixture));
@@ -1238,8 +1238,9 @@ await runBenchmarkEntrypoint("workspace-computation", async () => {
         type: "error",
         message: error instanceof Error ? (error.stack ?? error.message) : String(error),
       });
-      process.disconnect?.();
       throw error;
+    } finally {
+      process.disconnect?.();
     }
   } else {
     await main();
