@@ -99,6 +99,27 @@ function withService(
     }
   });
 }
+
+function observeWizardSettlement(signal: AbortSignal) {
+  let settled = createDeferredCore();
+  // oxlint-disable-next-line typescript/unbound-method -- The intercepted Wizard remains the receiver.
+  const cancel = WizardSession.prototype.cancel;
+  const observer = vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (
+    this: WizardSession,
+  ) {
+    settled.resolve(this.whenSettled());
+    return cancel.call(this);
+  });
+  return {
+    reset: () => {
+      settled = createDeferredCore();
+    },
+    wait: () => withinTest(settled.promise, signal),
+    checkpoint: (gate: Promise<void>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, settled.promise, message), signal),
+    [Symbol.dispose]: () => observer.mockRestore(),
+  };
+}
 const connectAccount = (
   ownerProfileId: string,
   overrides: Partial<Parameters<typeof connectUserModelAccountAsync>[0]> = {},
@@ -268,7 +289,7 @@ it("keeps synchronous sign-in states private to their owner", async ({ signal })
     const action = accountOwner("compat-signin@example.test");
     const other = accountOwner("compat-stranger@example.test");
     let prompted = createDeferredCore();
-    let settled = createDeferredCore();
+    using settlement = observeWizardSettlement(signal);
     const method: ProviderAuthMethod = {
       id: "token",
       label: "Synthetic token",
@@ -283,24 +304,11 @@ it("keeps synchronous sign-in states private to their owner", async ({ signal })
       },
     };
     resolveMethod.mockResolvedValue(method);
-    // oxlint-disable-next-line typescript/unbound-method -- Called with the observed real Wizard receiver.
-    const cancel = WizardSession.prototype.cancel;
-    vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (this: WizardSession) {
-      settled.resolve(this.whenSettled());
-      return cancel.call(this);
-    });
     const waitFor = (gate: Promise<void>) =>
-      withinTest(
-        awaitGateBeforeSettlement(
-          gate,
-          settled.promise,
-          "Personal sign-in settled before reaching its client checkpoint",
-        ),
-        signal,
-      );
+      settlement.checkpoint(gate, "Personal sign-in settled before reaching its client checkpoint");
     const startPending = async () => {
       prompted = createDeferredCore();
-      settled = createDeferredCore();
+      settlement.reset();
       const flow = await service.start(action, "synthetic", "token");
       await waitFor(prompted.promise);
       const pending = service.status(action, flow.connectId);
@@ -316,7 +324,7 @@ it("keeps synchronous sign-in states private to their owner", async ({ signal })
     expect(service.cancel(other, cancelled.connectId)).toEqual({ status: "expired" });
     expect(service.status(action, cancelled.connectId)).toMatchObject({ status: "pending" });
     expect(service.cancel(action, cancelled.connectId)).toEqual({ status: "cancelled" });
-    await withinTest(settled.promise, signal);
+    await settlement.wait();
     expect(service.status(action, cancelled.connectId)).toEqual({ status: "cancelled" });
     expect(listUserProfileAuthLinks(action.owner)).toEqual([]);
 
@@ -328,12 +336,12 @@ it("keeps synchronous sign-in states private to their owner", async ({ signal })
     } finally {
       clock.mockRestore();
     }
-    await withinTest(settled.promise, signal);
+    await settlement.wait();
 
     const successful = await startPending();
     await service.answer(action, successful.connectId, successful.stepId, signinToken);
     await waitFor(connected.promise);
-    await withinTest(settled.promise, signal);
+    await settlement.wait();
     const result = service.status(action, successful.connectId);
     expect(result).toMatchObject({
       status: "connected",
@@ -481,7 +489,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
     const clients = new Set([client]);
     const context = accountContext(client, undefined, () => clients.has(client));
     const changed = createDeferredCore();
-    const settled = createDeferredCore();
+    const settlement = observeWizardSettlement(signal);
     const committed = createDeferredCore();
     const deliverCommit = createDeferredCore();
     probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -491,14 +499,6 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
         await deliverCommit.promise;
       }
       return result;
-    });
-    // oxlint-disable-next-line typescript/unbound-method -- The call below retains the intercepted Wizard as receiver.
-    const cancel = WizardSession.prototype.cancel;
-    const cancellation = vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (
-      this: WizardSession,
-    ) {
-      settled.resolve(this.whenSettled());
-      return cancel.call(this);
     });
     const authMethod: ProviderAuthMethod = {
       id: "token",
@@ -531,25 +531,17 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       if (!isRecord(started) || typeof started.connectId !== "string") {
         throw new Error("personal account sign-in did not start");
       }
-      await withinTest(
-        awaitGateBeforeSettlement(
-          committed.promise,
-          settled.promise,
-          "Personal account sign-in settled before committing",
-        ),
-        signal,
+      await settlement.checkpoint(
+        committed.promise,
+        "Personal account sign-in settled before committing",
       );
       expect(await rpc("users.authConnect.cancel", { connectId: started.connectId })).toEqual({
         status: "cancelled",
       });
       deliverCommit.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          changed.promise,
-          settled.promise,
-          "Personal account sign-in settled without publishing a connected account",
-        ),
-        signal,
+      await settlement.checkpoint(
+        changed.promise,
+        "Personal account sign-in settled without publishing a connected account",
       );
       const connected = await rpc("users.authConnect.status", { connectId: started.connectId });
       if (
@@ -590,7 +582,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
     } finally {
       deliverCommit.resolve();
       sql.restore();
-      cancellation.mockRestore();
+      settlement[Symbol.dispose]();
       await service.stop();
     }
   }));
@@ -655,30 +647,26 @@ it.each(["transaction", "commit"] as const)(
     withAccount("refused-account@example.test", async (owner) => {
       let live = true;
       const observed: string[] = [];
-      const admission = observeAccountAdmission((stage) => {
+      using _ = observeAccountAdmission((stage) => {
         observed.push(stage);
         if (stage === refusalStage) {
           live = false;
         }
       });
-      try {
-        await expect(
-          connectAccount(owner, {
-            assertCurrent() {
-              if (!live) {
-                throw new ModelAccountConnectAuthorityError();
-              }
-            },
-          }),
-        ).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
-        expect(observed).toEqual(
-          refusalStage === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect(await listUserModelAccountsAsync({ profileId: owner })).toEqual({ accounts: [] });
-        expect(await listUserProfileAuthLinksAsync(owner)).toEqual([]);
-      } finally {
-        admission.mockRestore();
-      }
+      await expect(
+        connectAccount(owner, {
+          assertCurrent() {
+            if (!live) {
+              throw new ModelAccountConnectAuthorityError();
+            }
+          },
+        }),
+      ).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
+      expect(observed).toEqual(
+        refusalStage === "transaction" ? ["transaction"] : ["transaction", "commit"],
+      );
+      expect(await listUserModelAccountsAsync({ profileId: owner })).toEqual({ accounts: [] });
+      expect(await listUserProfileAuthLinksAsync(owner)).toEqual([]);
     }),
 );
 
@@ -688,40 +676,36 @@ it.each(["credential", "selection"] as const)(
     withAccount("replacement-account@example.test", async (owner) => {
       const first = await connectAccount(owner);
       const order: string[] = [];
-      const admission = observeAccountAdmission((stage) => order.push(stage));
-      try {
-        const result = await connectAccount(owner, {
-          credential: { ...credential, token: "synthetic-reconnected-token" },
-          matchesCredential(current) {
-            expect(current).toEqual(credential);
-            order.push("compare");
-            // A real competing commit here also proves the provider callback does not hold BEGIN.
-            if (race === "credential") {
-              updateUserModelAuthProfile(first.authProfileId, (profile) => {
-                profile.credential = { ...credential, token: "synthetic-concurrent-refresh" };
-                return true;
-              });
-            } else if (race === "selection") {
-              setLinkSync({
-                profileId: owner,
-                provider: "synthetic",
-                authProfileId: "synthetic:shared",
-              });
-            }
-            return true;
-          },
-        });
-        expect(order).toEqual(["compare", "transaction", "commit"]);
-        expect(result.authProfileId).not.toBe(first.authProfileId);
-        expect(readUserModelAuthProfile(first.authProfileId)?.credential).toEqual({
-          ...credential,
-          token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
-        });
-        expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(2);
-        await expectLinked(owner, result.authProfileId);
-      } finally {
-        admission.mockRestore();
-      }
+      using _ = observeAccountAdmission((stage) => order.push(stage));
+      const result = await connectAccount(owner, {
+        credential: { ...credential, token: "synthetic-reconnected-token" },
+        matchesCredential(current) {
+          expect(current).toEqual(credential);
+          order.push("compare");
+          // A real competing commit here also proves the provider callback does not hold BEGIN.
+          if (race === "credential") {
+            updateUserModelAuthProfile(first.authProfileId, (profile) => {
+              profile.credential = { ...credential, token: "synthetic-concurrent-refresh" };
+              return true;
+            });
+          } else if (race === "selection") {
+            setLinkSync({
+              profileId: owner,
+              provider: "synthetic",
+              authProfileId: "synthetic:shared",
+            });
+          }
+          return true;
+        },
+      });
+      expect(order).toEqual(["compare", "transaction", "commit"]);
+      expect(result.authProfileId).not.toBe(first.authProfileId);
+      expect(readUserModelAuthProfile(first.authProfileId)?.credential).toEqual({
+        ...credential,
+        token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
+      });
+      expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(2);
+      await expectLinked(owner, result.authProfileId);
     }),
 );
 
