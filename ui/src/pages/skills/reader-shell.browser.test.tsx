@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
-import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { getRenderedModalDialog, nextFrame } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
@@ -14,6 +14,17 @@ afterEach(() => {
   cleanupSkillsViews();
   container?.remove();
 });
+
+async function settleEntrance(dialog: HTMLDialogElement) {
+  const card = dialog.querySelector<HTMLElement>(".exec-approval-card")!;
+  // Both the native dialog and its card have independent entry animations.
+  const animations = [...dialog.getAnimations(), ...card.getAnimations()];
+  for (const animation of animations) {
+    animation.finish();
+  }
+  await Promise.all(animations.map((animation) => animation.finished));
+  await nextFrame();
+}
 
 describe.runIf(browserMode)("skill reader shell", () => {
   it.each(
@@ -33,7 +44,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
       { container },
     );
     const canonical = await getRenderedModalDialog(container);
-    await Promise.all(canonical.dialog.getAnimations().map((animation) => animation.finished));
+    await settleEntrance(canonical.dialog);
     const readChrome = (panel: HTMLElement) => {
       const style = getComputedStyle(panel);
       const close = panel.querySelector<HTMLButtonElement>("button")!;
@@ -75,7 +86,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const shortContent = "Read the source and report actionable findings.";
     showContent(shortContent);
     const { modal, dialog } = await getRenderedModalDialog(container);
-    await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+    await settleEntrance(dialog);
     const title = container.querySelector<HTMLElement>(
       ".skill-reader-dialog > :first-child > :first-child",
     )!;
@@ -147,7 +158,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
         container,
       );
       const { dialog } = await getRenderedModalDialog(container);
-      await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+      await settleEntrance(dialog);
       const panel = container.querySelector<HTMLElement>(".skill-reader-dialog")!;
       const body = panel.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
       const footer = panel.querySelector<HTMLElement>("openclaw-modal-actions")!;
