@@ -477,6 +477,7 @@ function renderWhatsAppLinking(props: ChannelsProps) {
           renderCloseButton(props, "channels.setup.finish", true)
         ) : (
           <>
+            {renderCloseButton(props, "channels.setup.linkLater")}
             {props.channels.whatsappBusy ? (
               <WizardBusyButton statusLabel={t("channels.setup.whatsappQrLoading")} />
             ) : (
@@ -493,7 +494,6 @@ function renderWhatsAppLinking(props: ChannelsProps) {
                 ) : undefined}
               </>
             )}
-            {renderCloseButton(props, "channels.setup.linkLater")}
           </>
         )}
       </openclaw-modal-actions>

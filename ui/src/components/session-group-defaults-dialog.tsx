@@ -408,17 +408,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               </div>
             ) : undefined}
             <openclaw-modal-actions class="exec-approval-actions">
-              <button
-                type="submit"
-                class="btn primary"
-                disabled={
-                  saving() ||
-                  repository() === "checking" ||
-                  repository() === "unavailable" ||
-                  repository() === "restricted"
-                }
-              >
-                {t("common.save")}
+              <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
+                {t("common.cancel")}
               </button>
               {repository() === "unavailable" || repository() === "restricted" ? (
                 <button
@@ -432,8 +423,17 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   {t("common.retry")}
                 </button>
               ) : undefined}
-              <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
-                {t("common.cancel")}
+              <button
+                type="submit"
+                class="btn primary"
+                disabled={
+                  saving() ||
+                  repository() === "checking" ||
+                  repository() === "unavailable" ||
+                  repository() === "restricted"
+                }
+              >
+                {t("common.save")}
               </button>
             </openclaw-modal-actions>
           </form>
