@@ -2,10 +2,21 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  availableStatus,
+  setupRequest,
+  sharedTarget,
+} from "./github-identity-harness.test-support.ts";
 import type { GitHubAuthorizationState } from "./github-identity-shared.ts";
-import { GitHubConnectionSetup, GitHubIdentity } from "./github-identity-view.tsx";
+import {
+  GitHubConnectionError,
+  GitHubConnectionSetup,
+  GitHubIdentity,
+} from "./github-identity-view.tsx";
 import {
   createGitHubIdentityForTest,
   githubIdentityViewFixture,
@@ -40,6 +51,134 @@ afterEach(() => {
 });
 
 describe("GitHub identity view", () => {
+  it("retires the owned status request when its view unmounts", async () => {
+    const pending = createDeferred<ReturnType<typeof availableStatus>>();
+    const client = createTestGatewayClient(vi.fn().mockReturnValue(pending.promise));
+    let identity!: ReturnType<typeof createGitHubIdentityView>;
+    const view = mountSolid(() => {
+      identity = createGitHubIdentityView();
+      return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+    });
+    flush();
+    identity.sync({
+      client,
+      connected: true,
+      permissionsReady: true,
+      target: sharedTarget(),
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+    let retired = false;
+    const reading = identity.verify()?.then(() => {
+      retired = true;
+    });
+    flush();
+    view.unmount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retired).toBe(true);
+    pending.resolve(availableStatus("system"));
+    await reading;
+  });
+
+  it("shows a failed status read and clears it while retrying", async () => {
+    const first = createDeferred<ReturnType<typeof availableStatus>>();
+    const retry = createDeferred<ReturnType<typeof availableStatus>>();
+    const { identity } = setupRequest(
+      vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise),
+    );
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const reading = identity.verify();
+    flush();
+    expect(view.getByText("Checking connection…")).toBeTruthy();
+    first.reject(new Error("Synthetic GitHub status unavailable"));
+    await expect(reading).rejects.toThrow("Synthetic GitHub status unavailable");
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
+    expect(view.getByText("Connection status unavailable")).toBeTruthy();
+    identity.showPatFallback();
+    await identity.configure();
+    flush();
+    expect(view.getByRole("alert").textContent).toContain(
+      "Paste a fine-grained personal access token first.",
+    );
+    view.getByRole("button", { name: "Verify" }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.getByText("Checking connection…")).toBeTruthy();
+    retry.resolve(availableStatus("system"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByText("@managed-user")).toBeTruthy();
+    expect(view.getByText("Verified")).toBeTruthy();
+  });
+
+  it("shows one shared error when the other identity read is still pending", async () => {
+    const personal = createDeferred();
+    const system = createDeferred();
+    const view = mountSolid(() => (
+      <GitHubConnectionError
+        error={null}
+        completion={personal.promise}
+        secondaryCompletion={system.promise}
+      />
+    ));
+    system.reject(new Error("Synthetic shared GitHub failure"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getAllByRole("alert")).toHaveLength(1);
+    expect(view.getByRole("alert").textContent).toContain("Synthetic shared GitHub failure");
+    personal.resolve();
+  });
+
+  it("retires saving presentation when a pending PAT command loses its scope", async () => {
+    const oldSecret = createDeferred<unknown>();
+    const newSecret = createDeferred<unknown>();
+    const secrets = [oldSecret, newSecret];
+    const { identity, sync } = setupRequest(
+      async (method) => {
+        if (method === "secrets.store.set") {
+          return secrets.shift()!.promise;
+        }
+        if (method === "tools.github.configure") {
+          return { ...availableStatus(), agentId: "replacement" };
+        }
+        return { ok: true };
+      },
+      { mutation: true, context: { scope: "agent" } },
+    );
+    identity.showPatFallback();
+    identity.setDraft("token", "synthetic-first-token");
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const oldSaving = identity.configure();
+    flush();
+    expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+    sync({ agentId: "replacement" });
+    await oldSaving;
+    await vi.advanceTimersByTimeAsync(0);
+    identity.showPatFallback();
+    identity.setDraft("token", "synthetic-new-token");
+    flush();
+    const saving = identity.configure();
+    flush();
+    expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+    oldSecret.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(identity.read().status).toBeNull();
+    newSecret.resolve({ ok: true });
+    await saving;
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.queryByRole("button", { name: "Saving…" })).toBeNull();
+  });
+
   it("retires pending authorization-code copying only when its payload changes", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);
