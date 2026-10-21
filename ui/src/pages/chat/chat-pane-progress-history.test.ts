@@ -12,7 +12,7 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -145,7 +145,7 @@ it("hides the history owner's card only in this pane without rekeying the compos
     },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   expect(request).toHaveBeenLastCalledWith("progressCard.get", {
     sessionKey: "agent:research:notes",
   });
@@ -154,7 +154,7 @@ it("hides the history owner's card only in this pane without rekeying the compos
 
   f.card = progressCard(2);
   emit(f.card);
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
   f.dismiss();
   await pane.updateComplete;
@@ -165,7 +165,7 @@ it("hides the history owner's card only in this pane without rekeying the compos
 
   f.card = progressCard(3);
   emit(f.card);
-  await vi.waitFor(() => expect(progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  await waitForSolid(() => expect(progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
   await pane.updateComplete;
   expect(pane.chatProps?.progressCard).toBeNull();
 });
@@ -178,24 +178,28 @@ it("hides progress and its loading slot without clearing saved progress, then re
   expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
   await loadChatHistory(state, { deferBranches: true });
   await pane.updateComplete;
-  await vi.waitFor(() => expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  await waitForSolid(() =>
+    expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card),
+  );
   f.expectMethods("chat.history", "progressCard.get");
   expect(pane.chatProps?.progressCard).toBeNull();
 
   state.settings = { ...state.settings, chatShowTaskProgress: true };
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
 
   state.settings = { ...state.settings, chatShowTaskProgress: false };
   await pane.updateComplete;
   expect(pane.chatProps).toMatchObject({ progressCard: null, progressCardInitialLoading: false });
   f.card = progressCard(2);
   emit(f.card);
-  await vi.waitFor(() => expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  await waitForSolid(() =>
+    expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card),
+  );
   expect(pane.chatProps).toMatchObject({ progressCard: null, progressCardInitialLoading: false });
   f.expectMethods("chat.history", "progressCard.get", "progressCard.get");
 
   state.settings = { ...state.settings, chatShowTaskProgress: true };
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   f.expectMethods("chat.history", "progressCard.get", "progressCard.get");
 });
 
@@ -208,7 +212,7 @@ it("retires a hidden card lifetime while the document is parked without reading 
   const f = createHistoryProgressPane();
   const { pane, state, request, progress, emit, emitEvent } = f;
   await loadChatHistory(state, { deferBranches: true });
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   const target = { sessionKey: f.card.sessionKey };
   const lifetime = progress.getLifetime(target);
   expect(lifetime).toBeDefined();
@@ -231,7 +235,7 @@ it("retires a hidden card lifetime while the document is parked without reading 
   f.card = progressCard(3);
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   expect(progress.getLifetime(target)).not.toBe(lifetime);
   expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
 });
@@ -299,7 +303,7 @@ it.each([
     const f = createHistoryProgressPane();
     const { pane, state, request, card } = f;
     await loadChatHistory(state, { deferBranches: true });
-    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+    await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
     retire(f);
     await pane.updateComplete;
@@ -332,7 +336,7 @@ it("keeps accepted progress through a same-session background history refresh", 
   );
   const { pane, state, request, card } = f;
   await loadChatHistory(state, { deferBranches: true });
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+  await waitForSolid(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
   const refreshing = loadChatHistory(state, { deferBranches: true });
   await pane.updateComplete;
