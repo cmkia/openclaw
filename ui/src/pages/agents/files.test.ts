@@ -79,6 +79,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "new instructions",
+        expectedWorkspace: "workspace",
         expectedHash: "a".repeat(64),
       });
       expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("new instructions");
@@ -149,6 +150,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "edited after reset",
+        expectedWorkspace: "workspace",
         expectedHash: refreshedHash,
       });
     },
@@ -216,29 +218,39 @@ describe("agent file requests", () => {
     },
   );
 
-  it("retires a read started during a write before publishing its result", async () => {
-    const read = createDeferred<AgentsFilesGetResult>();
-    const write = createDeferred<AgentsFilesSetResult>();
-    const client = {
-      request: vi.fn((method: string) =>
-        method === "agents.files.get" ? read.promise : write.promise,
-      ),
-    } as unknown as GatewayBrowserClient;
-    const state = createState(client);
-    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
-    setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
+  it.each([false, true])(
+    "retires a read started during a write (read fails first: %s)",
+    async (readFailsFirst) => {
+      const read = createDeferred<AgentsFilesGetResult>();
+      const write = createDeferred<AgentsFilesSetResult>();
+      const client = {
+        request: vi.fn((method: string) =>
+          method === "agents.files.get" ? read.promise : write.promise,
+        ),
+      } as unknown as GatewayBrowserClient;
+      const state = createState(client);
+      setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+      setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
 
-    const save = saveAgentFile(state, "main", "AGENTS.md", "saved");
-    const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
-    write.resolve({ ok: true, ...fileResult("saved") });
-    expect(await save).toBe(true);
-    read.resolve(fileResult("original"));
-    expect(await load).toBe(false);
-    expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
-    expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
-    expect(state.agentFilesLoading).toBe(false);
-    expect(state.agentFileSaving).toBe(false);
-  });
+      const save = saveAgentFile(state, "main", "AGENTS.md", "saved");
+      const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
+      if (readFailsFirst) {
+        read.reject(new Error("refresh failed"));
+        expect(await load).toBe(false);
+      }
+      write.resolve({ ok: true, ...fileResult("saved") });
+      expect(await save).toBe(true);
+      if (!readFailsFirst) {
+        read.resolve(fileResult("original"));
+        expect(await load).toBe(false);
+      }
+      expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
+      expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
+      expect(state.agentFilesLoading).toBe(false);
+      expect(state.agentFileSaving).toBe(false);
+      expect(await state.agentFileOutcome).toEqual({ result: true });
+    },
+  );
 
   it("allows another file's read and a fresh post-save refresh", async () => {
     const read = createDeferred<AgentsFilesGetResult>();
@@ -259,23 +271,32 @@ describe("agent file requests", () => {
     expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("external update");
   });
 
-  it("keeps a failed save and its dirty draft visible after an older read settles", async () => {
-    const read = createDeferred<AgentsFilesGetResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(read.promise)
-      .mockRejectedValueOnce(new Error("workspace write failed"));
-    const state = createState({ request } as unknown as GatewayBrowserClient);
-    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
-    setAgentFileValues(state, "draft", { "AGENTS.md": "unsaved" });
-    const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
-    expect(await saveAgentFile(state, "main", "AGENTS.md", "unsaved")).toBe(false);
-    read.resolve(fileResult("old"));
-    expect(await load).toBe(false);
-    expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
-    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("unsaved");
-    expect(await state.agentFileOutcome).toEqual({ error: "workspace write failed" });
-  });
+  it.each(["before", "during"])(
+    "keeps a failed save visible after a read starts %s the write",
+    async (timing) => {
+      const read = createDeferred<AgentsFilesGetResult>();
+      const write = createDeferred<AgentsFilesSetResult>();
+      const request = vi.fn((method: string) =>
+        method === "agents.files.get" ? read.promise : write.promise,
+      );
+      const state = createState({ request } as unknown as GatewayBrowserClient);
+      setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+      setAgentFileValues(state, "draft", { "AGENTS.md": "unsaved" });
+      const load =
+        timing === "before"
+          ? loadAgentFileContent(state, "main", "AGENTS.md", { force: true })
+          : null;
+      const save = saveAgentFile(state, "main", "AGENTS.md", "unsaved");
+      const refresh = load ?? loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
+      write.reject(new Error("workspace write failed"));
+      expect(await save).toBe(false);
+      read.resolve(fileResult("old"));
+      expect(await refresh).toBe(false);
+      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
+      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("unsaved");
+      expect(await state.agentFileOutcome).toEqual({ error: "workspace write failed" });
+    },
+  );
 
   it("does not let an old-client read overwrite or finish a replacement read", async () => {
     const oldRead = createDeferred<AgentsFilesGetResult>();
@@ -369,6 +390,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "original\noperator note",
+        expectedWorkspace: "workspace",
         expectedHash: loadedHash,
       },
     ];
@@ -415,6 +437,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "original\noperator note",
+        expectedWorkspace: "workspace",
         expectedHash: loadedHash,
       },
     ]);
@@ -556,6 +579,7 @@ describe("agent file requests", () => {
           agentId: "main",
           name: "AGENTS.md",
           content: "original\noperator note",
+          expectedWorkspace: "workspace",
           ...(missing ? { expectedMissing: true } : { expectedHash: currentHash }),
         },
       ]);
