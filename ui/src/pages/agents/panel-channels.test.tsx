@@ -22,10 +22,16 @@ function snapshot(): ChannelsStatusSnapshot {
   };
 }
 
-it("retains cached channels and the previous error while a failed refresh is retried", async () => {
+it("retains cached channels through retry and retires feedback with the connection", async () => {
   const failed = createDeferred<ChannelsStatusSnapshot>();
   const recovered = createDeferred<ChannelsStatusSnapshot>();
-  const responses = [Promise.resolve(snapshot()), failed.promise, recovered.promise];
+  const retired = createDeferred<ChannelsStatusSnapshot>();
+  const responses = [
+    Promise.resolve(snapshot()),
+    failed.promise,
+    recovered.promise,
+    retired.promise,
+  ];
   const fixture = createApplicationGateway();
   fixture.publish({
     ...fixture.gateway.snapshot,
@@ -102,9 +108,33 @@ it("retains cached channels and the previous error while a failed refresh is ret
       expect(mounted.container.contains(row!)).toBe(true);
       expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Discord recovered");
     });
+    refresh().click();
+    const retiredRefresh = pending;
+    await waitForSolid(() => expect(refresh().disabled).toBe(true));
+    fixture.publish({
+      ...fixture.gateway.snapshot,
+      client: createTestGatewayClient(() => ({
+        ...snapshot(),
+        channelLabels: { discord: "Replacement connection" },
+      })),
+    });
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(false);
+      expect(mounted.container.contains(row!)).toBe(false);
+    });
+    refresh().click();
+    await pending;
+    retired.reject(new Error("Retired channel failure"));
+    await retiredRefresh;
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(false);
+      expect(mounted.container.querySelector(".callout.danger")).toBeNull();
+      expect(mounted.container.textContent).toContain("Replacement connection");
+    });
   } finally {
     failed.resolve(snapshot());
     recovered.resolve(snapshot());
+    retired.resolve(snapshot());
     mounted.unmount();
     channels.dispose();
   }

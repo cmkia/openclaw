@@ -601,7 +601,7 @@ describe("renderAgents", () => {
           readChannels: () => ({
             ...createProps().readChannels(),
             channelsSnapshot: null,
-            channelsLoading: false,
+            channelsRead: null,
             channelsError: null,
             channelsLastSuccess: null,
           }),
@@ -656,7 +656,7 @@ describe("renderAgentChannels", () => {
             channelAccounts: { discord: accounts },
             channelDefaultAccountId: { discord: "default" },
           },
-          channelsLoading: false,
+          channelsRead: null,
           channelsError: null,
           channelsLastSuccess: Date.now(),
         }),
