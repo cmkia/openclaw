@@ -44,61 +44,73 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
 }
 
 describe("agents skills panel (browser)", () => {
-  it("shows pending reads, keeps the cached report after failure, and retries", async () => {
-    const initial = deferred<SkillStatusReport>();
-    const refreshed = deferred<SkillStatusReport>();
-    const retried = deferred<SkillStatusReport>();
-    const container = document.createElement("div");
-    const params = skillsParams([], {
-      agentSkillsReport: null,
-      agentSkillsAgentId: null,
-      agentSkillsRead: { agentId: "main", result: initial.promise },
-    });
-    const view = mountSolid(AgentSkills, params, container);
-    await waitForSolid(() => expect(container.textContent).toContain("Loading"));
-    const report: SkillStatusReport = {
-      workspaceDir: "/workspace/synthetic",
-      managedSkillsDir: "/skills/synthetic",
-      skills: [createSkill({ name: "Synthetic cached skill" })],
-    };
-    initial.resolve(report);
-    await waitForSolid(() => expect(container.textContent).toContain("Synthetic cached skill"));
-
-    const loaded = {
-      ...params,
-      agentSkillsReport: report,
-      agentSkillsAgentId: "main",
-      agentSkillsRead: { agentId: "main", result: refreshed.promise },
-    };
-    view.update(loaded);
-    await waitForSolid(() => {
-      expect(container.textContent).toContain("Synthetic cached skill");
-      expect(container.textContent).toContain("Loading");
-    });
-    refreshed.reject(new Error("Synthetic skills failure"));
-    const onRefresh = vi.fn(() => {
-      view.update({
-        ...loaded,
-        agentSkillsRead: { agentId: "main", result: retried.promise },
-        onRefresh,
+  it.each(["Refresh", "owner receipt"])(
+    "shows pending reads, keeps the cached report after failure, and retries through %s",
+    async (retrySource) => {
+      const initial = deferred<SkillStatusReport>();
+      const refreshed = deferred<SkillStatusReport>();
+      const retried = deferred<SkillStatusReport>();
+      const container = document.createElement("div");
+      const params = skillsParams([], {
+        agentSkillsReport: null,
+        agentSkillsAgentId: null,
+        agentSkillsRead: { agentId: "main", result: initial.promise },
       });
-    });
-    view.update({ ...loaded, onRefresh });
-    await waitForSolid(() => {
-      expect(container.textContent).toContain("Synthetic skills failure");
-      expect(container.textContent).toContain("Synthetic cached skill");
-    });
-    const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("Refresh"),
-    );
-    refresh?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    retried.resolve({ ...report, skills: [createSkill({ name: "Synthetic fresh skill" })] });
-    await waitForSolid(() => {
-      expect(container.textContent).toContain("Synthetic fresh skill");
-      expect(container.textContent).not.toContain("Synthetic skills failure");
-    });
-  });
+      const view = mountSolid(AgentSkills, params, container);
+      await waitForSolid(() => expect(container.textContent).toContain("Loading"));
+      const report: SkillStatusReport = {
+        workspaceDir: "/workspace/synthetic",
+        managedSkillsDir: "/skills/synthetic",
+        skills: [createSkill({ name: "Synthetic cached skill" })],
+      };
+      initial.resolve(report);
+      await waitForSolid(() => expect(container.textContent).toContain("Synthetic cached skill"));
+
+      const loaded = {
+        ...params,
+        agentSkillsReport: report,
+        agentSkillsAgentId: "main",
+        agentSkillsRead: { agentId: "main", result: refreshed.promise },
+      };
+      view.update(loaded);
+      await waitForSolid(() => {
+        expect(container.textContent).toContain("Synthetic cached skill");
+        expect(container.textContent).toContain("Loading");
+      });
+      refreshed.reject(new Error("Synthetic skills failure"));
+      const onRefresh = vi.fn(() => {
+        view.update({
+          ...loaded,
+          agentSkillsRead: { agentId: "main", result: retried.promise },
+          onRefresh,
+        });
+      });
+      view.update({ ...loaded, onRefresh });
+      await waitForSolid(() => {
+        expect(container.textContent).toContain("Synthetic skills failure");
+        expect(container.textContent).toContain("Synthetic cached skill");
+      });
+      const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.includes("Refresh"),
+      );
+      if (retrySource === "Refresh") {
+        refresh?.click();
+      } else {
+        onRefresh();
+      }
+      expect(onRefresh).toHaveBeenCalledOnce();
+      await waitForSolid(() => {
+        expect(container.textContent).not.toContain("Synthetic skills failure");
+        expect(container.textContent).toContain("Loading");
+        expect(container.textContent).toContain("Synthetic cached skill");
+      });
+      retried.resolve({ ...report, skills: [createSkill({ name: "Synthetic fresh skill" })] });
+      await waitForSolid(() => {
+        expect(container.textContent).toContain("Synthetic fresh skill");
+        expect(container.textContent).not.toContain("Synthetic skills failure");
+      });
+    },
+  );
 
   it("keeps cached skills when a reload returns no report", async () => {
     const pending = deferred<SkillStatusReport | undefined>();

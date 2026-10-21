@@ -39,38 +39,37 @@ export function AgentSkills(params: AgentSkillsProps) {
       ? params.readData().agentSkillsReport
       : null,
   );
-  const report = createMemo(async () => {
-    const read = issued();
-    return read?.agentId === params.agentId ? read.result : cached();
-  });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
     <Show when={scope()} keyed>
-      <Errored
-        fallback={(error, reset) => (
-          <AgentSkillsContent
-            {...params}
-            report={cached()}
-            pending={false}
-            readError={formatUiError(error())}
-            onRefresh={() => {
-              params.onRefresh();
-              reset();
-            }}
-          />
-        )}
-      >
-        <Loading
-          fallback={<AgentSkillsContent {...params} report={cached()} pending />}
-          on={scope()}
-        >
-          <AgentSkillsContent
-            {...params}
-            report={report() ?? cached()}
-            pending={isPending(() => report())}
-          />
-        </Loading>
-      </Errored>
+      <Show when={issued() ?? scope()} keyed>
+        {(_receipt) => {
+          const report = createMemo(async () => {
+            const read = issued();
+            return read?.agentId === params.agentId ? read.result : cached();
+          });
+          return (
+            <Errored
+              fallback={(error) => (
+                <AgentSkillsContent
+                  {...params}
+                  report={cached()}
+                  pending={false}
+                  readError={formatUiError(error())}
+                />
+              )}
+            >
+              <Loading fallback={<AgentSkillsContent {...params} report={cached()} pending />}>
+                <AgentSkillsContent
+                  {...params}
+                  report={report() ?? cached()}
+                  pending={isPending(() => report())}
+                />
+              </Loading>
+            </Errored>
+          );
+        }}
+      </Show>
     </Show>
   );
 }
