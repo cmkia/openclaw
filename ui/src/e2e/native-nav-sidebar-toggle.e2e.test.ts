@@ -339,16 +339,30 @@ suite.define(() => {
     );
     const inbox = attention;
     await inbox.hover();
-    expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
+    await expect
+      .poll(() => inbox.evaluate((button) => getComputedStyle(button).backgroundColor))
+      .not.toBe("rgba(0, 0, 0, 0)");
     // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
-      .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
-      .toBe(true);
-    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
+      .poll(() =>
+        inbox.evaluate((button) => {
+          const style = getComputedStyle(button);
+          return {
+            focusVisible: button.matches(":focus-visible"),
+            outlineStyle: style.outlineStyle,
+            outlineWidth: style.outlineWidth,
+            outlineColorVisible: style.outlineColor !== "rgba(0, 0, 0, 0)",
+          };
+        }),
+      )
+      .toEqual({
+        focusVisible: true,
+        outlineStyle: "solid",
+        outlineWidth: "2px",
+        outlineColorVisible: true,
+      });
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");

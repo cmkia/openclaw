@@ -312,6 +312,27 @@ suite.define(() => {
       const agentMenu = sidebar.locator(".sidebar-agent-menu");
       await expect
         .poll(async () => {
+          const [card, menu, rail] = await Promise.all([
+            sidebar.locator(".sidebar-agent-card__main").boundingBox(),
+            agentMenu.boundingBox(),
+            sidebar.locator(".sidebar-rail").boundingBox(),
+          ]);
+          if (!card || !menu || !rail) {
+            return null;
+          }
+          return {
+            railGap: Math.round(menu.x - (rail.x + rail.width)),
+            alignedWithCard: Math.abs(menu.y - card.y) <= 1,
+            inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
+          };
+        })
+        .toEqual({ railGap: 8, alignedWithCard: true, inViewport: true });
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 390, height: 900 });
+      await page.locator(".topbar-nav-toggle").click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      await expect
+        .poll(async () => {
           const [card, menu] = await Promise.all([
             sidebar.locator(".sidebar-agent-card__main").boundingBox(),
             agentMenu.boundingBox(),
@@ -327,6 +348,7 @@ suite.define(() => {
         })
         .toEqual({ belowCard: true, anchoredToCard: true, inViewport: true });
       await agentMenu.locator('[data-value="agent:writer"]').click();
+      await page.setViewportSize({ width: 1440, height: 900 });
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expectAgentName(sidebar, "Writer");
       await openHomeFullPage(page, "writer");
