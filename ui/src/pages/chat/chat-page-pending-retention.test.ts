@@ -19,6 +19,8 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
+import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 // These page-only fixtures bypass the selector/router that prepares the pending view.
 beforeAll(async () => {
@@ -69,6 +71,13 @@ it.each(["admission", "rollback"] as const)(
     const router = createRouter({ routes: [] });
     Object.assign(context, { basePath: "", router, navigate: vi.fn(), replace: vi.fn() });
     await context.agents.ensureList();
+    // Finish empty-cache initialization before the retention assertions start.
+    await readStoredChatSnapshotRecord(
+      resolveChatSnapshotKey(
+        { settings: context.theme.settings, client: context.gateway.snapshot.client },
+        { sessionKey: previousKey },
+      ),
+    );
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
     const view = mountSolid(
