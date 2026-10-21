@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -15,7 +16,7 @@ export function ChatPermissionCard(props: {
   const native = useOptionalApplication()?.nativeDeviceSettings;
   const projection = native ? projectNativeDeviceSettings(native) : null;
   const [busy, setBusy] = createOptimistic(false);
-  const [operation, setOperation] = createSignal<{ promise: Promise<void> }>();
+  const [operation, setOperation] = createSignal<{ promise: Promise<undefined> }>();
   const names = (capabilities = props.request.capabilities) =>
     capabilities
       .map((id) => {
@@ -90,12 +91,13 @@ export function ChatPermissionCard(props: {
     permissionAction().state === "disabled-in-openclaw"
       ? remaining().filter((id) => !disabled().includes(id))
       : [];
-  const grant = action(function* () {
-    if (!local() || busy()) {
+  const grant = action(function* (): Generator<Promise<void>, undefined, unknown> {
+    const resolvePermission = local();
+    if (!resolvePermission || busy()) {
       return;
     }
     setBusy(true);
-    yield native?.resolvePermission?.({
+    yield resolvePermission({
       ...props.request,
       ...permissionAction(),
     });
@@ -161,16 +163,8 @@ export function ChatPermissionCard(props: {
             // Only failure renders; successful native actions have no content.
             const outcome = createMemo(() => promise, { loadingValue: undefined });
             return (
-              <Errored
-                fallback={(error) => {
-                  const message = () => {
-                    const cause = error();
-                    return cause instanceof Error ? cause.message : String(cause);
-                  };
-                  return <p role="alert">{message()}</p>;
-                }}
-              >
-                {void outcome()}
+              <Errored fallback={(error) => <p role="alert">{coerceErrorMessage(error())}</p>}>
+                {outcome()}
               </Errored>
             );
           }}
