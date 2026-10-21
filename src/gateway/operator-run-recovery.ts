@@ -28,6 +28,7 @@ import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
+import type { PreparedSessionRun } from "./in-process-session-run.js";
 import { resumeGatewayOperatorAccessGrant } from "./operator-access-policy.js";
 import {
   onOperatorRolePolicyChanged,
@@ -422,6 +423,7 @@ export async function restoreGatewayRunRecovery(params: {
 }): Promise<{
   operator?: RestoredGatewayOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
+  sessionRun: PreparedSessionRun;
 }> {
   const target = { ...params.target };
   let entry: InternalSessionEntry | undefined;
@@ -536,7 +538,16 @@ export async function restoreGatewayRunRecovery(params: {
         }),
       });
     }
-    return { operator, requesterOrigin };
+    return {
+      operator,
+      requesterOrigin,
+      sessionRun: {
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        lifecycleRevision: entry.lifecycleRevision ?? null,
+        runId: target.recoveryRunId,
+      },
+    };
   } catch (error) {
     operator?.release();
     throw error;

@@ -24,6 +24,7 @@ import type {
   AgentTurnStartOwner,
   InternalAgentTurnPrincipalOptions,
 } from "./agent-turn/internal-facade.types.js";
+import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import { retainInternalApprovalCommitGuard } from "./internal-approval-authority.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -290,6 +291,9 @@ export function createGatewayInstanceRuntime(
       let releaseOperatorAuthority: (() => void) | undefined;
       let delegatedToolPolicyHandoffId: string | undefined;
       try {
+        if (recoveryTarget && !restored?.operator) {
+          throw new Error("Restart recovery operator source is unavailable; send a new request.");
+        }
         const operatorAuthority =
           restored?.operator?.authority ?? dispatchOptions.operatorRunAuthority;
         if (operatorAuthority) {
@@ -363,7 +367,12 @@ export function createGatewayInstanceRuntime(
               },
             })
           : recoveryAgentTurns;
-        return await agentTurns.dispatch<T>(payload, {
+        // Reuse own-session admission only for the exact restored operator claim.
+        // The original scope ceiling and live authority still fence all later effects.
+        const request = restored?.operator
+          ? bindInProcessSessionRun(payload, restored.sessionRun)
+          : payload;
+        return await agentTurns.dispatch<T>(request, {
           controllerInput: dispatchOptions.controllerInput,
           replyExpectation: dispatchOptions.replyExpectation,
           assertAdmissionCurrent: assertRecoveryCurrent,

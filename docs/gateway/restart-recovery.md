@@ -38,6 +38,10 @@ recovery uses the claim rather than treating the latest steering message as a ne
 delegated request. This includes authenticated non-browser clients whose ingress
 is labeled internal. Before execution, the Gateway restores the exact operator
 source under current identity and access policy; a revoked source cannot resume.
+Members and guests with session-only access can resume their own interrupted
+turns without broader operator permissions. Recovery retains the original scope
+ceiling and current session-access checks; it does not grant administrative tools
+or open the public `agent` RPC to session-only callers.
 The existing source-authorization and delivery checks still apply; a transcript
 message alone cannot restore missing sender authority. Accepted `sessions_send`
 follow-ups into main chat sessions also retain their admitted operator source,
