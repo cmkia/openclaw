@@ -218,16 +218,16 @@ function expectCollectAdvertised(tool: { parameters: unknown }, advertised: bool
 
 describe("Code Mode swarm guest", () => {
   it("maps agents.run schema options through spawn and returns structured completion", async () => {
+    const options = {
+      label: "facts",
+      model: "openai/gpt-5",
+      thinking: "high",
+      fastMode: "auto",
+      agentId: "researcher",
+      schema: { type: "object", properties: { answer: { type: "string" } } },
+    };
     const first = await workerExec(
-      `return await agents.run("Research", {
-        label: "facts",
-        model: "openai/gpt-5",
-        thinking: "high",
-        fastMode: "auto",
-        agentId: "researcher",
-        phase: "Research phase",
-        schema: { type: "object", properties: { answer: { type: "string" } } }
-      });`,
+      `return await agents.run("Research", ${JSON.stringify({ ...options, phase: "Research phase" })});`,
     );
     expectWaiting(first);
     expect(first.pendingRequests).toEqual([
@@ -239,17 +239,7 @@ describe("Code Mode swarm guest", () => {
       expect.objectContaining({
         id: "bridge:agentSpawn:1",
         method: "agentSpawn",
-        args: [
-          "Research",
-          expect.objectContaining({
-            label: "facts",
-            model: "openai/gpt-5",
-            thinking: "high",
-            fastMode: "auto",
-            agentId: "researcher",
-            schema: expect.objectContaining({ type: "object" }),
-          }),
-        ],
+        args: ["Research", expect.objectContaining(options)],
       }),
     ]);
 

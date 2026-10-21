@@ -4,7 +4,6 @@ import {
   GetPromptResultSchema as LegacyGetPromptResultSchema,
   type CallToolResult as LegacyCallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { typeCheckSources } from "../../test/helpers/typescript.js";
@@ -17,17 +16,11 @@ import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import {
-  applyCodeModeCatalog,
-  createCodeModeTools,
-  runCodeModeScriptHeadless,
-} from "./code-mode.js";
+import { runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   pluginTool,
-  runUntilCompleted,
   resetCodeModeTestState,
   mcpTool,
-  createCodeModeHarness,
   createCatalogCodeModeHarness,
   expectCompleted,
   expectToolCalls,
@@ -67,7 +60,7 @@ afterEach(async () => {
 describe("Code Mode MCP namespace", () => {
   it("preserves native MCP results through bundled materialization and the guest namespace", async () => {
     // SessionMcpRuntime retains its published v1 result shapes during the deprecation window.
-    const success: LegacyCallToolResult = {
+    const publicSuccess: LegacyCallToolResult = {
       content: [
         {
           type: "text",
@@ -82,14 +75,14 @@ describe("Code Mode MCP namespace", () => {
       ],
       structuredContent: { answer: 42 },
       isError: false,
-      _meta: { privateAppState: "must-not-reach-guest" },
     };
-    const failure: LegacyCallToolResult = {
+    const publicFailure: LegacyCallToolResult = {
       content: textContent("recoverable failure"),
       structuredContent: { retryable: true },
       isError: true,
-      _meta: { privateAppState: "failure-private-state" },
     };
+    const success = { ...publicSuccess, _meta: { privateAppState: "must-not-reach-guest" } };
+    const failure = { ...publicFailure, _meta: { privateAppState: "failure-private-state" } };
     const catalog: McpToolCatalog = {
       version: 1,
       generatedAt: 0,
@@ -191,16 +184,8 @@ describe("Code Mode MCP namespace", () => {
     const details = resultDetails(result);
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({
-      success: {
-        content: success.content,
-        structuredContent: { answer: 42 },
-        isError: false,
-      },
-      failure: {
-        content: failure.content,
-        structuredContent: { retryable: true },
-        isError: true,
-      },
+      success: publicSuccess,
+      failure: publicFailure,
       resources: publicUtilityResults.resources_list,
       resource: publicUtilityResults.resources_read,
       prompts: publicUtilityResults.prompts_list,
@@ -210,9 +195,7 @@ describe("Code Mode MCP namespace", () => {
       type: "text",
       text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
-    expect(result.content[0]).not.toMatchObject({
-      text: expect.stringContaining("<|endoftext|>"),
-    });
+    expect(result.content[0]).not.toMatchObject({ text: expect.stringContaining("<|endoftext|>") });
     for (const [operation, value] of Object.entries(privateUtilityResults)) {
       expect(value._meta).toEqual({ privateState: `${operation}-must-not-leak` });
     }
@@ -338,6 +321,8 @@ const stringSchema = { type: "string" };
 const closedObject = (properties: Record<string, JsonSchemaType>) =>
   requiredObject(properties, { additionalProperties: false });
 const dictionarySchema = { type: "object", additionalProperties: stringSchema };
+const nullableString = { ...stringSchema, nullable: true };
+const enumString = (...values: unknown[]) => ({ ...stringSchema, enum: values });
 
 describe("MCP declaration consumers", () => {
   it("advertises dictionary and nullable inputs accepted through the MCP namespace", async () => {
@@ -382,18 +367,17 @@ describe("MCP declaration consumers", () => {
         {
           type: "object",
           properties: {
-            scalar: { ...stringSchema, nullable: true },
+            scalar: nullableString,
             union: { type: ["number", "boolean"], nullable: true },
             dictionary: { ...dictionarySchema, nullable: true },
-            restricted: { ...stringSchema, nullable: true, enum: ["keep"] },
-            constrained: { ...stringSchema, enum: ["keep", null] },
+            restricted: { ...nullableString, enum: ["keep"] },
+            constrained: enumString("keep", null),
             integer: { type: "integer", enum: [1, 1.5, { nested: true }] },
-            impossible: { ...stringSchema, enum: [false, { nested: true }] },
+            impossible: enumString(false, { nested: true }),
             options: requiredObject({ limit: { type: "number", default: 10 } }),
-            mixed: { ...stringSchema, nullable: true, enum: ["keep", { nested: true }] },
+            mixed: { ...nullableString, enum: ["keep", { nested: true }] },
             oversized: {
-              ...stringSchema,
-              nullable: true,
+              ...nullableString,
               enum: Array.from({ length: 17 }, (_, i) => `choice${i}`),
             },
           },
@@ -479,38 +463,31 @@ describe("MCP declaration consumers", () => {
     expect(value.file.content).toBe(value.api.header);
     expect(value.file.bytes).toBe(Buffer.byteLength(value.file.content));
     // Compile real accepted calls against the advertised header, not a parallel expected renderer.
-    const fileName = "/mcp-declaration-consumer.ts";
-    const source = `${value.file.content}\n${calls.join(";\n")};
-// @ts-expect-error Dictionary values are strings.
-MCP.fixture.dictionary({ topic: 42 });
-// @ts-expect-error Closed objects have no extra properties.
-MCP.fixture.closed({ topic: "synthetic" });
-// @ts-expect-error Nullable enums still reject other literals.
-MCP.fixture.nullable({ value: "discard" });
-// @ts-expect-error Required fields remain required.
-MCP.fixture.nullable({});
+    const rejectedCalls = [
+      "dictionary({ topic: 42 })",
+      'closed({ topic: "synthetic" })',
+      'nullable({ value: "discard" })',
+      "nullable({})",
+      ...[
+        "restricted: null",
+        "constrained: null",
+        "mixed: null",
+        'mixed: "discard"',
+        "integer: 1.5",
+        'impossible: "discard"',
+        "options: {}",
+        "oversized: null",
+      ].map((field) => `nullableKeyword({ ...nullableFields, ${field} })`),
+      "nullable()",
+      "nested({ values: [{ topic: 42 }] })",
+    ];
+    expect(
+      typeCheckSources({
+        "/mcp-declaration-consumer.ts": `${value.file.content}\n${calls.join(";\n")};
 const nullableFields = { scalar: null, union: null, dictionary: null, restricted: "keep", constrained: "keep", mixed: "keep", oversized: "choice0" } as const;
-// @ts-expect-error Ajv nullable does not widen an enum that excludes null.
-MCP.fixture.nullableKeyword({ ...nullableFields, restricted: null });
-// @ts-expect-error A non-null type constrains even an enum containing null.
-MCP.fixture.nullableKeyword({ ...nullableFields, constrained: null });
-// @ts-expect-error A mixed enum still excludes null.
-MCP.fixture.nullableKeyword({ ...nullableFields, mixed: null });
-// @ts-expect-error A type-incompatible object enum member cannot widen valid strings.
-MCP.fixture.nullableKeyword({ ...nullableFields, mixed: "discard" });
-// @ts-expect-error Integer enum candidates must be integers.
-MCP.fixture.nullableKeyword({ ...nullableFields, integer: 1.5 });
-// @ts-expect-error An enum with no type-compatible values is never.
-MCP.fixture.nullableKeyword({ ...nullableFields, impossible: "discard" });
-// @ts-expect-error Defaults are only injected at the top level.
-MCP.fixture.nullableKeyword({ ...nullableFields, options: {} });
-// @ts-expect-error Non-defaulted required fields still require an argument.
-MCP.fixture.nullable();
-// @ts-expect-error An enum beyond the literal-rendering cap still excludes null.
-MCP.fixture.nullableKeyword({ ...nullableFields, oversized: null });
-// @ts-expect-error Nested dictionary values retain their enum type.
-MCP.fixture.nested({ values: [{ topic: 42 }] });`;
-    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
+${rejectedCalls.map((call) => `// @ts-expect-error Input violates its advertised schema.\nMCP.fixture.${call};`).join("\n")}`,
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -590,15 +567,12 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
   );
 
   it("finds native and MCP capabilities by intent and calls the correct colliding namespace", async () => {
-    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
     const native = pluginTool("invoices", "Find overdue invoices locally");
     const targets = [invoiceTool("listInvoices"), invoiceTool("list_invoices")];
     const denied = invoiceTool("delete_invoices");
-    applyCodeModeCatalog({
-      tools: filterToolsByPolicy([...tools, native, ...targets, denied], { deny: [denied.name] }),
-      config,
-      catalogRef,
-    });
+    const { ctx, complete } = createCatalogCodeModeHarness(
+      filterToolsByPolicy([native, ...targets, denied], { deny: [denied.name] }),
+    );
     const code = `
       const matches = await catalog.search("overdue invoices", { limit: 10 });
       const remote = matches.filter(tool => tool.source === "mcp");
@@ -627,9 +601,7 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
       };
     `;
     const result =
-      mode === "headless"
-        ? await runCodeModeScriptHeadless({ ctx, code })
-        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+      mode === "headless" ? await runCodeModeScriptHeadless({ ctx, code }) : await complete(code);
     expect(result).toMatchObject({
       status: "completed",
       value: {
@@ -674,20 +646,20 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
 });
 
 it("bounds MCP discovery and wraps remote metadata before any tool executes", async () => {
-  const { catalogRef, tools } = createCodeModeHarness();
-  const config = { tools: { codeMode: { enabled: true, maxSearchLimit: 3 } } };
   const targets = Array.from({ length: 8 }, (_, index) => invoiceTool(`invoices_${index}`));
-  applyCodeModeCatalog({ tools: [...tools, ...targets], catalogRef, config });
-  const limitedTools = createCodeModeTools({ catalogRef, config });
-  const result = await expectDefined(limitedTools[0], "exec").execute("metadata-only", {
-    code: `
+  const { tools, completeResult } = createCatalogCodeModeHarness(targets, {
+    codeMode: { maxSearchLimit: 3 },
+  });
+  const result = await completeResult(
+    `
       const matches = await catalog.search("overdue invoices", { limit: 50 });
       for (const tool of matches) {
         if (tool.source === "mcp") await API.read(tool.apiPath);
       }
       return matches;
     `,
-  });
+    "metadata-only",
+  );
   expect(resultDetails(result)).toMatchObject({ status: "completed", value: expect.any(Array) });
   const value = resultDetails(result).value as unknown[];
   expect(value).toHaveLength(3);
@@ -701,7 +673,6 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
 });
 
 it("supports root MCP API and multiple server declarations", async () => {
-  const h = createCodeModeHarness();
   const targets = ["alpha", "beta", "index"].map((serverName) =>
     mcpTool({
       name: serverName + "_ping",
@@ -710,10 +681,8 @@ it("supports root MCP API and multiple server declarations", async () => {
       execute: vi.fn(async () => projectMcpCallToolResult({ content: textContent("pong") })),
     }),
   );
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
   const result = resultDetails(
-    await expectDefined(h.tools[0], "exec").execute("root-api", {
-      code: `
+    await harness(targets).run(`
           const root = await MCP.$api();
           const rootFile = await API.read("mcp/index.d.ts");
           const a = await MCP.alpha.$api();
@@ -729,8 +698,7 @@ it("supports root MCP API and multiple server declarations", async () => {
             indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
             files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
           };
-        `,
-    }),
+        `),
   );
   expect(result, JSON.stringify(result)).toMatchObject({
     status: "completed",

@@ -58,15 +58,27 @@ function packageIdentity(
   });
 }
 
+async function expectUnverified(
+  command: string,
+  overrides: Partial<Parameters<typeof resolveCliExecutableIdentity>[0]> = {},
+) {
+  await expect(packageIdentity(command, overrides)).resolves.toBeUndefined();
+}
+
 function copyExecutable(target: string) {
   fs.copyFileSync(process.execPath, target);
   fs.chmodSync(target, 0o755);
 }
 
-function nativeIdentity(command: string, name: string) {
+function nativeIdentity(
+  command: string,
+  name: string,
+  overrides: Partial<Parameters<typeof resolveCliExecutableIdentity>[0]> = {},
+) {
   return resolveCliExecutableIdentity({
     command,
     runtimeArtifact: { ...commandPackagePolicy, nativeExecutableNames: [name] },
+    ...overrides,
   });
 }
 
@@ -128,7 +140,7 @@ describe("CLI executable implementation identity", () => {
         },
         runtimeArtifact: commandPackagePolicy,
       };
-      await expect(resolveCliExecutableIdentity(params)).resolves.toBeUndefined();
+      await expectUnverified(params.command, params);
       const identity = await resolveCliExecutableIdentity({
         ...params,
         env: { ...params.env, PATHEXT: ".EXE;.CMD;.JS" },
@@ -154,7 +166,7 @@ describe("CLI executable implementation identity", () => {
         ".\\bin\\cli.js",
         unknownScript,
       ]) {
-        await expect(packageIdentity(command, { cwd: fixture.root })).resolves.toBeUndefined();
+        await expectUnverified(command, { cwd: fixture.root });
       }
     },
   );
@@ -173,42 +185,27 @@ describe("CLI executable implementation identity", () => {
       fs.mkdirSync(binDir);
       fs.copyFileSync(process.execPath, executable);
       const relativeBinDir = path.relative(process.cwd(), binDir);
-      const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
-        ...commandPackagePolicy,
-        nativeExecutableNames: ["mixed-identity.exe"],
-      };
+      const resolve = (command: string, env: NodeJS.ProcessEnv, cwd?: string) =>
+        nativeIdentity(command, "mixed-identity.exe", { env, cwd });
 
       expect(path.isAbsolute(relativeBinDir)).toBe(false);
       await expect(
-        resolveCliExecutableIdentity({
-          command: "mixed-identity",
-          env: { pAtH: relativeBinDir, pAtHeXt: ".EXE" },
-          runtimeArtifact,
-        }),
+        resolve("mixed-identity", { pAtH: relativeBinDir, pAtHeXt: ".EXE" }),
       ).resolves.toBeUndefined();
       await expect(
-        resolveCliExecutableIdentity({
-          command: ".\\mixed-identity.exe",
-          cwd: binDir,
-          env: { pAtH: binDir, pAtHeXt: ".EXE" },
-          runtimeArtifact,
-        }),
+        resolve(".\\mixed-identity.exe", { pAtH: binDir, pAtHeXt: ".EXE" }, binDir),
       ).resolves.toBeUndefined();
 
       for (const command of [executable, "~/mixed-identity.exe", "~\\mixed-identity.exe"]) {
-        const absoluteIdentity = await resolveCliExecutableIdentity({
-          command,
-          env: { HOME: binDir, pAtH: binDir, pAtHeXt: ".CMD" },
-          runtimeArtifact,
+        const absoluteIdentity = await resolve(command, {
+          HOME: binDir,
+          pAtH: binDir,
+          pAtHeXt: ".CMD",
         });
         expect(absoluteIdentity?.resolvedPath).toBe(fs.realpathSync.native(executable));
       }
 
-      const identity = await resolveCliExecutableIdentity({
-        command: "mixed-identity",
-        env: { pAtH: binDir, pAtHeXt: ".EXE" },
-        runtimeArtifact,
-      });
+      const identity = await resolve("mixed-identity", { pAtH: binDir, pAtHeXt: ".EXE" });
       expect(identity?.resolvedPath).toBe(fs.realpathSync.native(executable));
       expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
     },
@@ -313,14 +310,7 @@ describe("CLI executable implementation identity", () => {
       fs.copyFileSync(process.execPath, executable, fs.constants.COPYFILE_EXCL);
       try {
         await expect(
-          resolveCliExecutableIdentity({
-            command,
-            env: { PATH: emptyPath, PATHEXT: ".EXE" },
-            runtimeArtifact: {
-              ...commandPackagePolicy,
-              nativeExecutableNames: [command],
-            },
-          }),
+          nativeIdentity(command, command, { env: { PATH: emptyPath, PATHEXT: ".EXE" } }),
         ).resolves.toBeUndefined();
       } finally {
         fs.rmSync(executable);
@@ -334,9 +324,7 @@ describe("CLI executable implementation identity", () => {
       fs.writeFileSync(posixShim, '#!/bin/sh\nexec "$basedir/bin/cli.js" "$@"\n');
       fs.writeFileSync(cmdShim, '@ECHO off\r\nSET WRAPPER_FLAG=1\r\n"%~dp0\\bin\\cli.js" %*\r\n');
       for (const command of [posixShim, cmdShim, "unsafe-cli"]) {
-        await expect(
-          packageIdentity(command, { env: { PATH: fixture.root, PATHEXT: ".CMD;.EXE" } }),
-        ).resolves.toBeUndefined();
+        await expectUnverified(command, { env: { PATH: fixture.root, PATHEXT: ".CMD;.EXE" } });
       }
     });
   });
@@ -360,14 +348,10 @@ describe("CLI executable implementation identity", () => {
 
   it("rejects an unknown script or a package policy with the wrong owner", async () => {
     const fixture = makePackage();
-    await expect(
-      resolveCliExecutableIdentity({ command: fixture.entrypoint, env: packageCommandEnv }),
-    ).resolves.toBeUndefined();
-    await expect(
-      packageIdentity(fixture.entrypoint, {
-        runtimeArtifact: { ...commandPackagePolicy, packageName: "@fixture/other" },
-      }),
-    ).resolves.toBeUndefined();
+    await expectUnverified(fixture.entrypoint, { runtimeArtifact: undefined });
+    await expectUnverified(fixture.entrypoint, {
+      runtimeArtifact: { ...commandPackagePolicy, packageName: "@fixture/other" },
+    });
   });
 
   it.each(["dependencies", "peerDependencies"] as const)(
@@ -383,17 +367,12 @@ describe("CLI executable implementation identity", () => {
         })}\n`,
       );
 
-      await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
+      await expectUnverified(fixture.entrypoint);
     },
   );
 
   it("rejects an interpreter launcher whose command is outside the package", async () => {
-    await expect(
-      resolveCliExecutableIdentity({
-        command: process.execPath,
-        runtimeArtifact: commandPackagePolicy,
-      }),
-    ).resolves.toBeUndefined();
+    await expectUnverified(process.execPath);
   });
 
   it("requires a positive native executable name under a backend package policy", async () => {
@@ -402,13 +381,8 @@ describe("CLI executable implementation identity", () => {
     const executable = path.join(root, "claude");
     copyExecutable(executable);
 
-    await expect(resolveCliExecutableIdentity({ command: executable })).resolves.toBeUndefined();
-    await expect(
-      resolveCliExecutableIdentity({
-        command: executable,
-        runtimeArtifact: commandPackagePolicy,
-      }),
-    ).resolves.toBeUndefined();
+    await expectUnverified(executable, { runtimeArtifact: undefined });
+    await expectUnverified(executable);
     const identity = await nativeIdentity(executable, "claude");
     expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
 
@@ -448,7 +422,7 @@ describe("CLI executable implementation identity", () => {
         { mode: 0o755 },
       );
 
-      await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
+      await expectUnverified(fixture.entrypoint);
     },
   );
 
@@ -466,7 +440,7 @@ describe("CLI executable implementation identity", () => {
     if (process.platform !== "win32") {
       const symlinked = makePackage();
       fs.symlinkSync(symlinked.implementation, path.join(symlinked.root, "dist", "redirect.js"));
-      await expect(packageIdentity(symlinked.entrypoint)).resolves.toBeUndefined();
+      await expectUnverified(symlinked.entrypoint);
     }
   });
 
@@ -476,6 +450,6 @@ describe("CLI executable implementation identity", () => {
     fs.writeFileSync(oversized, "");
     fs.truncateSync(oversized, 1024 * 1024 * 1024 + 1);
 
-    await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
+    await expectUnverified(fixture.entrypoint);
   });
 });

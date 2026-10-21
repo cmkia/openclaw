@@ -37,8 +37,11 @@ function oauth<Provider extends string>(
   };
 }
 
-function profileEpoch(authProfileId: string) {
-  return resolveCliAuthEpoch({ provider: "google-gemini-cli", authProfileId });
+function profileEpoch(
+  authProfileId: string,
+  overrides: Partial<Parameters<typeof resolveCliAuthEpoch>[0]> = {},
+) {
+  return resolveCliAuthEpoch({ provider: "google-gemini-cli", authProfileId, ...overrides });
 }
 
 function useProfileStore(store: AuthProfileStore) {
@@ -119,10 +122,8 @@ describe("resolveCliAuthEpoch", () => {
 
     const [work, personal] = await Promise.all(
       agentDirs.map((agentDir) =>
-        resolveCliAuthEpoch({
-          provider: "google-gemini-cli",
+        profileEpoch("google-gemini-cli:default", {
           agentDir,
-          authProfileId: "google-gemini-cli:default",
           skipLocalCredential: true,
         }),
       ),
@@ -149,10 +150,8 @@ describe("resolveCliAuthEpoch", () => {
     });
     useProfileStore(store);
     const epoch = (name: string) =>
-      resolveCliAuthEpoch({
-        provider: "google-gemini-cli",
+      profileEpoch(`google-gemini-cli:${name}`, {
         agentDir: "/agents/main/agent",
-        authProfileId: `google-gemini-cli:${name}`,
         skipLocalCredential: true,
       });
     const primary = await epoch("primary");
@@ -304,56 +303,43 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).not.toBe(first);
   });
 
+  type Token = Extract<AuthProfileCredential, { type: "token" }>;
   it.each([
-    {
-      label: "keeps ref-backed token epochs stable on rotation",
-      profileId: "anthropic:work",
-      credential: {
-        token: "token-a",
-        displayName: "Work",
+    [
+      "ref-backed token rotation",
+      {
         email: "user@example.com",
         tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
       },
-      replacement: { token: "token-b" },
-      changes: false,
+      { token: "token-b" },
+      false,
+    ],
+    ["token-only replacement", {}, { token: "token-b" }, true],
+    [
+      "email identity replacement",
+      { email: "user-a@example.com" },
+      { email: "user-b@example.com" },
+      true,
+    ],
+  ] satisfies Array<[string, Partial<Token>, Partial<Token>, boolean]>)(
+    "tracks %s",
+    async (_name, fields, replacement, changes) => {
+      const profileId = "anthropic:work";
+      const credential: Extract<AuthProfileCredential, { type: "token" }> = {
+        type: "token",
+        provider: "anthropic",
+        token: "token-a",
+        displayName: "Work",
+        ...fields,
+      };
+      useProfileStore(createAuthProfileStoreFixture({ [profileId]: credential }));
+      const first = await profileEpoch(profileId);
+      Object.assign(credential, replacement);
+      const second = await profileEpoch(profileId);
+      expectEpochs(first, second);
+      expect(second === first).toBe(!changes);
     },
-    {
-      label: "changes token-only epochs on replacement",
-      profileId: "anthropic:token-only",
-      credential: { token: "token-a", displayName: "Manual token" },
-      replacement: { token: "token-b" },
-      changes: true,
-    },
-    {
-      label: "changes token epochs when email identity changes",
-      profileId: "anthropic:work",
-      credential: { token: "token", displayName: "Work", email: "user-a@example.com" },
-      replacement: { email: "user-b@example.com" },
-      changes: true,
-    },
-  ] satisfies Array<{
-    label: string;
-    profileId: string;
-    credential: Omit<Extract<AuthProfileCredential, { type: "token" }>, "type" | "provider">;
-    replacement: Partial<Extract<AuthProfileCredential, { type: "token" }>>;
-    changes: boolean;
-  }>)("$label", async ({ profileId, credential: fields, replacement, changes }) => {
-    const credential: Extract<AuthProfileCredential, { type: "token" }> = {
-      type: "token",
-      provider: "anthropic",
-      ...fields,
-    };
-    useProfileStore(createAuthProfileStoreFixture({ [profileId]: credential }));
-    const first = await profileEpoch(profileId);
-    Object.assign(credential, replacement);
-    const second = await profileEpoch(profileId);
-    expectEpochs(first, second);
-    if (changes) {
-      expect(second).not.toBe(first);
-    } else {
-      expect(second).toBe(first);
-    }
-  });
+  );
 
   it("mixes local codex and auth-profile state", async () => {
     const local = oauth("openai", {
@@ -446,35 +432,27 @@ describe("resolveCliAuthEpoch", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("changes an opaque owner when PATH selects a different executable", async () => {
-    const dir = tempDir("openclaw-cli-owner-path-");
-    const firstBin = path.join(dir, "first");
-    const secondBin = path.join(dir, "second");
-    copyNativeExecutable(path.join(firstBin, "claude"), nativeUtility("true"));
-    copyNativeExecutable(path.join(secondBin, "claude"), nativeUtility("false"));
-    const config = cliConfig("claude");
-    const first = await ownerFingerprint(config, { env: { PATH: firstBin } });
-    const second = await ownerFingerprint(config, { env: { PATH: secondBin } });
-
-    expectEpochs(first, second);
-    expect(second).not.toBe(first);
-  });
-
-  it("changes an opaque owner when the executable is replaced in place", async () => {
-    const dir = tempDir("openclaw-cli-owner-replace-");
-    const executable = path.join(dir, "claude");
-    copyNativeExecutable(executable, nativeUtility("true"));
-    const config = cliConfig(executable);
-    const first = await ownerFingerprint(config);
-    copyNativeExecutable(executable, nativeUtility("false"));
-    if (nativeUtility("true") === nativeUtility("false")) {
-      fs.appendFileSync(executable, "replacement");
-    }
-    const second = await ownerFingerprint(config);
-
-    expectEpochs(first, second);
-    expect(second).not.toBe(first);
-  });
+  it.each(["PATH selection", "in-place replacement"])(
+    "changes an opaque owner after %s",
+    async (change) => {
+      const dir = tempDir("openclaw-cli-owner-change-");
+      const executable = path.join(dir, "first", "claude");
+      const replacement =
+        change === "PATH selection" ? path.join(dir, "second", "claude") : executable;
+      copyNativeExecutable(executable, nativeUtility("true"));
+      const config = cliConfig(change === "PATH selection" ? "claude" : executable);
+      const fingerprint = (target: string) =>
+        ownerFingerprint(config, { env: { PATH: path.dirname(target) } });
+      const first = await fingerprint(executable);
+      copyNativeExecutable(replacement, nativeUtility("false"));
+      if (nativeUtility("true") === nativeUtility("false")) {
+        fs.appendFileSync(replacement, "replacement");
+      }
+      const second = await fingerprint(replacement);
+      expectEpochs(first, second);
+      expect(second).not.toBe(first);
+    },
+  );
 
   it("refuses a cwd-relative executable as a persistent opaque owner", async () => {
     const dir = tempDir("openclaw-cli-owner-relative-");
