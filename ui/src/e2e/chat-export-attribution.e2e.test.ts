@@ -1,6 +1,5 @@
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
-import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -14,7 +13,6 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat export attribution",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 const sessionKey = "agent:main:export-attribution";
 const toolCall = {
