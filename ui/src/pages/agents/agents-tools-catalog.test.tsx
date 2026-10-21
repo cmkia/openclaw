@@ -145,7 +145,17 @@ describe("Agents tools catalog read", () => {
     );
     expect(retry).toBeDefined();
     retry!.click();
-    await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(2));
+    await waitForSolid(() => {
+      expect(view.catalogCalls()).toHaveLength(2);
+      expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");
+      expect(
+        view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
+      ).not.toBeNull();
+      expect(
+        view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
+      ).toBe(true);
+    });
+    expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
     second.resolve(catalog("main", "read"));
     await waitForSolid(() => {
       expect(view.container.textContent).not.toContain("Showing built-in fallback list instead.");

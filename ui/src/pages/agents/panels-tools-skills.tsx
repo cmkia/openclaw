@@ -571,11 +571,13 @@ export function AgentTools(
 
   return (
     <>
-      <Errored fallback={(_error) => <Configuration catalog={null} failed />}>
-        <Loading on={params.catalogRequest} fallback={<Configuration catalog={null} pending />}>
-          <Configuration catalog={params.readCatalog()} />
-        </Loading>
-      </Errored>
+      <Show when={params.catalogRequest ?? params.agentId} keyed>
+        <Errored fallback={(_error) => <Configuration catalog={null} failed />}>
+          <Loading fallback={<Configuration catalog={null} pending />}>
+            <Configuration catalog={params.readCatalog()} />
+          </Loading>
+        </Errored>
+      </Show>
       <EffectiveBoundary>
         {(preview) => (
           <ToolRuntime
@@ -589,18 +591,19 @@ export function AgentTools(
         identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
-      <Errored fallback={(_error) => <Catalog catalog={null} />}>
-        <Loading
-          on={params.catalogRequest}
-          fallback={
-            <SettingsSection title={t("agentTools.catalogTitle")}>
-              <SettingsLoadingSkeleton label={t("agentTools.loadingCatalog")} />
-            </SettingsSection>
-          }
-        >
-          <Catalog catalog={params.readCatalog()} />
-        </Loading>
-      </Errored>
+      <Show when={params.catalogRequest ?? params.agentId} keyed>
+        <Errored fallback={(_error) => <Catalog catalog={null} />}>
+          <Loading
+            fallback={
+              <SettingsSection title={t("agentTools.catalogTitle")}>
+                <SettingsLoadingSkeleton label={t("agentTools.loadingCatalog")} />
+              </SettingsSection>
+            }
+          >
+            <Catalog catalog={params.readCatalog()} />
+          </Loading>
+        </Errored>
+      </Show>
     </>
   );
 }
