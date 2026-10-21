@@ -551,7 +551,7 @@ describe("personal navigation rail", () => {
       result: {
         ...result,
         owners: result.owners!.map((owner) =>
-          owner.id === "other" ? { ...owner, label: "Updated Person" } : owner,
+          owner.id === "other" ? Object.assign({}, owner, { label: "Updated Person" }) : owner,
         ),
       },
     });
