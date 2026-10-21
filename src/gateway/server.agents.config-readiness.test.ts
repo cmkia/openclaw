@@ -68,6 +68,10 @@ const connect = () =>
     scopes: ["operator.admin", "operator.read", "operator.write"],
   });
 const rpc = (method: string, params: Record<string, unknown>) => client.request(method, params);
+const createAgent = (name: string, directory = name, extra: Record<string, unknown> = {}) =>
+  rpc("agents.create", { name, workspace: path.join(state.home, directory), ...extra });
+const createSession = (targetAgentId: string, key: string, extra: Record<string, unknown> = {}) =>
+  rpc("sessions.create", { agentId: targetAgentId, key, ...extra });
 const matches = async (result: Promise<unknown>, expected: object) =>
   expect(await result).toMatchObject(expected);
 const roster = (entry: Record<string, unknown>) => ({
@@ -175,11 +179,7 @@ it("publishes agent mutations before acknowledging immediate session and roster 
   const key = `agent:${agentId}:first-session`;
   let creationAcknowledged = false;
   await expect(
-    rpc("agents.create", {
-      name: "Retired Owner",
-      workspace: path.join(state.home, "workspace-retired"),
-      expectedOwnerId: "retired-owner",
-    }),
+    createAgent("Retired Owner", "workspace-retired", { expectedOwnerId: "retired-owner" }),
   ).rejects.toMatchObject({
     code: "UNAVAILABLE",
     details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
@@ -219,7 +219,7 @@ it("publishes agent mutations before acknowledging immediate session and roster 
   });
   const firstSession = creation.then(() => {
     creationAcknowledged = true;
-    return rpc("sessions.create", { agentId, key });
+    return createSession(agentId, key);
   });
   try {
     await withinTest(
@@ -262,18 +262,14 @@ it("publishes agent mutations before acknowledging immediate session and roster 
   expect(resolveAgentModelPrimaryValue(getRuntimeConfig().agents?.entries?.[agentId]?.model)).toBe(
     "openai/gpt-4.1",
   );
-  await matches(rpc("sessions.create", { agentId, key: `agent:${agentId}:after-update` }), {
+  await matches(createSession(agentId, `agent:${agentId}:after-update`), {
     key: `agent:${agentId}:after-update`,
   });
 
   await matches(rpc("agents.delete", { agentId, deleteFiles: false }), { ok: true, agentId });
   for (const incognito of [false, true]) {
     await expect(
-      rpc("sessions.create", {
-        agentId,
-        key: `agent:${agentId}:after-delete`,
-        incognito,
-      }),
+      createSession(agentId, `agent:${agentId}:after-delete`, { incognito }),
     ).rejects.toThrow(`Unknown agent id "${agentId}"`);
   }
   expect(getRuntimeConfig().agents?.entries?.[agentId]).toBeUndefined();
@@ -371,15 +367,10 @@ it("reports unavailable publication and saved-only mutations", async ({ signal }
       written = createDeferred();
       const unavailableAgent = `unavailable-${reason}`;
       awaitingAgent = unavailableAgent;
-      const failedCreation = client
-        .request("agents.create", {
-          name: unavailableAgent,
-          workspace: path.join(state.home, unavailableAgent),
-        })
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
+      const failedCreation = createAgent(unavailableAgent).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       await withinTest(written.promise, signal);
       const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockRejectedValue(
         new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
@@ -414,12 +405,7 @@ it("reports unavailable publication and saved-only mutations", async ({ signal }
     ...saved,
     gateway: { ...saved.gateway, reload: { mode: "off" } },
   });
-  await expect(
-    rpc("agents.create", {
-      name: "Saved Only",
-      workspace: path.join(state.home, "workspace-saved-only"),
-    }),
-  ).rejects.toMatchObject({
+  await expect(createAgent("Saved Only", "workspace-saved-only")).rejects.toMatchObject({
     code: "UNAVAILABLE",
     message: expect.stringContaining("saved"),
   });

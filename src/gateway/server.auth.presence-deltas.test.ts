@@ -30,12 +30,17 @@ type PresenceFrame = {
   stateVersion: { presence: number };
 };
 
-function observePresence(socket: WebSocket) {
+function observePresence(
+  socket: WebSocket,
+  onFrame?: (frame: PresenceFrame, serialized: string) => void,
+) {
   const frames: PresenceFrame[] = [];
   socket.on("message", (data) => {
-    const frame = JSON.parse(rawDataToString(data)) as PresenceFrame;
+    const serialized = rawDataToString(data);
+    const frame = JSON.parse(serialized) as PresenceFrame;
     if (frame.type === "event" && frame.event === "presence") {
       frames.push(frame);
+      onFrame?.(frame, serialized);
     }
   });
   return frames;
@@ -58,22 +63,25 @@ function nextPresence(socket: WebSocket, matches: (row: PresenceEntry) => boolea
   );
 }
 
-function reconstruct(hello: HelloOk, frames: PresenceFrame[]): PresenceEntry[] {
-  let version = hello.snapshot.stateVersion?.presence;
-  let rows = hello.snapshot.presence;
+function presenceReader(initialVersion?: number) {
+  let version = initialVersion;
   let entries = new Map<string, PresenceEntry>();
-  for (const { payload, stateVersion } of frames) {
-    expect(payload, "capable connections receive versioned presence payloads").toHaveProperty(
-      "version",
-    );
-    if (!("version" in payload)) {
-      throw new Error("capable connection received legacy presence");
+  return ({ payload, stateVersion }: PresenceFrame): PresenceEntry[] => {
+    if ("version" in payload) {
+      expect(payload.version).toBe(stateVersion.presence);
     }
-    expect(payload.version).toBe(stateVersion.presence);
-    if ("reset" in payload) {
-      expect(payload.keys).toHaveLength(payload.presence.length);
-      entries = new Map(payload.keys.map((key, index) => [key, payload.presence[index]!]));
-      rows = payload.presence;
+    if ("presence" in payload) {
+      if ("keys" in payload) {
+        expect(payload.keys).toHaveLength(payload.presence.length);
+      }
+      entries = new Map(
+        payload.presence.map((row, index) => [
+          "keys" in payload
+            ? payload.keys[index]!
+            : (row.connectionId ?? row.instanceId ?? "gateway"),
+          row,
+        ]),
+      );
     } else {
       expect(payload.base, "every delivered delta chains from the previous version").toBe(version);
       for (const key of payload.remove) {
@@ -93,9 +101,22 @@ function reconstruct(hello: HelloOk, frames: PresenceFrame[]): PresenceEntry[] {
         }
       }
       expect(new Set(payload.order)).toEqual(new Set(entries.keys()));
-      rows = payload.order.map((key) => entries.get(key)!);
     }
-    version = payload.version;
+    version = stateVersion.presence;
+    return "order" in payload
+      ? payload.order.map((key) => entries.get(key)!)
+      : [...entries.values()];
+  };
+}
+
+function reconstruct(hello: HelloOk, frames: PresenceFrame[]): PresenceEntry[] {
+  const read = presenceReader(hello.snapshot.stateVersion?.presence);
+  let rows = hello.snapshot.presence;
+  for (const frame of frames) {
+    expect(frame.payload, "capable connections receive versioned presence payloads").toHaveProperty(
+      "version",
+    );
+    rows = read(frame);
   }
   return rows;
 }
@@ -290,4 +311,123 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
   } finally {
     sendSpy.mockRestore();
   }
+});
+
+test("keeps multi-client presence compact through heartbeat, activity, and watched-session churn", async () => {
+  const identityDir = tempDirs.make("presence-modes-");
+  await withGatewayServer(async ({ port }) => {
+    type Observation = {
+      version: number;
+      mode: "delta" | "reset" | "legacy";
+      bytes: number;
+      rows: PresenceEntry[];
+    };
+    const clients: Array<{ ws: WebSocket; observations: Observation[]; capable: boolean }> = [];
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      const origin = `http://127.0.0.1:${port}`;
+      for (let index = 0; index < 8; index += 1) {
+        const ws = await openWs(port, { origin });
+        const observations: Observation[] = [];
+        const read = presenceReader();
+        observePresence(ws, (frame, serialized) =>
+          observations.push({
+            version: frame.stateVersion.presence,
+            mode:
+              "reset" in frame.payload ? "reset" : "upsert" in frame.payload ? "delta" : "legacy",
+            bytes: Buffer.byteLength(serialized),
+            rows: read(frame),
+          }),
+        );
+        const capable = index >= 2;
+        clients.push({ ws, observations, capable });
+        const result = await connectReq(ws, {
+          client: { ...CONTROL_UI_CLIENT, instanceId: `presence-browser-${index}` },
+          caps: capable ? ["hello-presence-self", "presence-deltas"] : [],
+          deviceIdentityPath: path.join(
+            identityDir,
+            `browser-${index}`,
+            "client",
+            "credentials.sqlite",
+          ),
+          browserOrigin: origin,
+          prePairDevice: true,
+        });
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+      }
+      const sessionKey = "agent:main:presence-modes-watched";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId: "presence-modes-session", updatedAt: Date.now(), visibility: "shared" },
+      );
+      const publication = async (
+        run: () => Promise<void>,
+        matches: (observation: Observation) => boolean,
+      ) => {
+        const received = clients.map(({ ws, observations }) =>
+          onceMessage<PresenceFrame>(
+            ws,
+            (frame) =>
+              frame.type === "event" && frame.event === "presence" && matches(observations.at(-1)!),
+          ),
+        );
+        await run();
+        await Promise.all(received);
+        const latest = clients.map(({ observations }) => observations.at(-1)!);
+        for (const observation of latest) {
+          expect(observation.version).toBe(latest[0]!.version);
+          expect(observation.rows).toEqual(latest[0]!.rows);
+        }
+        return latest;
+      };
+      const setViewers = async (ws: WebSocket, sessionKeys: string[]) => {
+        expect((await rpcReq(ws, "sessions.viewers.set", { sessionKeys })).ok).toBe(true);
+      };
+      await publication(
+        () => setViewers(clients[0]!.ws, [sessionKey]),
+        ({ rows }) =>
+          rows.some(
+            (row) =>
+              row.instanceId === "presence-browser-0" && row.watchedSessions?.includes(sessionKey),
+          ),
+      );
+      for (let round = 0; round < 3; round += 1) {
+        clock.mockReturnValue(Date.now() + 31_000);
+        const now = Date.now();
+        const watched = round % 2 === 0 ? [] : [sessionKey];
+        const latest = await publication(
+          async () => {
+            await Promise.all(
+              clients.map(async ({ ws }) => {
+                ws.pong();
+                expect((await rpcReq(ws, "presence.activity", {})).ok).toBe(true);
+                await setViewers(ws, watched);
+              }),
+            );
+          },
+          ({ rows }) =>
+            rows
+              .filter((row) => row.instanceId?.startsWith("presence-browser-"))
+              .every(
+                (row) =>
+                  row.ts === now &&
+                  row.lastActivityAt === now &&
+                  row.connectionLastActivityAt === now &&
+                  JSON.stringify(row.watchedSessions ?? []) === JSON.stringify(watched),
+              ),
+        );
+        for (const [index, observation] of latest.entries()) {
+          expect(observation.mode).toBe(clients[index]!.capable ? "delta" : "legacy");
+          if (clients[index]!.capable) {
+            expect(observation.bytes).toBeLessThan(latest[0]!.bytes / 2);
+          }
+        }
+      }
+    } finally {
+      clock.mockRestore();
+      for (const { ws } of clients) {
+        ws.close();
+      }
+    }
+  });
 });

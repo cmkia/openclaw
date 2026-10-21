@@ -1,22 +1,29 @@
+import { randomBytes } from "node:crypto";
+import { addAbortListener } from "node:events";
 // Proof overlay: real RPC handler, admitted-run owner, SQLite, transcript and media.
 // Gateway test helpers replace inference; they do not replace the effect owners below.
 import fs from "node:fs/promises";
+import path from "node:path";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as sessionMeta from "../acp/runtime/session-meta.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
-import {
-  resolveSqliteStoreScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
+import { isMissingPathError } from "../infra/errors.js";
+import { ATTACHMENT_OFFLOAD_THRESHOLD_BYTES } from "../media/attachment-processor.runtime.js";
+import { encodePngRgb } from "../media/png-encode.js";
+import * as mediaStore from "../media/store.js";
 import {
   captureSessionTarget,
   startSessionControllerInterruption,
 } from "../sessions/session-controller.lifecycle.js";
+import { isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { createAgentRunAdmissionRevalidator } from "./agent-turn/agent-run-admission-revalidation.js";
@@ -25,6 +32,7 @@ import * as attachments from "./chat-attachments.js";
 import {
   createResetDeliveryFixture,
   holdExecution,
+  holdPendingInput,
   installAgentAuthorityProofFixture,
   PNG,
   reach,
@@ -34,6 +42,17 @@ import {
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import * as resets from "./session-reset-service.js";
 import { agentCommandMock } from "./test-helpers.js";
+
+async function inboundMediaFiles(): Promise<string[]> {
+  try {
+    return (await fs.readdir(path.join(mediaStore.getMediaDir(), "inbound"))).toSorted();
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
 
 const resetDelivery = {
   message: "/reset",
@@ -98,11 +117,7 @@ describe("agent RPC real delegated-authority effects", () => {
       },
     });
   }
-  function pause(
-    f: Fixture,
-    signal: AbortSignal,
-    execution?: Awaited<ReturnType<typeof holdExecution>>,
-  ) {
+  function pause(f: Fixture, signal: AbortSignal, execution?: { cleanup: () => Promise<void> }) {
     const entered = createDeferred();
     const release = createDeferred();
     const unblock = () => release.resolve();
@@ -183,31 +198,12 @@ describe("agent RPC real delegated-authority effects", () => {
     "real pending-input transaction: %s",
     async (mode, { signal }) => {
       const f = await fixture();
-      const execution = await holdExecution(signal);
-      const { entered, release, finish } = pause(f, signal, execution);
-      let writer: Promise<unknown> | undefined;
       let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
       let inputRecorded = false;
-      const stage = pendingInputs.stageSessionPendingInput;
-      const observer = vi
-        .spyOn(pendingInputs, "stageSessionPendingInput")
-        .mockImplementationOnce(async (...args) => {
-          const writerEntered = createDeferred();
-          writer = runExclusiveSqliteSessionWrite(
-            resolveSqliteStoreScope(f.scope.storePath, { agentId: "main" }),
-            async () => {
-              writerEntered.resolve();
-              await release.promise;
-            },
-            "session.transcript.batch",
-          );
-          await writerEntered.promise;
-          const pending = stage(...args);
-          entered.resolve();
-          const result = await pending;
-          inputRecorded = (await pendingCount(f)) > 0;
-          return result;
-        });
+      const execution = await holdPendingInput(signal, f.scope, true, async () => {
+        inputRecorded = (await pendingCount(f)) > 0;
+      });
+      const { finish } = pause(f, signal, execution);
       let request: Promise<Response> | undefined;
       try {
         const params = {
@@ -217,7 +213,7 @@ describe("agent RPC real delegated-authority effects", () => {
               : "real pending-input custody proof",
         };
         request = f.dispatch(params, mode === "ordinary raw input" ? null : f.owner);
-        await reach(entered.promise, request);
+        await reach(execution.staged, request);
         expect(await pendingCount(f)).toBe(0);
         const beforeInput = transcript(f);
         if (mode === "revoked") {
@@ -226,7 +222,7 @@ describe("agent RPC real delegated-authority effects", () => {
           expect(beforeInput).not.toEqual(f.before);
           replacement = reserve(f, params.message);
         }
-        release.resolve();
+        execution.releaseWriter.resolve();
         const result = await request;
         if (mode === "revoked" || mode === "replaced after reset") {
           expectInactive(result, "is no longer active");
@@ -283,7 +279,7 @@ describe("agent RPC real delegated-authority effects", () => {
           });
         }
       } finally {
-        await finish([writer, request], [observer], replacement, mode === "accepted custody");
+        await finish([request], [], replacement, mode === "accepted custody");
       }
     },
   );
@@ -666,6 +662,122 @@ describe("agent RPC real delegated-authority effects", () => {
       } finally {
         await f.cleanup();
         resetObserver.mockRestore();
+      }
+    },
+  );
+  it.for(["live", "stopped", "replaced"] as const)(
+    "retains the request through joined metadata before media effects: %s",
+    async (mode, { signal }) => {
+      const f = await fixture({ imageCapable: true });
+      const execution = await holdExecution(signal);
+      // Incompressible pixels exercise the real parser's offload write before admission.
+      const image = encodePngRgb(randomBytes(1024 * 1024 * 3), 1024, 1024);
+      expect(image.byteLength).toBeGreaterThan(ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
+      expect(image.byteLength).toBeLessThan(MAX_IMAGE_BYTES);
+      const beforeEntry = await readEntry(f);
+      const beforeMedia = await inboundMediaFiles();
+      const entered =
+        createDeferred<Awaited<ReturnType<typeof sessionMeta.readAcpSessionEntryAsync>>>();
+      const release = createDeferred();
+      using _ = addAbortListener(signal, () => release.resolve());
+      const read = sessionMeta.readAcpSessionEntryAsync;
+      let held = false;
+      const readObserver = vi
+        .spyOn(sessionMeta, "readAcpSessionEntryAsync")
+        .mockImplementation(async (input) => {
+          const result = await read(input);
+          if (input.sessionKey === f.sessionKey && !held) {
+            held = true;
+            entered.resolve(result);
+            await release.promise;
+          }
+          return result;
+        });
+      using writeObserver = vi.spyOn(mediaStore, "saveMediaBuffer");
+      const params = {
+        message: "Inspect this synthetic offloaded image",
+        attachments: [{ mimeType: "image/png", content: image.toString("base64") }],
+      };
+      let request: Promise<Response> | undefined;
+      let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
+      try {
+        request = f.dispatch(params);
+        // Keep observing effects when the broken continuation rejects before an RPC response.
+        const outcome = Promise.allSettled([request]);
+        const joined = await reach(entered.promise, request);
+        expect(joined?.entry?.sessionId).toBe(f.sessionId);
+        expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toMatchObject({
+          runId: f.runId,
+          sessionKey: f.sessionKey,
+          status: "accepted",
+        });
+        const acceptedSource = rpcSourceTesting.get(f.runId);
+        expect(acceptedSource).toBeDefined();
+        expect(isRpcSourceExecuting(acceptedSource)).toBe(false);
+        expect(writeObserver).not.toHaveBeenCalled();
+        if (mode === "stopped") {
+          expect(await f.stop()).toMatchObject({ ok: true, payload: { aborted: true } });
+        } else if (mode === "replaced") {
+          replacement = reserve(f, params.message);
+        }
+        const retained = f.context.dedupe.get(`agent:${f.runId}`);
+        release.resolve();
+        const [result] = await outcome;
+        if (mode === "live") {
+          expect(result).toMatchObject({
+            status: "fulfilled",
+            value: { ok: true, payload: { status: "accepted" } },
+          });
+          const prepared = await execution.entered;
+          expect(writeObserver).toHaveBeenCalledOnce();
+          const stored = expectDefined(
+            await writeObserver.mock.results[0]?.value,
+            "persisted offloaded image",
+          );
+          expect(await fs.readFile(stored.path)).toEqual(image);
+          const recorder = expectDefined(prepared.userTurn.recorder, "admitted user-turn recorder");
+          const withPendingInput = expectDefined(recorder.withPendingInput, "pending-input owner");
+          const persisted = await withPendingInput(() => recorder.persistApproved());
+          expect(persisted?.appended).toBe(true);
+          expect(JSON.stringify(transcript(f))).toContain(stored.id);
+          expect(await fs.readFile(stored.path)).toEqual(image);
+        } else {
+          // Both observations matter: cleanup must not conceal an unauthorized write.
+          expect.soft(writeObserver).not.toHaveBeenCalled();
+          expect.soft(await inboundMediaFiles()).toEqual(beforeMedia);
+          expect.soft(await readEntry(f)).toEqual(beforeEntry);
+          expect
+            .soft(await f.effects())
+            .toMatchObject({ transcriptChanged: false, pendingCount: 0 });
+          expect.soft(execution.observer).not.toHaveBeenCalled();
+          expect.soft(agentCommandMock).not.toHaveBeenCalled();
+          await f.drain();
+          expect.soft(rpcSourceTesting.has(f.runId)).toBe(false);
+          expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
+          const response = {
+            ok: true,
+            meta: { cached: true },
+            payload: {
+              status: mode === "stopped" ? "timeout" : "in_flight",
+              ...(mode === "stopped" ? { stopReason: "rpc" } : {}),
+            },
+          };
+          expect.soft(result).toMatchObject({ status: "fulfilled", value: response });
+          const [retry] = await Promise.allSettled([f.dispatch(params)]);
+          expect.soft(retry).toMatchObject({ status: "fulfilled", value: response });
+          expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
+          expect.soft(writeObserver).not.toHaveBeenCalled();
+          expect
+            .soft(await f.effects())
+            .toMatchObject({ transcriptChanged: false, pendingCount: 0 });
+        }
+      } finally {
+        release.resolve();
+        await execution.cleanup();
+        await Promise.allSettled([request]);
+        replacement?.clearUnaccepted();
+        await f.cleanup();
+        readObserver.mockRestore();
       }
     },
   );

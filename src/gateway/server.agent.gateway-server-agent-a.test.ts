@@ -314,16 +314,6 @@ describe("gateway server agent", () => {
     },
   );
 
-  test("agent rejects unknown reply channel", async () => {
-    const inboundBefore = await listInboundMedia();
-    await rejectedAgent(
-      "idem-agent-reply-unknown",
-      { replyChannel: "unknown-channel", attachments: [offloadedImageAttachment()] },
-      { message: expect.stringContaining("unknown channel") },
-    );
-    await expectNoNewInboundMedia(inboundBefore);
-  });
-
   test("agent retains image offload facts beside the claim-check line", async () => {
     await setVisionModel([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
     const inboundBefore = await listInboundMedia();

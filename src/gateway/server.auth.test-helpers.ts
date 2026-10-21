@@ -255,6 +255,8 @@ export async function sendRawConnectReq(
   params: {
     id: string;
     token?: string;
+    client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
+    commands?: string[];
     device: { id: string; publicKey: string; signature: string; signedAt: number; nonce?: string };
   },
 ) {
@@ -266,8 +268,9 @@ export async function sendRawConnectReq(
       params: {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
-        client: TEST_OPERATOR_CLIENT,
+        client: params.client ?? TEST_OPERATOR_CLIENT,
         caps: [],
+        commands: params.commands,
         role: "operator",
         auth: params.token ? { token: params.token } : undefined,
         device: params.device,

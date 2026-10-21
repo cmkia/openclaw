@@ -13,7 +13,12 @@ import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
+import {
+  resolveSqliteStoreScope,
+  runExclusiveSqliteSessionWrite,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   registerAgentRunDelegatedAuthorityClosedHandler,
@@ -24,6 +29,7 @@ import { createAgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
 import { withInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { dispatchGatewayMethodInProcessRaw } from "./server-plugin-in-process-dispatch.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { resolveGatewayModelSupportsImages } from "./session-utils.js";
@@ -67,16 +73,10 @@ export function installAuthorityProofKernel() {
   installGatewayTestHooks({
     scope: "suite",
     setup: async () => {
-      const module = await import("./server-kernel.js");
-      const create = module.createGatewayKernel;
-      const capture = vi
-        .spyOn(module, "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          kernel = await create(...args);
-          return kernel;
-        });
-      acquisition = startGatewayServerHarness();
-      harness = await acquisition.finally(() => capture.mockRestore());
+      kernel = await captureGatewayKernel(async () => {
+        acquisition = startGatewayServerHarness();
+        harness = await acquisition;
+      });
     },
     cleanup: async () => {
       const ready = await acquisition?.catch(() => undefined);
@@ -311,17 +311,81 @@ export async function holdExecution(signal: AbortSignal) {
   return {
     entered: entered.promise,
     observer,
+    release: releaseWait,
     resume: async () => {
       release.resolve();
       await execution;
     },
-    cleanup: async () => {
+    cleanup: async (settleExecution = false) => {
       release.resolve();
       try {
-        await execution;
+        if (settleExecution) {
+          await Promise.allSettled([execution]);
+        } else {
+          await execution;
+        }
       } finally {
         observer.mockRestore();
         signal.removeEventListener("abort", releaseWait);
+      }
+    },
+  };
+}
+
+export async function holdPendingInput(
+  signal: AbortSignal,
+  scope: { storePath: string; agentId: string },
+  beforeStaging = true,
+  onStaged?: () => Promise<void>,
+) {
+  const execution = await holdExecution(signal);
+  const staged = createDeferred();
+  const releaseWriter = createDeferred();
+  const release = () => {
+    releaseWriter.resolve();
+    execution.release();
+  };
+  signal.addEventListener("abort", release, { once: true });
+  if (signal.aborted) {
+    release();
+  }
+  let writer: Promise<unknown> | undefined;
+  const stage = pendingInputs.stageSessionPendingInput;
+  const observer = vi
+    .spyOn(pendingInputs, "stageSessionPendingInput")
+    .mockImplementationOnce(async (...args) => {
+      if (beforeStaging) {
+        const locked = createDeferred();
+        writer = runExclusiveSqliteSessionWrite(
+          resolveSqliteStoreScope(scope.storePath, { agentId: scope.agentId }),
+          async () => {
+            locked.resolve();
+            await releaseWriter.promise;
+          },
+          "session.transcript.batch",
+        );
+        await locked.promise;
+      }
+      const pending = stage(...args);
+      staged.resolve();
+      const result = await pending;
+      if (onStaged) {
+        await onStaged();
+      }
+      return result;
+    });
+  return {
+    ...execution,
+    staged: staged.promise,
+    releaseWriter,
+    cleanup: async (pending?: Promise<unknown>, settleExecution = false) => {
+      release();
+      await Promise.allSettled([writer, pending]);
+      try {
+        await execution.cleanup(settleExecution);
+      } finally {
+        observer.mockRestore();
+        signal.removeEventListener("abort", release);
       }
     },
   };

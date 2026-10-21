@@ -2870,7 +2870,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.auth.identity-scopes.test.ts",
   "src/gateway/server.auth.modes.test.ts",
   "src/gateway/server.auth.presence-audience.test.ts",
-  "src/gateway/server.board-generated-identity.test.ts",
   "src/gateway/server.catalog-sharing.test.ts",
   "src/gateway/server.catalog-startup.test.ts",
   "src/gateway/server.channels.test.ts",
