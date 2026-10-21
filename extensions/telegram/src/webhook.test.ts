@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Api } from "grammy";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -453,22 +454,8 @@ describe("startTelegramWebhook", () => {
     const started = await startScopedWebhook({ abortSignal: callerAbort.signal });
 
     try {
-      const botParams = requireRecord(
-        requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
-        "createTelegramBot params",
-      );
-      const aborted = ["fetchAbortSignal", "accountAbortSignal"].map((key) => {
-        const signal = botParams[key];
-        expect(signal).toBeInstanceOf(AbortSignal);
-        if (!(signal instanceof AbortSignal)) {
-          throw new Error("expected bot fetch and account abort signals");
-        }
-        return new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => resolve(), { once: true });
-        });
-      });
       await started.stop();
-      await expect(Promise.all(aborted)).resolves.toEqual([undefined, undefined]);
+      expectWebhookBotScopesAborted(createTelegramBotSpy);
       expect(callerAbort.signal.aborted).toBe(false);
     } finally {
       await started.stop();
@@ -899,24 +886,22 @@ describe("startTelegramWebhook", () => {
     vi.stubEnv("OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS", envValue);
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const finishUpdate = createDeferred<void>();
-    const active: {
-      dispatchStartedAt?: number;
-      lifecycle?: NonNullable<ReturnType<typeof getTelegramSpooledReplayLifecycle>>;
-    } = {};
+    const active = createDeferred<{
+      dispatchStartedAt: number;
+      lifecycle: NonNullable<ReturnType<typeof getTelegramSpooledReplayLifecycle>>;
+    }>();
     await spoolUpdate(telegramMessageUpdate(39, "stalled"));
     handleUpdateSpy.mockImplementationOnce(async () => {
-      active.dispatchStartedAt = Date.now();
-      active.lifecycle = getTelegramSpooledReplayLifecycle();
+      active.resolve({
+        dispatchStartedAt: Date.now(),
+        lifecycle: expectDefined(getTelegramSpooledReplayLifecycle(), "webhook lifecycle"),
+      });
       await finishUpdate.promise;
     });
 
     const started = await startScopedWebhook();
     try {
-      await waitForWebhookState(() => expect(active.lifecycle).toBeDefined());
-      const { dispatchStartedAt, lifecycle } = active;
-      if (!lifecycle || dispatchStartedAt === undefined) {
-        throw new Error("expected active webhook ingress lifecycle");
-      }
+      const { dispatchStartedAt, lifecycle } = await active.promise;
       expect(lifecycle.abortSignal.aborted).toBe(false);
       const remainingMs = timeoutMs - (Date.now() - dispatchStartedAt);
       expect(remainingMs).toBeGreaterThan(0);
@@ -1250,7 +1235,6 @@ describe("startTelegramWebhook", () => {
     handleUpdateSpy.mockImplementationOnce((update: unknown) => {
       seenUpdates.push(update as TestTelegramMessageUpdate);
     });
-
     const { payload, sizeBytes } = createNearLimitTelegramPayload();
     expect(sizeBytes).toBeLessThan(1_024 * 1_024);
     expect(sizeBytes).toBeGreaterThan(256 * 1_024);

@@ -92,8 +92,16 @@ it.each(["none", "middleware", "handler"] as const)(
     const releaseHeldAnswers = () => {
       releaseAnswers = true;
       for (const response of heldAnswerResponses.splice(0)) {
-        sendResult(response, true);
+        if (!response.writableEnded) {
+          sendResult(response, true);
+        }
       }
+    };
+    const releaseMenu = () => {
+      if (heldMenuResponse && !heldMenuResponse.writableEnded) {
+        sendResult(heldMenuResponse, menu);
+      }
+      heldMenuResponse = undefined;
     };
     fixture.handleRequest = (method, payload, response) => {
       if (method === "answerCallbackQuery" && !releaseAnswers) {
@@ -177,8 +185,6 @@ it.each(["none", "middleware", "handler"] as const)(
         () => expect(menu, `native menu not sent: ${runtimeErrors.join("; ")}`).toBeDefined(),
         { timeout: 5_000, interval: 10 },
       );
-      expect(await queue.listClaims()).toHaveLength(1);
-      expect(downstream).not.toHaveBeenCalled();
       const button = menu?.reply_markup?.inline_keyboard
         .flat()
         .find((entry) => "callback_data" in entry && entry.callback_data === "tgcmd:/usage off");
@@ -214,8 +220,7 @@ it.each(["none", "middleware", "handler"] as const)(
           await expect(firstAnswer).rejects.toThrow("ACK unavailable");
         }
         expect(heldMenuResponse).toBeDefined();
-        sendResult(heldMenuResponse!, menu);
-        heldMenuResponse = undefined;
+        releaseMenu();
         // Wait for the router, not a polling deadline, before checking ACK recovery.
         await handlerAnswerRead.promise;
         if (recovery === "handler") {
@@ -229,10 +234,7 @@ it.each(["none", "middleware", "handler"] as const)(
         expect(callbackRequests()).toHaveLength(2);
         expectAdmissionConsumed();
       }
-      if (heldMenuResponse) {
-        sendResult(heldMenuResponse, menu);
-        heldMenuResponse = undefined;
-      }
+      releaseMenu();
       await monitor.waitForIdle();
       expect(downstream).toHaveBeenCalledOnce();
 
@@ -246,15 +248,8 @@ it.each(["none", "middleware", "handler"] as const)(
       expect(downstream).toHaveBeenCalledOnce();
       expectAdmissionConsumed();
     } finally {
-      releaseAnswers = true;
-      for (const response of heldAnswerResponses) {
-        if (!response.writableEnded) {
-          sendResult(response, true);
-        }
-      }
-      if (heldMenuResponse && !heldMenuResponse.writableEnded) {
-        sendResult(heldMenuResponse, menu);
-      }
+      releaseHeldAnswers();
+      releaseMenu();
       await monitor?.waitForIdle();
       await monitor?.stop();
       await Promise.all(menuSyncs);

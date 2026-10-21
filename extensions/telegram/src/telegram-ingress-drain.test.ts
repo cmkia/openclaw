@@ -152,16 +152,17 @@ type ReplayCheck = {
   topicsEnabled?: boolean;
   rejected?: boolean;
   expectedLane?: string;
+  receivedAt?: number;
 };
 async function withStoredReplay(
-  entries: Array<{ update: StoredUpdate; laneKey: string }>,
+  entries: Array<{ update: StoredUpdate; laneKey: string; receivedAt?: number }>,
   run: (fixture: ReturnType<typeof createFixture>) => Promise<void>,
 ) {
   await withTempState(async ({ stateDir, queue }) => {
-    for (const { update, laneKey } of entries) {
+    for (const { update, laneKey, receivedAt = Date.now() } of entries) {
       await queue.enqueue(
         String(update.update_id).padStart(16, "0"),
-        { ...updatePayload(update.update_id), receivedAt: Date.now(), update },
+        { ...updatePayload(update.update_id), receivedAt, update },
         { laneKey },
       );
     }
@@ -174,34 +175,49 @@ async function withStoredReplay(
   });
 }
 async function checkStoredReplay(update: StoredUpdate, laneKey: string, options: ReplayCheck = {}) {
-  await withStoredReplay([{ update, laneKey }], async ({ queue, monitor: makeMonitor }) => {
-    const dispatch = vi.fn(async () => {
-      if (options.expectedLane) {
-        expect(await queue.listClaims()).toMatchObject([{ laneKey: options.expectedLane }]);
+  await withStoredReplay(
+    [{ update, laneKey, receivedAt: options.receivedAt }],
+    async ({ queue, monitor: makeMonitor }) => {
+      const dispatch = vi.fn(async (dispatchedUpdate: unknown) => {
+        if (options.receivedAt !== undefined) {
+          expect(resolveTelegramUpdateReceivedAtSeconds(dispatchedUpdate)).toBe(
+            Math.floor(options.receivedAt / 1000),
+          );
+        }
+        if (options.expectedLane) {
+          expect(await queue.listClaims()).toMatchObject([{ laneKey: options.expectedLane }]);
+        }
+        return { kind: "completed" as const };
+      });
+      const monitor = makeMonitor({
+        botInfo: { ...telegramBotInfoForTest, has_topics_enabled: options.topicsEnabled ?? false },
+        dispatch,
+      });
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        if (options.rejected) {
+          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+            { reason: "invalid-event", laneKey },
+          ]);
+          expect(dispatch).not.toHaveBeenCalled();
+        } else {
+          expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
+          expect(await queue.listFailed?.()).toEqual([]);
+          await expect(
+            queue.enqueue(
+              String(update.update_id).padStart(16, "0"),
+              { ...updatePayload(update.update_id), update },
+              { laneKey: options.expectedLane ?? laneKey },
+            ),
+          ).resolves.toMatchObject({ kind: "completed" });
+        }
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        await monitor.stop();
       }
-      return { kind: "completed" as const };
-    });
-    const monitor = makeMonitor({
-      botInfo: { ...telegramBotInfoForTest, has_topics_enabled: options.topicsEnabled ?? false },
-      dispatch,
-    });
-    try {
-      monitor.start();
-      await monitor.waitForIdle();
-      if (options.rejected) {
-        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-          { reason: "invalid-event", laneKey },
-        ]);
-        expect(dispatch).not.toHaveBeenCalled();
-      } else {
-        expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
-        expect(await queue.listFailed?.()).toEqual([]);
-      }
-      expect(await queue.listPending()).toEqual([]);
-    } finally {
-      await monitor.stop();
-    }
-  });
+    },
+  );
 }
 function replayMessage(update_id: number, message_thread_id?: number) {
   return {
@@ -483,63 +499,22 @@ describe("createTelegramIngressMonitor", () => {
       reject: true,
     },
   ])("replays promoted controls after restart: $name", async (testCase) => {
-    await withTempState(async ({ stateDir }) => {
-      const queueOptions = { channelId: "telegram", accountId: "default", stateDir };
-      const update = {
-        update_id: 136,
-        [testCase.updateKind]: {
-          message_id: 1,
-          date: 1_736_380_800,
-          from: { id: 111, is_bot: false, first_name: "Ada" },
-          chat: testCase.chat,
-          ...testCase.topic,
-          text: "/models@openclaw_bot",
-        },
-      };
-      const eventId = String(update.update_id).padStart(16, "0");
-      const payload = { ...updatePayload(136), receivedAt: 1_736_382_000_123, update };
-      await createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions).enqueue(
-        eventId,
-        payload,
-        { laneKey: testCase.laneKey },
-      );
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
-      const controlLaneKey = `telegram:${testCase.chat.id}:control`;
-      const dispatch = vi.fn(async (dispatchedUpdate: unknown) => {
-        expect(resolveTelegramUpdateReceivedAtSeconds(dispatchedUpdate)).toBe(1_736_382_000);
-        expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
-        return { kind: "completed" as const };
-      });
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        ...monitorDefaults,
-        botInfo: {
-          ...telegramBotInfoForTest,
-          has_topics_enabled: true,
-        },
-        dispatch,
-      });
-      try {
-        monitor.start();
-        await monitor.waitForIdle();
-        if ("reject" in testCase && testCase.reject) {
-          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-            { reason: "invalid-event", laneKey: testCase.laneKey },
-          ]);
-          expect(dispatch).not.toHaveBeenCalled();
-        } else {
-          expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
-          expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-          const replay = await queue.enqueue(eventId, payload, { laneKey: controlLaneKey });
-          expect(replay.kind).toBe("completed");
-        }
-        expect(await queue.listPending()).toEqual([]);
-      } finally {
-        await monitor.stop();
-      }
+    const update = {
+      update_id: 136,
+      [testCase.updateKind]: {
+        message_id: 1,
+        date: 1_736_380_800,
+        from: { id: 111, is_bot: false, first_name: "Ada" },
+        chat: testCase.chat,
+        ...testCase.topic,
+        text: "/models@openclaw_bot",
+      },
+    };
+    await checkStoredReplay(update, testCase.laneKey, {
+      topicsEnabled: true,
+      expectedLane: `telegram:${testCase.chat.id}:control`,
+      receivedAt: 1_736_382_000_123,
+      rejected: "reject" in testCase && testCase.reject,
     });
   });
 

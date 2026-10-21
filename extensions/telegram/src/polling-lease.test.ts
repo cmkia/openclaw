@@ -74,18 +74,11 @@ describe("Telegram polling lease", () => {
     first.release();
   });
 
-  it("does not release a no-signal active lease", async () => {
-    const first = await acquire();
+  it.each([false, true])("does not release an active lease (signal=%s)", async (withSignal) => {
+    const first = withSignal ? (await initialLease()).first : await acquire();
     await expect(acquire({ accountId: "ops" })).rejects.toThrow(
       'refusing duplicate poller for account "ops"',
     );
-    await expect(releaseStopped()).resolves.toBe(false);
-    await expect(acquire({ accountId: "ops" })).rejects.toThrow('account "default"');
-    first.release();
-  });
-
-  it("does not release a non-aborted active lease", async () => {
-    const { first } = await initialLease();
     await expect(releaseStopped()).resolves.toBe(false);
     await expect(acquire({ accountId: "ops" })).rejects.toThrow('account "default"');
     first.release();
