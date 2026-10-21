@@ -126,41 +126,48 @@ export function AgentChannels(
           />
         }
       >
-        {entries().length === 0 ? (
-          <SettingsEmpty message={t("agents.channels.empty")} />
-        ) : (
-          entries().map((entry) => {
-            const summary = summarizeChannelAccounts(entry.accounts);
-            const status = summary.total
-              ? t("agents.channels.connectedCount", {
-                  connected: String(summary.connected),
-                  total: String(summary.total),
-                })
-              : t("agents.channels.noAccounts");
-            const configLabel = summary.configured
-              ? t("agents.channels.configuredCount", { count: String(summary.configured) })
-              : t("agents.channels.notConfigured");
-            const enabled = summary.total
-              ? t("agents.channels.enabledCount", { count: String(summary.enabled) })
-              : t("common.disabled");
-            const extras = resolveChannelExtrasFromConfig({
-              configForm: params.configForm,
-              channelId: entry.id,
-              fields: CHANNEL_EXTRA_FIELDS,
-            });
-            const metaParts = [
-              entry.id,
-              configLabel,
-              enabled,
-              ...extras.map((extra) => `${extra.label}: ${extra.value}`),
+        <For
+          each={entries()}
+          keyed={(entry) => entry.id}
+          fallback={<SettingsEmpty message={t("agents.channels.empty")} />}
+        >
+          {(entry) => {
+            const summary = createMemo(() => summarizeChannelAccounts(entry().accounts));
+            const status = () =>
+              summary().total
+                ? t("agents.channels.connectedCount", {
+                    connected: String(summary().connected),
+                    total: String(summary().total),
+                  })
+                : t("agents.channels.noAccounts");
+            const configLabel = () =>
+              summary().configured
+                ? t("agents.channels.configuredCount", { count: String(summary().configured) })
+                : t("agents.channels.notConfigured");
+            const enabled = () =>
+              summary().total
+                ? t("agents.channels.enabledCount", { count: String(summary().enabled) })
+                : t("common.disabled");
+            const extras = createMemo(() =>
+              resolveChannelExtrasFromConfig({
+                configForm: params.configForm,
+                channelId: entry().id,
+                fields: CHANNEL_EXTRA_FIELDS,
+              }),
+            );
+            const metaParts = () => [
+              entry().id,
+              configLabel(),
+              enabled(),
+              ...extras().map((extra) => `${extra.label}: ${extra.value}`),
             ];
             return (
               <SettingsRow
-                title={entry.label}
-                description={metaParts.join(" · ")}
+                title={entry().label}
+                description={metaParts().join(" · ")}
                 control={
                   <>
-                    {summary.configured === 0 ? (
+                    {summary().configured === 0 ? (
                       <a
                         class="settings-row__value"
                         href="https://docs.openclaw.ai/channels"
@@ -171,15 +178,15 @@ export function AgentChannels(
                       </a>
                     ) : undefined}
                     <SettingsStatus
-                      kind={summary.connected > 0 ? "ok" : summary.total ? "warn" : "muted"}
-                      label={status}
+                      kind={summary().connected > 0 ? "ok" : summary().total ? "warn" : "muted"}
+                      label={status()}
                     />
                   </>
                 }
               />
             );
-          })
-        )}
+          }}
+        </For>
       </SettingsSection>
     </>
   );
