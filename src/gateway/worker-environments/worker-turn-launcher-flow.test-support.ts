@@ -10,6 +10,8 @@ import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
+import { result as processResult } from "./bootstrap.test-support.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle, WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   attachedEnvironment,
@@ -61,11 +63,41 @@ export async function completeTurn(
   request: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0],
   text: string,
   timestamp: number,
+  options: { error?: string; transcriptSeq?: number; liveSeq?: number } = {},
 ) {
-  const leaf = await (
-    await openSessionManager()
-  ).appendMessageAsync(makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp }));
-  return acknowledgeCompletedWorkerTurn(request.turnClaim, leaf);
+  const leaf = options.error
+    ? await (
+        await openSessionManager()
+      ).appendMessageAsync(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text }],
+          timestamp,
+          stopReason: "error",
+          errorMessage: options.error,
+        }),
+      )
+    : await (
+        await openSessionManager()
+      ).appendMessageAsync(
+        makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp }),
+      );
+  if (!options.error && options.transcriptSeq === undefined && options.liveSeq === undefined) {
+    return acknowledgeCompletedWorkerTurn(request.turnClaim, leaf);
+  }
+  await createWorkerSessionPlacementGate(placements).updateAckCursors({
+    claim: request.turnClaim,
+    transcriptSeq: options.transcriptSeq ?? 2,
+    liveSeq: options.liveSeq ?? 1,
+  });
+  return processResult({
+    stdout: JSON.stringify({
+      status: options.error ? "failed" : "completed",
+      ...(options.error ? { reason: "turn-failed" } : {}),
+      transcriptLeafId: leaf,
+      transcriptNextSeq:
+        (options.transcriptSeq ?? placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+    }),
+  });
 }
 
 export function launchDescriptor(plan: WorkerLaunchPlan) {

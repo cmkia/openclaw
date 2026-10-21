@@ -1,10 +1,16 @@
+import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { AgentMessage } from "@openclaw/agent-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
+import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -15,7 +21,13 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import { registerContextEngineInRegistry } from "../../context-engine/registry.js";
+import type { ContextEngine } from "../../context-engine/types.js";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   buildPersistedUserTurnMessage,
@@ -27,15 +39,17 @@ import { toWorkerTranscriptMessage } from "../../worker/transcript-message.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import { createTranscriptCommitIdentity } from "./transcript-commit.test-support.js";
-import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerTunnelHandle, WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
 import {
   SESSION_ID,
   SESSION_KEY,
+  acknowledgeCompletedWorkerTurn,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
@@ -44,6 +58,8 @@ import {
   database,
   dispatchInitialWorkerPlacement,
   placements,
+  openSessionManager,
+  reconcileUnchangedLocalWorkspace,
   readWorkerTurnTranscriptStorageRows as readRows,
   root,
   seedActivePlacement,
@@ -51,6 +67,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
+  workerTurnEnvironments,
   type WorkerTurnEnvironmentService,
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
@@ -793,4 +810,218 @@ describe("worker detached model-context branch parity", () => {
       expect(observed.result.outcome.kind).toBe("rejected");
     },
   );
+});
+
+describe("worker context-engine ownership", () => {
+  beforeEach(setupWorkerTurnLauncherTest);
+  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(resetGlobalHookRunner);
+
+  it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", async (owner) => {
+    const events: string[] = [];
+    const record = (event: string) => async () => void events.push(event);
+    await seedActivePlacement();
+    const input = turn(`context-engine-${owner}`);
+    const acceptedFile = path.join(input.workspaceDir, "accepted-project.txt");
+    const followUpFile = path.join(input.workspaceDir, "engine-follow-up.txt");
+    await writeFile(acceptedFile, "previous Gateway content");
+    const engineId = `worker-context-${owner}`;
+    const config = { ...input.config, plugins: { slots: { contextEngine: engineId } } };
+    const previous = await openSessionManager();
+    await previous.appendMessageAsync(user("Unassembled history", 1));
+    const history = "Selected engine history";
+    const answer = assistant("Fresh worker answer", 3);
+    const inputRecorder = createUserTurnTranscriptRecorder({
+      target: { ...sessionTarget, sessionEntry: undefined },
+      input: { text: input.prompt },
+    });
+    let claim: WorkerSessionTurnClaim | undefined;
+    const fences: Array<ReturnType<typeof resolveSessionTranscriptReadFence>> = [];
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => {
+      events.push("bootstrap");
+      fences.push(resolveSessionTranscriptReadFence(sessionTarget));
+      return { bootstrapped: true };
+    });
+    const assemble = vi.fn<ContextEngine["assemble"]>(async () => {
+      events.push("assemble");
+      fences.push(resolveSessionTranscriptReadFence(sessionTarget));
+      return {
+        messages: [user(history, 2)],
+        estimatedTokens: 10,
+        systemPromptAddition: "Selected engine memory enrichment.",
+      };
+    });
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async (params) => {
+      events.push("after-turn");
+      const cwd = params.runtimeContext?.cwd;
+      assert(cwd);
+      assert(claim);
+      const content = await readFile(path.join(cwd, "accepted-project.txt"), "utf8");
+      expect(cwd).toBe(input.workspaceDir);
+      expect(content).toBe("accepted node content");
+      expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+      await writeFile(path.join(cwd, "engine-follow-up.txt"), content);
+    });
+    const dispose = vi.fn(record("dispose"));
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+      status: "committed",
+    }));
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({ ok: true, compacted: false }));
+    const engine: ContextEngine = {
+      info: {
+        id: engineId,
+        name: "Worker context fixture",
+        hostRequirements: {
+          "agent-run": {
+            requiredCapabilities: ["bootstrap", "assemble-before-prompt", "after-turn"],
+          },
+        },
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      ingest: async () => ({ ingested: true }),
+      bootstrap,
+      assemble,
+      afterTurn,
+      commitTurn,
+      compact,
+      dispose,
+    };
+    await using runtime = await acquireAgentRunPreparedModelRuntime({
+      config,
+      agentId: input.agentId,
+      agentDir: resolveAgentDir(config, input.agentId),
+      workspaceDir: input.workspaceDir,
+    });
+    const registry = runtime.snapshot.pluginRegistry;
+    assert(registry);
+    assert(registerContextEngineInRegistry(registry, engineId, () => engine, "core").ok);
+    const lease =
+      owner === "outer"
+        ? await withPluginRuntimeGenerationScope(runtime.snapshot, () =>
+            createContextEngineLogicalTurnLease({
+              identity: input,
+              config,
+              workspaceDir: input.workspaceDir,
+            }),
+          )
+        : undefined;
+    const candidate = vi.fn(() => void events.push("candidate"));
+    let terminal:
+      | Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>
+      | undefined;
+    const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async (request) => {
+      events.push("launch");
+      claim = request.turnClaim;
+      request.onDispatchReady?.();
+      const completed = await openSessionManager();
+      terminal = await completed.appendMessageWithTranscriptAnchorAsync(answer);
+      return await acknowledgeCompletedWorkerTurn(request.turnClaim, terminal.entryId);
+    });
+    const tunnel = createWorkerTurnTunnel({
+      launchTurn,
+      reconcileWorkspace: vi.fn(async (request) => {
+        events.push("reconcile");
+        await writeFile(acceptedFile, "accepted node content");
+        return { ...(await reconcileUnchangedLocalWorkspace(request)), changed: true };
+      }),
+    });
+    const published = vi.fn(record("publish"));
+    const provider = createWorkerSessionTurnPlacementProvider({
+      placements,
+      publishAcceptedWorkspace: published,
+      environments: workerTurnEnvironments(tunnel, {
+        acknowledgeCredentialDelivery: async () => true,
+      }),
+    });
+    try {
+      const result = await provider.executeTurn(
+        { ...sessionTarget, runId: input.runId },
+        {
+          ...input,
+          config,
+          pluginGeneration: runtime.pluginGeneration,
+          contextTokenBudget: 32_768,
+          toolsAllow: ["read"],
+          userTurnTranscriptRecorder: inputRecorder,
+          ...(lease
+            ? { contextEngineLogicalTurnLease: lease, onContextEngineTurnCandidate: candidate }
+            : {}),
+        },
+        vi.fn(),
+      );
+      expect(result.payloads).toEqual([{ text: "Fresh worker answer" }]);
+      assert(claim);
+      expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+      await waitForSessionRunEnd(SESSION_ID, null);
+      expect(published).toHaveBeenCalledExactlyOnceWith(claim);
+      expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      const admission = inputRecorder.getAdmissionReceipt();
+      expect(admission).toBeDefined();
+      expect(fences).toEqual([admission, admission]);
+      expect(bootstrap.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
+        model: { provider: "openai", resolved: input.model },
+        limits: { promptTokenBudget: 32_768 },
+      });
+      const assembly = assemble.mock.calls[0]?.[0];
+      expect(assembly).toMatchObject({
+        model: input.model,
+        prompt: input.prompt,
+        availableTools: new Set(["read"]),
+        runtimeContext: { cwd: input.workspaceDir },
+      });
+      expect(assembly?.tokenBudget).toBeGreaterThan(0);
+      expect(assembly?.tokenBudget).toBeLessThan(32_768);
+      const assignment = launchTurn.mock.calls[0]?.[0].plan.assignment;
+      expect(assignment?.systemPrompt).toContain("Selected engine memory enrichment.");
+      expect(JSON.stringify(assignment?.initialMessages)).toContain(history);
+      expect(JSON.stringify(assignment?.initialMessages)).not.toContain("Unassembled history");
+      expect(commitTurn).not.toHaveBeenCalled();
+      expect(compact).not.toHaveBeenCalled();
+      if (lease) {
+        expect(afterTurn).not.toHaveBeenCalled();
+        expect(dispose).not.toHaveBeenCalled();
+        expect(candidate).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            boundary: { admission, terminal: terminal?.anchor },
+            runtimeContext: expect.objectContaining({
+              provider: "openai",
+              modelId: input.model,
+              tokenBudget: 32_768,
+            }),
+          }),
+        );
+        await lease.dispose();
+        await expect(readFile(followUpFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(afterTurn.mock.calls[0]?.[0]).toMatchObject({
+          prePromptMessageCount: 1,
+          tokenBudget: 32_768,
+          messages: [
+            expect.objectContaining({ role: "user", content: expect.stringContaining(history) }),
+            expect.objectContaining({ role: "user", content: input.prompt }),
+            expect.objectContaining({ role: "assistant", content: answer.content }),
+          ],
+        });
+        await expect(readFile(followUpFile, "utf8")).resolves.toBe("accepted node content");
+      }
+      expect(events).toEqual([
+        "bootstrap",
+        "assemble",
+        "launch",
+        ...(lease ? ["candidate"] : []),
+        "reconcile",
+        "publish",
+        ...(lease ? [] : ["after-turn"]),
+        "dispose",
+      ]);
+    } finally {
+      await lease?.dispose();
+      registry.contextEngines.delete(engineId);
+      input.preparedRunAdmission.close();
+    }
+  });
 });

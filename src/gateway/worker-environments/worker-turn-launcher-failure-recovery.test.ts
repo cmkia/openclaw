@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi, onTestFinished } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -9,33 +9,37 @@ import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
 import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { result as processResult } from "./bootstrap.test-support.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelHandle,
+  type WorkerTurnTunnelHandle,
 } from "./tunnel-contract.js";
 import { success } from "./tunnel.test-support.js";
+import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
 import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
+  expectUncalled,
+  installLauncherTest,
+  localResult,
+  runIdentity,
   createLauncher,
   environmentForTunnel,
   executeTurn,
-  expectUncalled,
-  localResult,
-  runIdentity,
+  completeTurn,
+  launchDescriptor,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 function heldOperation() {
   const started = createDeferred();
@@ -108,8 +112,7 @@ function heldFailure(
 }
 
 describe("worker turn launcher failure recovery", () => {
-  beforeEach(fx.setupWorkerTurnLauncherTest);
-  afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+  installLauncherTest();
 
   it.each(["supervisor", "runtime"] as const)(
     "keeps the typed node-loss cause through the %s result and failed workspace recovery",
@@ -761,5 +764,196 @@ describe("worker turn launcher failure recovery", () => {
     );
     expect(launchTurn).not.toHaveBeenCalled();
     expectPlacement({ state: "active", turnClaim: null });
+  });
+});
+
+describe("worker turn launcher claim admission", () => {
+  installLauncherTest();
+
+  it.each([
+    { label: "without node portal support", portalAvailable: false },
+    { label: "with negotiated node portal support", portalAvailable: true },
+  ])("launches one worker loop $label", async ({ portalAvailable }) => {
+    await fx.seedActivePlacement();
+    const unexpectedToolCall = () => {
+      throw new Error("Unexpected Gateway tool invocation while preparing the turn");
+    };
+    const commandStarted = createDeferred();
+    const commandFinished = createDeferred<SpawnResult>();
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>((request) => {
+      request.onDispatchReady?.();
+      commandStarted.resolve();
+      return commandFinished.promise;
+    });
+    const environments = environmentForTunnel({
+      get: vi.fn(() => ({
+        ...fx.attachedEnvironment(),
+        nodeDeviceId: "cloud-node-1",
+        sshEndpoint: null,
+      })),
+      supportsNodePortal: vi.fn(async () => portalAvailable),
+      createGatewayTools: async (params) =>
+        createWorkerGatewayTools({
+          ...params,
+          placements: fx.placements,
+          environments,
+          resolveGatewayContext: unexpectedToolCall,
+          dispatchChild: unexpectedToolCall,
+          portals: {
+            getService: unexpectedToolCall,
+            carrier: { open: unexpectedToolCall },
+            onChanged: unexpectedToolCall,
+          },
+        }),
+      startTunnel: vi.fn(async () =>
+        fx.createWorkerTurnTunnel({
+          launchTurn,
+          reconcileWorkspace: vi.fn(fx.reconcileUnchangedLocalWorkspace),
+        }),
+      ),
+    });
+    const provider = fx.createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements: fx.placements,
+    });
+    const claim = runIdentity("run-overlap");
+    const workerTurn = fx.turn("run-overlap");
+    const controller = new AbortController();
+    const queuedController = new AbortController();
+    const queuedTurn = fx.turn("run-overlap");
+    const runLocal = vi.fn(localResult);
+    const first = provider.executeTurn(
+      claim,
+      { ...workerTurn, abortSignal: controller.signal },
+      runLocal,
+    );
+    void first.catch(() => undefined);
+    try {
+      await Promise.race([commandStarted.promise, first]);
+      const launchRequest = launchTurn.mock.calls[0]?.[0];
+      if (!launchRequest) {
+        throw new Error("expected worker launch request");
+      }
+      expect(fx.placements.validateTurnClaim(launchRequest.turnClaim)).toBe(true);
+      expect(launchRequest.signal?.aborted).toBe(false);
+      expect(runLocal).not.toHaveBeenCalled();
+      const queued = provider.executeTurn(
+        claim,
+        { ...queuedTurn, abortSignal: queuedController.signal },
+        runLocal,
+      );
+      void queued.catch(() => undefined);
+      // A second caller waits in the session mailbox; cancelling that caller
+      // must not cancel or replace the already dispatched worker's exact claim.
+      queuedController.abort(new Error("Queued duplicate cancelled"));
+      await expect(queued).rejects.toThrow("Queued duplicate cancelled");
+      expect(launchTurn).toHaveBeenCalledOnce();
+      expect(launchRequest.signal?.aborted).toBe(false);
+      expect(fx.placements.validateTurnClaim(launchRequest.turnClaim)).toBe(true);
+
+      const completed = await completeTurn(launchRequest, "Only worker reply", 31);
+      expect(launchRequest.plan.assignment).toMatchObject({
+        workspaceDir: "/worker/workspace",
+        permissionMode: "workspace",
+        workerContainmentRoot: "/worker/workspace",
+      });
+      expect(fx.placements.isWorkerTurnToolAuthorized(launchRequest.turnClaim, "portal")).toBe(
+        portalAvailable,
+      );
+      expect(environments.supportsNodePortal).toHaveBeenCalledWith(
+        fx.ENVIRONMENT_ID,
+        fx.OWNER_EPOCH,
+      );
+      const active = fx.placements.get(fx.SESSION_ID);
+      if (active?.state !== "active") {
+        throw new Error("expected active placement before drain race");
+      }
+      await expect(
+        fx.placements.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        }),
+      ).rejects.toThrow("pending cloud workspace result");
+      commandFinished.resolve(completed);
+      await expect(first).resolves.toMatchObject({ payloads: [{ text: "Only worker reply" }] });
+      await waitForSessionRunEnd(fx.SESSION_ID, null);
+      const completedPlacement = fx.placements.get(fx.SESSION_ID);
+      if (completedPlacement?.state !== "active") {
+        throw new Error("expected active placement after worker completion");
+      }
+      await fx.placements.startDrain({
+        sessionId: completedPlacement.sessionId,
+        environmentId: completedPlacement.environmentId,
+        ownerEpoch: completedPlacement.activeOwnerEpoch,
+        expectedGeneration: completedPlacement.generation,
+      });
+      expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({
+        state: "draining",
+        turnClaim: null,
+      });
+    } finally {
+      controller.abort();
+      queuedController.abort();
+      queuedTurn.preparedRunAdmission.close();
+      workerTurn.preparedRunAdmission.close();
+      commandFinished.resolve(
+        processResult({
+          stderr: "fixture closed",
+          code: 1,
+        }),
+      );
+      await Promise.allSettled([first]);
+    }
+  });
+
+  it("keeps an active placement after an acknowledged turn failure and admits the next turn", async () => {
+    await fx.seedActivePlacement();
+    const turnIds: string[] = [];
+    let launchCount = 0;
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => fx.attachedEnvironment());
+    const environments = environmentForTunnel({
+      acquireTurnCredential: vi.fn(async () => fx.credential(String(launchCount + 1).repeat(43))),
+      startTunnel: vi.fn(async () =>
+        fx.createWorkerTurnTunnel({
+          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+            request.onDispatchReady?.();
+            launchCount += 1;
+            const descriptor = launchDescriptor(request.plan);
+            turnIds.push(descriptor.assignment.turnId);
+            if (launchCount === 1) {
+              return completeTurn(request, "Remote model failed", 31, {
+                error: "Cloud worker turn failed",
+              });
+            }
+            return completeTurn(request, "Recovered worker reply", 41);
+          }),
+          reconcileWorkspace: vi.fn(fx.reconcileUnchangedLocalWorkspace),
+        }),
+      ),
+      stopTunnel,
+      destroy,
+    });
+    const provider = fx.createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements: fx.placements,
+    });
+
+    await expect(executeTurn(provider, "run-model-failed")).rejects.toThrow(
+      "Cloud worker turn failed",
+    );
+    expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    expect(await fx.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+
+    await expect(executeTurn(provider, "run-model-recovered")).resolves.toMatchObject({
+      payloads: [{ text: "Recovered worker reply" }],
+    });
+    await waitForSessionRunEnd(fx.SESSION_ID, null);
+    expect(turnIds).toHaveLength(2);
+    expect(turnIds[0]).not.toBe(turnIds[1]);
+    expectUncalled(stopTunnel, destroy);
+    expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 });

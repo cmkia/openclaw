@@ -1,6 +1,6 @@
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -10,8 +10,6 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { FailoverError, resolveModelFallbackError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
-import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -19,7 +17,6 @@ import {
 import { saveMediaBuffer } from "../../media/store.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
@@ -28,14 +25,13 @@ import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.
 import * as githubBinding from "./worker-github-binding.js";
 import {
   createLauncher,
+  installLauncherTest,
   executeTurn,
   expectUncalled,
   localResult as defaultLocalResult,
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 const readGitHubFact = vi.hoisted(() => vi.fn());
 // mock-isolation: Worker launches consume facts without starting identity discovery.
@@ -79,11 +75,10 @@ function environmentFor(
 }
 
 describe("worker launch capabilities", () => {
-  beforeEach(async () => {
-    await fx.setupWorkerTurnLauncherTest();
+  installLauncherTest();
+  beforeEach(() => {
     readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
-  afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { label: "available", available: true, revoked: false },
@@ -387,79 +382,66 @@ describe("worker launch capabilities", () => {
         model: "fixture-model",
         fallbacksOverride: ["fixture-next/fixture-model"],
       };
-      const successorGate = vi.spyOn(provider, "assertCompactionSuccessorAllowed");
       let retainedNodeAuthority: (() => void) | undefined;
-      const runLocal = vi.fn(() =>
-        fx.withWorkerCompactionAdoption("run-remote-exec", async (adopt) => {
-          order.push("local");
-          expect(inputTurn.prompt).toContain(`${originalPrompt}\n\nCurrent attachment originals`);
-          expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
-          const placementBefore = fx.placements.get(fx.SESSION_ID);
-          const entryBefore = loadSessionEntry(fx.sessionTarget);
-          expect(placementBefore?.turnClaim).toMatchObject({
-            owner: "local",
+      const runLocal = vi.fn(async () => {
+        order.push("local");
+        expect(inputTurn.prompt).toContain(`${originalPrompt}\n\nCurrent attachment originals`);
+        expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
+        expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toMatchObject({
+          owner: "local",
+          runId: "run-remote-exec",
+        });
+        if (nodeDeviceId) {
+          const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
+          expect(assertCurrent).toBeTypeOf("function");
+          const request = {
             runId: "run-remote-exec",
-          });
-          await expect(adopt(fx.SESSION_ID)).resolves.toBeUndefined();
-          expect(successorGate).not.toHaveBeenCalled();
-          await expect(adopt("session-remote-successor")).rejects.toThrow(
-            /worker placement.*same session ID/u,
-          );
-          expect(fx.placements.get(fx.SESSION_ID)).toEqual(placementBefore);
-          expect(loadSessionEntry(fx.sessionTarget)).toEqual(entryBefore);
-          expect(await fx.placements.getAsync("session-remote-successor")).toBeUndefined();
-          if (nodeDeviceId) {
-            const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
-            expect(assertCurrent).toBeTypeOf("function");
-            const request = {
-              runId: "run-remote-exec",
-              agentId: "main",
-              nodeId: nodeDeviceId,
-              workspace: {
-                workspaceDir: remote,
-                environmentId: fx.ENVIRONMENT_ID,
-                sessionId: fx.SESSION_ID,
-                sessionKey: fx.SESSION_KEY,
-                ownerEpoch: fx.OWNER_EPOCH,
-              },
-            };
-            retainedNodeAuthority = () => assertCurrent!(request);
-            retainedNodeAuthority();
-            for (const changed of [
-              { ...request, runId: "other" },
-              { ...request, nodeId: "other" },
-              ...[
-                { ownerEpoch: fx.OWNER_EPOCH + 1 },
-                { environmentId: "other" },
-                { sessionId: "other" },
-                { workspaceDir: "/other" },
-              ].map((workspace) =>
-                Object.assign({}, request, {
-                  workspace: Object.assign({}, request.workspace, workspace),
-                }),
-              ),
-            ]) {
-              expect(() => assertCurrent!(changed)).toThrow("no longer current");
-            }
-            const original = environments.get(fx.ENVIRONMENT_ID)!;
-            if (original.state !== "attached") {
-              throw new Error("expected an attached environment");
-            }
-            for (const changed of [
-              { ...original, nodeDeviceId: "replacement" },
-              { ...original, leaseId: "replacement" },
-            ]) {
-              vi.mocked(environments.get).mockReturnValueOnce(changed);
-              await Promise.resolve();
-              expect(retainedNodeAuthority).toThrow("no longer current");
-            }
+            agentId: "main",
+            nodeId: nodeDeviceId,
+            workspace: {
+              workspaceDir: remote,
+              environmentId: fx.ENVIRONMENT_ID,
+              sessionId: fx.SESSION_ID,
+              sessionKey: fx.SESSION_KEY,
+              ownerEpoch: fx.OWNER_EPOCH,
+            },
+          };
+          retainedNodeAuthority = () => assertCurrent!(request);
+          retainedNodeAuthority();
+          for (const changed of [
+            { ...request, runId: "other" },
+            { ...request, nodeId: "other" },
+            ...[
+              { ownerEpoch: fx.OWNER_EPOCH + 1 },
+              { environmentId: "other" },
+              { sessionId: "other" },
+              { workspaceDir: "/other" },
+            ].map((workspace) =>
+              Object.assign({}, request, {
+                workspace: Object.assign({}, request.workspace, workspace),
+              }),
+            ),
+          ]) {
+            expect(() => assertCurrent!(changed)).toThrow("no longer current");
           }
-          if (primaryError) {
-            throw primaryError;
+          const original = environments.get(fx.ENVIRONMENT_ID)!;
+          if (original.state !== "attached") {
+            throw new Error("expected an attached environment");
           }
-          return localResult;
-        }),
-      );
+          for (const changed of [
+            { ...original, nodeDeviceId: "replacement" },
+            { ...original, leaseId: "replacement" },
+          ]) {
+            vi.mocked(environments.get).mockReturnValueOnce(changed);
+            await Promise.resolve();
+            expect(retainedNodeAuthority).toThrow("no longer current");
+          }
+        }
+        if (primaryError) {
+          throw primaryError;
+        }
+        return localResult;
+      });
       const resourceCleanup = pauseSkillCleanup
         ? { entered: createDeferred(), release: createDeferred() }
         : undefined;
@@ -478,7 +460,6 @@ describe("worker launch capabilities", () => {
             },
           })
         : undefined;
-      const uninstall = installSessionPlacementAdmissionProvider(provider);
       const operation = provider.executeTurn(runIdentity("run-remote-exec"), inputTurn, runLocal);
       try {
         if (resourceCleanup) {
@@ -595,7 +576,6 @@ describe("worker launch capabilities", () => {
         resourceCleanup?.release.resolve();
         await operation.catch(() => undefined);
         transfer?.mockRestore();
-        uninstall();
         inputTurn.preparedRunAdmission.close();
       }
       expectRestoredPrompts();

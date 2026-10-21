@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -16,7 +16,6 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
@@ -30,12 +29,14 @@ import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTurnTunnelHandle,
 } from "./tunnel-contract.js";
-import { completeTurn, localResult } from "./worker-turn-launcher-flow.test-support.js";
+import {
+  completeTurn,
+  installLauncherTest,
+  localResult,
+} from "./worker-turn-launcher-flow.test-support.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 const refreshedBundleHash = "b".repeat(64);
 const replacementReply = "Continued on the replacement worker";
@@ -340,8 +341,7 @@ async function createBuildRecoveryHarness(
   };
 }
 
-beforeEach(worker.setupWorkerTurnLauncherTest);
-afterEach(() => worker.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+installLauncherTest();
 afterEach(() => {
   resetGatewayWorkAdmission();
   resetDiagnosticRunActivityForTest();

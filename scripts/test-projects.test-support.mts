@@ -688,9 +688,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     "src/gateway/worker-environments/worker-turn-launcher.ts",
     [
       "src/gateway/worker-environments/worker-turn-launcher.test.ts",
-      "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
       "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
-      "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
       "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
       "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
     ],
