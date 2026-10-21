@@ -5,9 +5,12 @@ import type { SettingsMediaDeviceState } from "./view-state.ts";
 import type { TabIconViewProps } from "./view-tab-icon.tsx";
 
 type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configProps"]>;
-// Async mutation presenters retain their admitted completion.
+// Most callbacks are fire-and-forget; actions retain their owner's completion receipt.
 type ConfigData = {
-  [Key in keyof ConfigPageProps]: Key extends "onImportCustomTheme" | "onCameraSelect"
+  [Key in keyof ConfigPageProps]: Key extends
+    | "onNativeNotificationsSendTest"
+    | "onImportCustomTheme"
+    | "onCameraSelect"
     ? ConfigPageProps[Key]
     : ConfigPageProps[Key] extends (...args: infer Args) => unknown
       ? (...args: Args) => void
