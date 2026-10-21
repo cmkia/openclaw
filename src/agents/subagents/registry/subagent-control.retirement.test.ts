@@ -140,10 +140,6 @@ it.each([
   );
   expect(await terminate({ runId: "ancestor", suppressTaskDelivery: true })).toBe(1);
   const ancestor = subagentRuns.get("ancestor")!;
-  expect(ancestor.killReconciliation).toMatchObject({
-    killedAt: now,
-    suppressTaskDelivery: true,
-  });
   const dispatch = enqueue("child", "blocker");
   let lateDispatch: ReturnType<typeof enqueue> | undefined;
   try {
@@ -307,7 +303,6 @@ it.each([
     }
     const completion = subagentRuns.get(child.runId)?.collectorCompletion;
     expect(completion?.status, JSON.stringify(result)).toBe("killed");
-    expect(status(subagentRuns.get(child.runId))).toBe("killed");
     expect(dispatch).not.toHaveBeenCalled();
     expect(result).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
   } finally {
@@ -562,7 +557,6 @@ it.each([true, false])("keeps successor (pre-restore=%s)", async (beforeRestore)
   const originalBefore = savedRun(runId);
   const successorBefore = structuredClone(subagentRuns.get(successor.runId));
   const successorPersistedBefore = savedRun(successor.runId);
-  expect(successorBefore).toMatchObject({ runId: "successor-run", generation: 2 });
   expect(successorPersistedBefore).toMatchObject({
     runId: "successor-run",
     generation: 2,

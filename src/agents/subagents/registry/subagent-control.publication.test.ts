@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
-import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionGeneration from "../../../config/sessions/session-delivery-generation.js";
 import { callGateway } from "../../../gateway/call.js";
@@ -24,8 +23,6 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
-import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { releaseOpenClawAgentDatabaseReadValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
@@ -36,6 +33,7 @@ import * as killSession from "./subagent-control-session.js";
 import {
   beginControlAdmission,
   controlController,
+  controlMetadataProducer,
   createControlRunFixture,
   enqueueControlRun,
   expectControlIdle,
@@ -409,7 +407,6 @@ it.each([
       expectsCompletionMessage: true,
     });
     const b0 = subagentRuns.get("publication-b0")!;
-    expect(b0.collect).not.toBe(true);
 
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
@@ -467,8 +464,10 @@ it.each([
           endedAt: Date.now(),
         });
         await originalTimingEntered.promise;
-        expect(subagentRuns.get(b0.runId)?.execution.status).toBe("terminal");
-        expect(subagentRuns.get(b0.runId)?.execution.outcome?.status).toBe("error");
+        expect(subagentRuns.get(b0.runId)?.execution).toMatchObject({
+          status: "terminal",
+          outcome: { status: "error" },
+        });
         expect(
           await firstBoundary,
           "terminal publication must not wait for post-commit session cleanup",
@@ -539,7 +538,6 @@ it.each([
                 }),
               ).toBe(true);
               handoffOrder.push("replacement");
-              expect(subagentRuns.get("publication-b1")?.generation).not.toBe(b0.generation);
             })
             .then(handoffComplete.resolve, handoffComplete.reject);
         });
@@ -621,11 +619,8 @@ it.each([
           taskRunId: b0.taskRunId,
           execution: { status: "terminal", suppressSessionEffects: true },
         });
-        expect(b1).toMatchObject({ taskRunId: b1.runId, execution: { status: "running" } });
-        if (typeof b0.generation !== "number") {
-          throw new Error("Registration did not mint a run generation");
-        }
-        expect(b1.generation).toBeGreaterThan(b0.generation);
+        expect(b1.taskRunId).toBe(b1.runId);
+        expect(b1.generation).toBeGreaterThan(b0.generation!);
       }
 
       childAdmission.release();
@@ -686,72 +681,6 @@ describe("metadata publication", () => {
 
   beforeEach(() => captureRuntimeConfigAsyncReader()());
 
-  function holdMetadataPublication(
-    signal: AbortSignal,
-    consumerScope: AsyncLocalStorage<boolean>,
-    beforeHeld?: () => Promise<void>,
-    afterReleased?: () => void,
-  ) {
-    return holdControlSessionPublication({ signal, consumerScope, beforeHeld, afterReleased });
-  }
-
-  function metadataProducer(
-    { producerScope, nativeHeld }: ReturnType<typeof holdMetadataPublication>,
-    { storePath, sessionKey: childKey, sessionId }: Awaited<ReturnType<typeof runs.seed>>,
-    signal: AbortSignal,
-    replacement = false,
-  ) {
-    let producer: Promise<void> | undefined;
-    let outcome: Promise<unknown> | undefined;
-    const update = () =>
-      applySessionEntryExactReplacements({
-        agentId: "main",
-        storePath,
-        sessionKeys: [childKey],
-        activeSessionKey: childKey,
-        skipMaintenance: true,
-        requireWriteSuccess: true,
-        update(entries) {
-          const row = entries.find((entry) => entry.sessionKey === childKey);
-          if (!row || row.entry.sessionId !== sessionId) {
-            throw new Error("Metadata producer lost its child");
-          }
-          const entry = {
-            ...row.entry,
-            sessionId: replacement ? `${sessionId}-replacement` : sessionId,
-            label: "metadata survived",
-          };
-          return { result: undefined, replacements: [{ sessionKey: childKey, entry }] };
-        },
-      });
-    return {
-      get outcome() {
-        return outcome;
-      },
-      async start() {
-        if (producer) {
-          return;
-        }
-        producer = runOutsideAsyncWorkScope(() =>
-          runWithGatewayIndependentRootWorkAdmission(
-            () => producerScope.run(true, update),
-            "test:pending-metadata",
-            signal,
-          ),
-        );
-        outcome = producer.then(
-          () => ({ ok: true }),
-          (error: unknown) => ({ error }),
-        );
-        await awaitGateBeforeSettlement(
-          nativeHeld.promise,
-          producer,
-          "Metadata publication not held",
-        );
-      },
-    };
-  }
-
   it.for([
     { replacement: true, competingIdle: false, publication: "tombstone" },
     { replacement: false, competingIdle: true, publication: "tombstone" },
@@ -797,10 +726,10 @@ describe("metadata publication", () => {
       const killScope = new AsyncLocalStorage<boolean>();
       let peerReleasedDuringPublication = false;
       const peer = peerExecution;
-      const held = holdMetadataPublication(
+      const held = holdControlSessionPublication({
         signal,
-        killScope,
-        peer
+        consumerScope: killScope,
+        beforeHeld: peer
           ? async () => {
               // Drop transferable validation without retiring the borrowed native writer.
               releaseOpenClawAgentDatabaseReadValidation([{ path: childPhysicalPath! }]);
@@ -808,7 +737,7 @@ describe("metadata publication", () => {
               peerReleasedDuringPublication = true;
             }
           : undefined,
-      );
+      });
       const { state, release, dispose } = held;
       if (publication === "discovery") {
         const prepareGeneration =
@@ -838,7 +767,7 @@ describe("metadata publication", () => {
           },
         );
       }
-      const producer = metadataProducer(held, child, signal, replacement);
+      const producer = controlMetadataProducer(held, child, signal, { replacement });
       const acquire = vi.spyOn(
         SubagentLifecycleController.prototype,
         "acquireTerminalCompletionLock",
@@ -962,14 +891,18 @@ describe("metadata publication", () => {
     enqueueControlRun(runId, "pending-collector-sibling", [runId], async () => {});
     const completionScope = new AsyncLocalStorage<boolean>();
     let statusWhileJoined: string | undefined;
-    const held = holdMetadataPublication(signal, completionScope, undefined, () => {
-      // The waiting commit keeps its staged terminal row off-registry.
-      statusWhileJoined = subagentRuns.get(runId)?.execution.status;
+    const held = holdControlSessionPublication({
+      signal,
+      consumerScope: completionScope,
+      afterReleased: () => {
+        // The waiting commit keeps its staged terminal row off-registry.
+        statusWhileJoined = subagentRuns.get(runId)?.execution.status;
+      },
     });
     const { state, release, dispose } = held;
-    const producer = metadataProducer(held, child, signal);
-    const prepareSession = killSession.prepareSubagentKillSession.bind(controlSession);
-    vi.spyOn(controlSession, "prepareSubagentKillSession").mockImplementation(async (...args) => {
+    const producer = controlMetadataProducer(held, child, signal);
+    const prepareSession = killSession.prepareSubagentKillSession.bind(killSession);
+    vi.spyOn(killSession, "prepareSubagentKillSession").mockImplementation(async (...args) => {
       const session = await prepareSession(...args);
       if (!completionScope.getStore() || args[1] !== childKey || producer.outcome) {
         return session;

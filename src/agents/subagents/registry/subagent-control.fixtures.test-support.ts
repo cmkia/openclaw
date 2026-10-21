@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import {
   beginSessionEffect,
   getSessionMutationCount,
   getSessionControllerWorkCount,
 } from "../../../sessions/session-controller.lifecycle.js";
+import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as writerQueue from "../../../shared/store-writer-queue.js";
 import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
@@ -240,6 +244,68 @@ export function holdControlSessionPublication<Consumer>(options: {
       options.signal.removeEventListener("abort", release);
       producerScope.disable();
       options.consumerScope.disable();
+    },
+  };
+}
+
+/** Publish through the real session writer, under the held native reply's scope. */
+export function controlMetadataProducer(
+  { producerScope, nativeHeld }: ReturnType<typeof holdControlSessionPublication>,
+  {
+    storePath,
+    sessionKey,
+    sessionId,
+  }: { storePath: string; sessionKey: string; sessionId: string },
+  signal: AbortSignal,
+  options: { replacement?: boolean; label?: string } = {},
+) {
+  let producer: Promise<void> | undefined;
+  let outcome: Promise<unknown> | undefined;
+  const update = () =>
+    applySessionEntryExactReplacements({
+      agentId: "main",
+      storePath,
+      sessionKeys: [sessionKey],
+      activeSessionKey: sessionKey,
+      skipMaintenance: true,
+      requireWriteSuccess: true,
+      update(entries) {
+        const row = entries.find((entry) => entry.sessionKey === sessionKey);
+        if (!row || row.entry.sessionId !== sessionId) {
+          throw new Error("Metadata producer lost its child");
+        }
+        const entry = {
+          ...row.entry,
+          sessionId: options.replacement ? `${sessionId}-replacement` : sessionId,
+          label: options.label ?? "metadata survived",
+        };
+        return { result: undefined, replacements: [{ sessionKey, entry }] };
+      },
+    });
+  return {
+    get outcome() {
+      return outcome;
+    },
+    async start() {
+      if (producer) {
+        return;
+      }
+      producer = runOutsideAsyncWorkScope(() =>
+        runWithGatewayIndependentRootWorkAdmission(
+          () => producerScope.run(true, update),
+          "test:pending-metadata",
+          signal,
+        ),
+      );
+      outcome = producer.then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ error }),
+      );
+      await awaitGateBeforeSettlement(
+        nativeHeld.promise,
+        producer,
+        "Metadata publication not held",
+      );
     },
   };
 }
