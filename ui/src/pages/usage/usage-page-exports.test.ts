@@ -84,6 +84,13 @@ it.each<[string, string[], string, string[], number, boolean?]>([
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
+    // Match the fixture range so each export interaction renders only its populated day.
+    page.read().callbacks.filters.onDatesChange({
+      startDate: snapshot.result.startDate,
+      endDate: snapshot.result.endDate,
+    });
+    await page.refresh();
+    await page.updateComplete;
     const settled = async () => {
       await vi.waitFor(() => expect(page.usageLoading).toBe(false));
       await page.updateComplete;
