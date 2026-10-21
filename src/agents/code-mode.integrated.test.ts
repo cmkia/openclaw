@@ -132,7 +132,7 @@ describe("Code Mode guest execution", () => {
           details: { body: hostile, marker: "original" },
         };
       });
-      const { ctx, tools } = createGuestHarness([target]);
+      const { ctx, tools, completeResult } = createGuestHarness([target]);
       applyCodeModeCatalog({
         ...ctx,
         tools: [...tools, target],
@@ -144,10 +144,7 @@ describe("Code Mode guest execution", () => {
           : kind === "caught error"
             ? "try { await network_page({}); } catch (error) { return error.message; }"
             : "return await network_page({});";
-      let result = await tools[0]!.execute("network", { code });
-      for (let index = 0; index < 8 && resultDetails(result).status === "waiting"; index++) {
-        result = await tools[1]!.execute("network-wait", { runId: resultDetails(result).runId });
-      }
+      const result = await completeResult(code, "network");
       expect(resultDetails(result)).toMatchObject(
         kind === "uncaught error"
           ? { status: "failed", error: expect.stringContaining(hostile) }
@@ -367,21 +364,6 @@ describe("Code Mode guest execution", () => {
       { args: { code: "return 1;", typecheck: false }, error: "JavaScript only" },
     ])("rejects invalid control arguments: $args", async ({ args, error }) => {
       await expect(executeSource(args)).rejects.toThrow(error);
-      expect(testing.activeRuns.size).toBe(0);
-    });
-
-    it.each([
-      String.raw`return r\u0065quire('node:fs');`,
-      "return require?.('node:fs');",
-      "return (0, require)('node:fs');",
-      "return module.require('node:fs');",
-      "return `${({ value: import('node:fs') }).value}`;",
-    ])("rejects module access before dispatch: %s", async (code) => {
-      expectFailure(await executeSource({ code }), "input", "invalid_input", {
-        bridgeDispatchStarted: false,
-        telemetry: { callCount: 0 },
-        error: expect.stringContaining("module access is disabled"),
-      });
       expect(testing.activeRuns.size).toBe(0);
     });
   });

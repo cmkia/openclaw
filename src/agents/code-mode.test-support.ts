@@ -4,6 +4,7 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
+import type { CodeModeConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import {
   activeRuns,
@@ -35,6 +36,30 @@ export const testing = {
     return result;
   },
 };
+
+export function createCodeModeExecutor(config: CodeModeConfig) {
+  type Input = Parameters<typeof testing.runCodeModeExecutor>[0];
+  type Resume = Extract<Input, { kind: "resume" }>;
+  const run = (input: Input) =>
+    testing.runCodeModeExecutor(input, { timeoutMs: 10_000, executor: config.executor });
+  return {
+    exec: (source: string, catalog: unknown[] = []) =>
+      run({
+        kind: "exec",
+        source,
+        catalog,
+        config,
+        apiFiles: [],
+        namespaces: [],
+        swarmEnabled: true,
+      }),
+    resume: (
+      continuation: Resume["continuation"],
+      settledRequests: Resume["settledRequests"],
+      pendingRequests?: Resume["pendingRequests"],
+    ) => run({ kind: "resume", config, continuation, settledRequests, pendingRequests }),
+  };
+}
 
 export async function resetCodeModeTestState(): Promise<void> {
   await disposeAllCodeModeRuns();
@@ -240,6 +265,15 @@ export function createCatalogCodeModeHarness(
     ...codeModeRunner(h.tools),
     complete: (code: string) =>
       runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code }),
+    completeResult: async (code: string, id = "cell") => {
+      let result = await h.tools[0]!.execute(id, { code });
+      for (let index = 0; index < 8 && resultDetails(result).status === "waiting"; index++) {
+        const runId = resultDetails(result).runId;
+        expect(typeof runId).toBe("string");
+        result = await h.tools[1]!.execute(`${id}-wait-${index}`, { runId });
+      }
+      return result;
+    },
   };
 }
 

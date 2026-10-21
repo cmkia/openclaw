@@ -1,7 +1,9 @@
 /** Real embedded subscriber/catalog executor shared by bridge lifecycle regressions. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
-import { createCodeModeTools } from "./code-mode.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import { resultDetails, runUntilCompleted, waitUntilCompleted } from "./code-mode.test-support.js";
 import {
   createAttemptNestedToolActivityState,
   readAttemptNestedToolActivity,
@@ -14,6 +16,7 @@ import type { Agent } from "./runtime/index.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 export function createSubscribedCodeModeHarness(params: {
   name: string;
@@ -108,6 +111,14 @@ export function createSubscribedCodeModeHarness(params: {
     abortSignal: runAbortController.signal,
     executeTool: stream.toolSearchCatalogExecutor,
   };
+  const tools = createCodeModeTools(context);
+  const exec = expectDefined(tools[0], "Code Mode exec");
+  const wait = expectDefined(tools[1], "Code Mode wait");
+  type CallOptions = Partial<
+    Omit<Parameters<typeof context.executeTool>[0], "tool" | "toolName">
+  > & {
+    toolCallId: string;
+  };
   return {
     ...context,
     replyOperation,
@@ -115,7 +126,24 @@ export function createSubscribedCodeModeHarness(params: {
     readNestedActivities: () =>
       readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
     emit,
-    tools: createCodeModeTools(context),
+    tools,
+    exec,
+    wait,
+    add: (...targets: AnyAgentTool[]) =>
+      applyCodeModeCatalog({ ...context, tools: [...tools, ...targets] }),
+    run: async (code: string, toolCallId = "code-call", signal?: AbortSignal) =>
+      resultDetails(await exec.execute(toolCallId, { code }, signal)),
+    complete: (code: string) => runUntilCompleted({ execTool: exec, waitTool: wait, code }),
+    resume: (details: Record<string, unknown>) => waitUntilCompleted({ details, waitTool: wait }),
+    call: (tool: AnyAgentTool, options: CallOptions) =>
+      context.executeTool({
+        tool,
+        toolName: tool.name,
+        source: "openclaw",
+        input: {},
+        acceptResultBeforeProjection: async (result) => result,
+        ...options,
+      }),
     runAbortController,
     subscription: stream.subscription,
     dispose: () => {

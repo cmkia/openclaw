@@ -1,27 +1,15 @@
 import { afterEach, assert, describe, expect, it } from "vitest";
 import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import { resolveCodeModeConfig } from "./code-mode.js";
-import { resetCodeModeTestState, testing } from "./code-mode.test-support.js";
+import { createCodeModeExecutor, resetCodeModeTestState } from "./code-mode.test-support.js";
 
 afterEach(resetCodeModeTestState);
-type Input = Parameters<typeof testing.runCodeModeExecutor>[0];
-type Resume = Extract<Input, { kind: "resume" }>;
 function createExecutor(limit: number) {
-  const config = resolveCodeModeConfig({
-    tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
-  });
-  const run = (input: Input) =>
-    testing.runCodeModeExecutor(input, { timeoutMs: 10_000, executor: config.executor });
-  const initialization = { config, apiFiles: [], namespaces: [], swarmEnabled: true };
-  return {
-    exec: (source: string, catalog: unknown[] = []) =>
-      run({ kind: "exec", source, catalog, ...initialization }),
-    resume: (
-      continuation: Resume["continuation"],
-      settledRequests: Resume["settledRequests"],
-      pendingRequests?: Resume["pendingRequests"],
-    ) => run({ kind: "resume", config, continuation, settledRequests, pendingRequests }),
-  };
+  return createCodeModeExecutor(
+    resolveCodeModeConfig({
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
+    }),
+  );
 }
 
 describe("Swarm pipeline backpressure", () => {

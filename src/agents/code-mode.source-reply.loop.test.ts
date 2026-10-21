@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
+import { reply } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -148,12 +149,7 @@ it.for([
           stopReason,
           timestamp: requests,
         });
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "done", reason: stopReason, message });
-          stream.end();
-        });
-        return stream;
+        return reply(message);
       },
     });
     const harness = createSubscribedCodeModeHarness({

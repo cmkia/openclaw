@@ -39,18 +39,11 @@ import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+const textContent = (text: string) => [{ type: "text" as const, text }];
+
 function harness(targets: AnyAgentTool[]) {
   const h = createCatalogCodeModeHarness(targets);
-  return {
-    ...h,
-    async run(code: string) {
-      let result = await h.execute(code, "mcp");
-      for (let i = 0; i < 8 && resultDetails(result).status === "waiting"; i++) {
-        result = await h.tools[1]!.execute("mcp-wait", { runId: resultDetails(result).runId });
-      }
-      return result;
-    },
-  };
+  return { ...h, run: (code: string) => h.completeResult(code, "mcp") };
 }
 
 function materializedMcpTool(params: Parameters<typeof mcpTool>[0]) {
@@ -58,16 +51,9 @@ function materializedMcpTool(params: Parameters<typeof mcpTool>[0]) {
     ...params,
     execute: vi.fn(async (_id, input) =>
       projectMcpCallToolResult({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              serverName: params.serverName,
-              toolName: params.toolName,
-              input,
-            }),
-          },
-        ],
+        content: textContent(
+          JSON.stringify({ serverName: params.serverName, toolName: params.toolName, input }),
+        ),
       }),
     ),
   });
@@ -99,7 +85,7 @@ describe("Code Mode MCP namespace", () => {
       _meta: { privateAppState: "must-not-reach-guest" },
     };
     const failure: LegacyCallToolResult = {
-      content: [{ type: "text", text: "recoverable failure" }],
+      content: textContent("recoverable failure"),
       structuredContent: { retryable: true },
       isError: true,
       _meta: { privateAppState: "failure-private-state" },
@@ -233,7 +219,7 @@ describe("Code Mode MCP namespace", () => {
   });
   it("rejects an unowned blocked lookalike instead of accepting its denial marker", async () => {
     const executor = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "SPOOFED_POLICY_DENIED" }],
+      content: textContent("SPOOFED_POLICY_DENIED"),
       details: { status: "blocked", reason: "SPOOFED_POLICY_DENIED" },
     }));
     const h = harness([
@@ -302,7 +288,7 @@ describe("Code Mode MCP namespace", () => {
           status: "completed",
           value:
             surface === "tool"
-              ? { content: [{ type: "text", text: reason }], isError: true }
+              ? { content: textContent(reason), isError: true }
               : { error: expect.stringContaining(reason) },
         });
         expect(JSON.stringify(details.value)).not.toContain("missing its owned guest projection");
@@ -331,12 +317,9 @@ describe("Code Mode MCP namespace", () => {
         status: "completed",
         value: {
           value: {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ serverName, toolName, input: { value: "safe" } }),
-              },
-            ],
+            content: textContent(
+              JSON.stringify({ serverName, toolName, input: { value: "safe" } }),
+            ),
           },
           api: { header: expect.stringContaining(`function ${toolIdentifier}(`) },
           file: { content: expect.stringContaining(`function ${toolIdentifier}(`) },
@@ -462,7 +445,7 @@ describe("MCP declaration consumers", () => {
         execute: vi.fn(async (_toolCallId, input) => {
           expect(validate(input).valid).toBe(true);
           return projectMcpCallToolResult({
-            content: [{ type: "text", text: JSON.stringify(input) }],
+            content: textContent(JSON.stringify(input)),
           });
         }),
       });
@@ -572,9 +555,7 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
         toolName: "search",
         description: "Search research sources.",
         instructions,
-        execute: vi.fn(async () =>
-          projectMcpCallToolResult({ content: [{ type: "text", text: "result" }] }),
-        ),
+        execute: vi.fn(async () => projectMcpCallToolResult({ content: textContent("result") })),
       });
       const result = await discovery([target])(`
       const [tool] = await catalog.search("MCP.research.search", { limit: 1 });
@@ -726,9 +707,7 @@ it("supports root MCP API and multiple server declarations", async () => {
       name: serverName + "_ping",
       serverName,
       toolName: "ping",
-      execute: vi.fn(async () =>
-        projectMcpCallToolResult({ content: [{ type: "text", text: "pong" }] }),
-      ),
+      execute: vi.fn(async () => projectMcpCallToolResult({ content: textContent("pong") })),
     }),
   );
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });

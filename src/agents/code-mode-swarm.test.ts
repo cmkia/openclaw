@@ -11,6 +11,7 @@ import {
 } from "./code-mode.js";
 import {
   createCodeModeHarness,
+  createCodeModeExecutor,
   fakeTool,
   mcpTool,
   resetCodeModeTestState,
@@ -75,38 +76,26 @@ function projectWorkerResult(result: CodeModeWorkerResult) {
   };
 }
 
-function runWorker(input: Parameters<typeof testing.runCodeModeExecutor>[0]) {
-  return testing
-    .runCodeModeExecutor(input, { timeoutMs: 10_000, executor: config.executor })
-    .then(projectWorkerResult);
-}
+const executor = createCodeModeExecutor(config);
 
 function workerExec(source: string) {
-  return runWorker({
-    kind: "exec",
-    source,
-    config,
-    catalog: [],
-    apiFiles: [],
-    namespaces: [],
-    swarmEnabled: true,
-  });
+  return executor.exec(source).then(projectWorkerResult);
 }
 
 function workerResume(
   waiting: Extract<Awaited<ReturnType<typeof workerExec>>, { status: "waiting" }>,
   settledRequests: Record<string, unknown>,
 ) {
-  return runWorker({
-    kind: "resume",
-    continuation: waiting.continuation,
-    config,
-    settledRequests: Object.entries(settledRequests).map(([id, value]) => ({
-      id,
-      ok: true,
-      json: JSON.stringify(value),
-    })),
-  });
+  return executor
+    .resume(
+      waiting.continuation,
+      Object.entries(settledRequests).map(([id, value]) => ({
+        id,
+        ok: true,
+        json: JSON.stringify(value),
+      })),
+    )
+    .then(projectWorkerResult);
 }
 
 function expectWaiting(

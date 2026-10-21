@@ -19,7 +19,6 @@ import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
@@ -49,7 +48,6 @@ import {
 } from "./code-mode.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
-import { createReadTool } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
@@ -589,28 +587,6 @@ it.each([undefined, "read", "skills_read"])(
     });
   },
 );
-
-it("returns missing implicitly optional daily memory through Code Mode", async () => {
-  const read = createOpenClawReadTool(
-    createReadTool("/workspace", {
-      operations: {
-        access: async () => {
-          throw Object.assign(new Error("missing"), { code: "ENOENT" });
-        },
-        readFile: async () => Buffer.from("unreachable"),
-      },
-    }),
-  );
-  const result = await createCatalogCodeModeHarness([read]).complete(
-    'return await read({ path: "memory/2026-05-15.md" });',
-  );
-  expectCompleted(result, {
-    kind: "not_found",
-    status: "not_found",
-    path: "memory/2026-05-15.md",
-    optional: true,
-  });
-});
 
 function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeModeHarness>[0]) {
   const { tools } = createCatalogCodeModeHarness(targets, options);

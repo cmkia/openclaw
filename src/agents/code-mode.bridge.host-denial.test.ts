@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -27,7 +26,6 @@ import {
   resetCodeModeTestState,
   resultDetails,
   testing,
-  waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
@@ -78,17 +76,14 @@ function createHostHarness(
     { runId: harness.runId, sessionKey: harness.sessionKey },
     { approvalMode: options.approvalMode },
   );
-  const addTools = (...tools: AnyAgentTool[]) =>
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, shell, ...tools] });
+  const addTools = (...tools: AnyAgentTool[]) => harness.add(shell, ...tools);
   addTools();
-  const outer = expectDefined(harness.tools[0], "outer exec");
-  const waitTool = expectDefined(harness.tools[1], "wait");
+  const waitTool = harness.wait;
   const spawn = vi.spyOn(getProcessSupervisor(), "spawn");
   const remote = vi.spyOn(nodeHost, "executeNodeHostCommand");
   let nextCall = 0;
-  const run = async (code = deniedCode) =>
-    resultDetails(await outer.execute(`host-${nextCall++}`, { code }));
-  const complete = (details: Record<string, unknown>) => waitUntilCompleted({ details, waitTool });
+  const run = async (code = deniedCode) => harness.run(code, `host-${nextCall++}`);
+  const complete = harness.resume;
   return {
     ...harness,
     source,

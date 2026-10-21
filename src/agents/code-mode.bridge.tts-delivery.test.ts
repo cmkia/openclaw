@@ -6,8 +6,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { shouldDeliverDespiteSourceReplySuppression } from "../auto-reply/reply/dispatch-from-config.payloads.js";
 import * as ttsRuntime from "../tts/tts.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
-import { resetCodeModeTestState, runUntilCompleted } from "./code-mode.test-support.js";
+import { resetCodeModeTestState } from "./code-mode.test-support.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { resolveToolSearchConfig } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -35,7 +34,7 @@ function createTtsHarness(name: string, target: AnyAgentTool = createTtsTool({ c
     },
   });
   harnesses.push(harness);
-  applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
+  harness.add(target);
   const runtime = new ToolSearchRuntime(harness, resolveToolSearchConfig(harness.config));
   return { ...harness, runtime, delivered };
 }
@@ -64,11 +63,7 @@ describe("Code Mode nested TTS delivery", () => {
   it("delivers accepted speech with a private final", async () => {
     const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
     const harness = createTtsHarness("private");
-    const result = await runUntilCompleted({
-      execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
-      waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
-      code: 'return await tts({ text: "Synthetic speech" });',
-    });
+    const result = await harness.complete('return await tts({ text: "Synthetic speech" });');
     expect(result.status).toBe("completed");
     expect(synthesize).toHaveBeenCalledOnce();
     await finishReply(harness, "Private final text must not be sent.");
