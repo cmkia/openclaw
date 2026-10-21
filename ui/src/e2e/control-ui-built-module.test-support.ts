@@ -43,6 +43,9 @@ function buildPaths(buildRoot: string | undefined) {
   return { assetsDir: path.join(buildRoot, "assets"), html: path.join(buildRoot, "index.html") };
 }
 
+// Callers keep each completed build immutable for the lifetime of their suite.
+const builtSourceMaps = new Map<string, { file: string; sources: string[] }[]>();
+
 /** Resolve the emitted implementation, including when optimization removes its facade. */
 export function controlUiE2eBuiltModuleRequest(
   modulePath: string,
@@ -50,19 +53,25 @@ export function controlUiE2eBuiltModuleRequest(
 ): RegExp {
   const { assetsDir } = buildPaths(buildRoot);
   const sourceSuffix = `/${modulePath.replaceAll("\\", "/")}`;
-  const chunks = readdirSync(assetsDir).filter((file) => {
-    if (!file.endsWith(".js.map")) {
-      return false;
-    }
-    const sourceMap: { sources: string[] } = JSON.parse(
-      readFileSync(path.join(assetsDir, file), "utf8"),
-    );
-    return sourceMap.sources.some((source) => source.replaceAll("\\", "/").endsWith(sourceSuffix));
-  });
+  let sourceMaps = builtSourceMaps.get(assetsDir);
+  if (!sourceMaps) {
+    sourceMaps = readdirSync(assetsDir)
+      .filter((file) => file.endsWith(".js.map"))
+      .map((file) => {
+        const { sources }: { sources: string[] } = JSON.parse(
+          readFileSync(path.join(assetsDir, file), "utf8"),
+        );
+        return { file, sources };
+      });
+    builtSourceMaps.set(assetsDir, sourceMaps);
+  }
+  const chunks = sourceMaps.filter(({ sources }) =>
+    sources.some((source) => source.replaceAll("\\", "/").endsWith(sourceSuffix)),
+  );
   if (chunks.length !== 1) {
     throw new Error(`Expected one built chunk for ${modulePath}, found ${chunks.length}`);
   }
-  return builtAssetRequest([chunks[0]!.slice(0, -".map".length)]);
+  return builtAssetRequest([chunks[0]!.file.slice(0, -".map".length)]);
 }
 
 /** Raw ?url assets retain source bytes instead of participating in module sourcemaps. */
