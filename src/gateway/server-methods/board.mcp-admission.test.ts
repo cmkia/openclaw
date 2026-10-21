@@ -41,6 +41,113 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.for(["owner", "other"] as const)(
+  "pins a requester-bound live MCP App view only for its requester (%s)",
+  (caller) =>
+    withOpenClawTestState(profileState, async ({ workspaceDir }) => {
+      const target = { agentId: "main", sessionKey: "agent:main:mcp-requester-pin" };
+      const cfg: OpenClawConfig = {
+        ...rolePolicyConfig(),
+        agents: { entries: { main: {} } },
+        mcp: { apps: { enabled: true } },
+      };
+      cfg.gateway!.roles!.definitions!.view!.scopes = [...scopes];
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const owner = roleClient("view", "mcp-requester-owner");
+      const client = caller === "owner" ? owner : roleClient("view", "mcp-requester-other");
+      client.connect.scopes = [...scopes];
+      const ownerProfileId = owner.authenticatedUserProfile!.profileId;
+      await upsertSessionEntryCore(target, {
+        sessionId: "mcp-requester-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, source: "profile" as const, id: ownerProfileId },
+      });
+      if (caller === "other") {
+        addSessionMember(target, {
+          identityId: client.authenticatedUserProfile!.profileId,
+          addedBy: ownerProfileId,
+          addedAt: 1,
+        });
+      }
+      const descriptor = {
+        serverName: "server",
+        toolName: "show",
+        uiResourceUri: "ui://server/app",
+        toolCallId: "source-call",
+      };
+      const runtime: SessionMcpRuntime = {
+        sessionId: "mcp-requester-session",
+        sessionKey: target.sessionKey,
+        workspaceDir,
+        configFingerprint: "synthetic",
+        createdAt: 0,
+        lastUsedAt: 0,
+        mcpAppsEnabled: true,
+        markUsed: () => {},
+        peekCatalog: () => null,
+        dispose: async () => {},
+        callTool: async () => ({ content: [] }),
+        getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
+        readResource: async () => ({
+          contents: [
+            {
+              uri: descriptor.uiResourceUri,
+              mimeType: "text/html;profile=mcp-app",
+              text: "<p>synthetic app</p>",
+            },
+          ],
+        }),
+      };
+      // Agent turns bind their live App views to the requester that started the run.
+      const fetched = await fetchMcpAppView({
+        runtime,
+        agentId: target.agentId,
+        ...descriptor,
+        toolInput: {},
+        toolResult: { content: [] },
+        requesterId: ownerProfileId,
+      });
+      const board = createBoardHarness(
+        undefined,
+        {
+          resolveActiveView: resolveMcpAppActiveView,
+          resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
+        },
+        boardStore,
+        { getRuntimeConfig: () => cfg },
+      );
+      const respond = vi.fn<RespondFn>();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "mcp-requester-pin",
+          method: "board.widget.put",
+          params: {
+            ...target,
+            name: "pinned",
+            content: { kind: "mcp-app", viewId: fetched!.viewId },
+          },
+        },
+        client,
+        context: board.context,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: board.handlers,
+      });
+      if (caller === "owner") {
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+        await expect(boardStore.readWidgetMcpApp(target, "pinned")).resolves.toMatchObject({
+          descriptor,
+        });
+      } else {
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+        expect(respond.mock.calls[0]?.[2]?.message).toContain("MCP App view expired");
+        await expect(boardStore.readWidgetMcpApp(target, "pinned")).resolves.toBeUndefined();
+      }
+    }),
+);
+
 it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
   "retains only current source tool authority after queueing (%s)",
   (outcome, { signal: testSignal }) =>

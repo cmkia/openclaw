@@ -55,6 +55,7 @@ import {
   requireMcpAppInteraction,
   resolveMcpAppActiveView,
   resolveMcpAppAllowedToolNames,
+  resolveMcpAppRequesterId,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
@@ -201,7 +202,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       "board.widget.put",
       validateBoardWidgetPutParams,
       async (invocation) => {
-        const { params: requestParams, respond, context } = invocation;
+        const { params: requestParams, respond, context, client } = invocation;
         const authority = captureBoardRequestAuthority(invocation);
         const boardSession = resolveBoardSession(requestParams, context, respond);
         if (!boardSession) {
@@ -241,6 +242,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
               ...boardSession,
               viewId: requestParams.content.viewId,
               cfg: context.getRuntimeConfig(),
+              requesterId: resolveMcpAppRequesterId(client),
             });
             authority.assertActive();
             const { view } = active;
