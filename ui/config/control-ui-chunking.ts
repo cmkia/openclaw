@@ -59,6 +59,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "node_modules/@solidjs/signals/dist/prod/deferred.js":
+      // Only lazy resource consumers need the deferred scheduler hook.
+      return "solid-deferred-runtime";
     case "node_modules/@solidjs/signals/dist/prod/core/action.js":
     case "node_modules/@solidjs/signals/dist/dev/core/action.js":
     case "node_modules/@solidjs/signals/dist/prod/core/verdict.js":
