@@ -14,6 +14,7 @@ import {
 import { Session } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { startQaBusServer, createQaBusState } from "../extensions/qa-lab/bus-api.ts";
@@ -26,6 +27,7 @@ import { buildCwdBoundHashedArgPattern } from "../src/infra/exec-command-resolut
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
+import { readGatewayGcTrace, startGatewayDiagnostics } from "./lib/gateway-bench-profile.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
@@ -44,6 +46,8 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "1000" },
     samples: { type: "string", default: "5" },
     "start-at": { type: "string" },
+    "steady-duration-ms": { type: "string" },
+    "steady-turns": { type: "string", default: "100" },
     help: { type: "boolean", short: "h" },
     "tool-invocations": { type: "boolean", default: false },
     "tool-argument-bytes": { type: "string", default: "65536" },
@@ -57,7 +61,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --expose-gc --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--exec-policy-rules 100|1000] [--exec-policy-only --iterations 1000 --samples 5] [--start-at <epoch-ms>]\nRuns one cold and ten warmed QA-channel turns. Exec policy mode uses a synthetic allowlist and one verified exec tool call per turn; --exec-policy-only measures the real retained final guard without launching a Gateway.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
+    "Usage: node --expose-gc --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--exec-policy-rules 100|1000] [--exec-policy-only --iterations 1000 --samples 5] [--steady-duration-ms 120000 --steady-turns 100] [--start-at <epoch-ms>]\nRuns one cold and ten warmed QA-channel turns. Steady mode then measures at least the requested duration and turn count, with main-isolate GC and loop diagnostics; --start-at synchronizes this measured phase after warm-up. Exec policy mode verifies one real exec call per turn; --exec-policy-only measures the retained final guard without a Gateway.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
   );
   process.exit(0);
 }
@@ -73,6 +77,13 @@ if (ruleCount !== undefined && ruleCount !== 100 && ruleCount !== 1000) {
 }
 if (values["exec-policy-only"] && ruleCount === undefined) {
   throw new Error("--exec-policy-only requires --exec-policy-rules");
+}
+const steadyDurationMs = values["steady-duration-ms"]
+  ? parsePositiveInt(values["steady-duration-ms"], 120000, "steady-duration-ms")
+  : 0;
+const steadyTurns = parsePositiveInt(values["steady-turns"], 100, "steady-turns");
+if (steadyDurationMs && values["exec-policy-only"]) {
+  throw new Error("--steady-duration-ms requires the Gateway workload");
 }
 const output = mkdtempSync(path.join(tmpdir(), "sqlmeasure-channel-"));
 const fixture = path.join(output, "fixture");
@@ -416,6 +427,13 @@ type TurnEvidence = TurnIdentity & {
   outboundId: string;
   execToolVerified?: boolean;
 };
+function summarizeTurnLatency(samples: number[]) {
+  const sorted = samples.toSorted((left, right) => left - right);
+  return {
+    ...summarizeNumbers(samples),
+    p99: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+  };
+}
 const evidence: {
   output: string;
   harnessVersion: string;
@@ -429,15 +447,27 @@ const evidence: {
   ok?: boolean;
   error?: string;
   execPolicyRules?: number;
+  steady?: {
+    completedTurns: number;
+    diagnostics: Awaited<ReturnType<Awaited<ReturnType<typeof startGatewayDiagnostics>>>>;
+    firstOutboundMs: ReturnType<typeof summarizeTurnLatency>;
+    settledMs: ReturnType<typeof summarizeTurnLatency>;
+    gc?: ReturnType<typeof readGatewayGcTrace> & {
+      promotedMbPerTurn: number;
+      scavengeSecondsPerMinute: number;
+      majorSecondsPerMinute: number;
+    };
+  };
 } = {
   output,
-  harnessVersion: "3.0.0-channel.1",
+  harnessVersion: "3.0.0-channel.2",
   execPolicyRules: ruleCount,
   phases: [],
   turns: [],
   children: [],
 };
 const children: ChildProcess[] = [];
+const logDrains = new Map<string, Promise<void>>();
 const traces: Record<string, TurnIdentity> = {};
 const messages: Record<string, TurnIdentity> = {};
 let phase = "01.boot";
@@ -484,19 +514,24 @@ function setPhase(next: string) {
   console.log("PHASE", phase);
   save();
 }
-function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
+function launch(args: string[], env: NodeJS.ProcessEnv, name: string, ipc = false) {
   if (interrupted) {
     throw new Error("Benchmark interrupted");
   }
   const out = createWriteStream(path.join(output, name + ".log"));
+  const err = createWriteStream(path.join(output, name + ".stderr.log"));
+  logDrains.set(
+    name,
+    Promise.all([finished(out), finished(err)]).then(() => {}),
+  );
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
     detached: true,
   });
   child.stdout?.pipe(out);
-  child.stderr?.pipe(out);
+  child.stderr?.pipe(err);
   children.push(child);
   if (child.pid === undefined) {
     throw new Error(`Failed to spawn ${name}`);
@@ -570,7 +605,19 @@ try {
     throw new Error("Mock provider not ready");
   }
   gateway = launch(
-    buildGatewayBenchChildArgs(values.entry, port),
+    buildGatewayBenchChildArgs(
+      values.entry,
+      port,
+      steadyDurationMs
+        ? [
+            "--trace-gc-nvp",
+            "--import",
+            "./scripts/tsx.mjs",
+            "--import",
+            "./scripts/lib/gateway-bench-profile-preload.ts",
+          ]
+        : [],
+    ),
     {
       ...createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
       OPENAI_API_KEY: "synthetic-sqlmeasure-fixture",
@@ -579,6 +626,7 @@ try {
       NODE_OPTIONS: process.env.OPENCLAW_CHANNEL_BENCH_NODE_OPTIONS ?? "--enable-source-maps",
     },
     "gateway",
+    steadyDurationMs > 0,
   );
   const ready = await waitForInitialProbe({
     port,
@@ -592,9 +640,28 @@ try {
     throw new Error("Gateway not ready");
   }
   await delay(1000);
-  await waitForBenchmarkStart();
-  for (let i = 0; i <= 10; i++) {
-    setPhase(i === 0 ? "02.first-turn" : `03.turn-${String(i).padStart(2, "0")}`);
+  if (!steadyDurationMs) {
+    await waitForBenchmarkStart();
+  }
+  let finishDiagnostics: Awaited<ReturnType<typeof startGatewayDiagnostics>> | undefined;
+  let measuredStart = 0;
+  for (let i = 0; ; i++) {
+    if (i === 11) {
+      if (!steadyDurationMs) {
+        break;
+      }
+      await waitForBenchmarkStart();
+      finishDiagnostics = await startGatewayDiagnostics(gateway, "channel-steady");
+      measuredStart = performance.now();
+    }
+    if (i >= 11 + steadyTurns && performance.now() - measuredStart >= steadyDurationMs) {
+      break;
+    }
+    setPhase(
+      i === 0
+        ? "02.first-turn"
+        : `${i < 11 ? "03.warm" : "04.measured"}-${String(i).padStart(2, "0")}`,
+    );
     const turnId = createHash("sha256").update(phase).digest("hex").slice(0, 32);
     const messageId = `sqlmeasure-${i}`;
     traces[turnId] = { phase, turnId };
@@ -652,6 +719,7 @@ try {
       }
       await delay(50);
     }
+    const settledMs = Date.now() - start;
     const result = state
       .getSnapshot()
       .messages.find(
@@ -674,13 +742,25 @@ try {
       turnId,
       messageId,
       firstOutboundMs,
-      settledMs: Date.now() - start,
+      settledMs,
       result: { status: "ok" },
       outboundId: result.id,
       ...(tool ? { execToolVerified: true } : {}),
     });
     save();
-    await delay(1000);
+    if (i < 11) {
+      await delay(1000);
+    }
+  }
+  if (finishDiagnostics) {
+    const diagnostics = await finishDiagnostics();
+    const measuredTurns = evidence.turns.slice(11);
+    evidence.steady = {
+      completedTurns: measuredTurns.length,
+      diagnostics,
+      firstOutboundMs: summarizeTurnLatency(measuredTurns.map((turn) => turn.firstOutboundMs)),
+      settledMs: summarizeTurnLatency(measuredTurns.map((turn) => turn.settledMs)),
+    };
   }
   setPhase("08.shutdown");
   const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
@@ -693,8 +773,25 @@ try {
       throw new Error("shutdown timeout");
     }),
   ]);
+  await logDrains.get("gateway");
+  if (evidence.steady) {
+    const trace = readGatewayGcTrace(
+      path.join(output, "gateway.log"),
+      "channel-steady",
+      "diagnostics",
+    );
+    const { completedTurns, diagnostics } = evidence.steady;
+    evidence.steady.gc = {
+      ...trace,
+      promotedMbPerTurn: trace.promotedBytes / 1_000_000 / completedTurns,
+      scavengeSecondsPerMinute:
+        ((diagnostics.gc.minorDurationMs?.total ?? 0) * 60) / diagnostics.durationMs,
+      majorSecondsPerMinute:
+        ((diagnostics.gc.majorDurationMs?.total ?? 0) * 60) / diagnostics.durationMs,
+    };
+  }
   evidence.bus = state.getSnapshot();
-  evidence.ok = evidence.turns.length === 11 && evidence.shutdown[0] === 0;
+  evidence.ok = evidence.turns.length >= 11 && evidence.shutdown[0] === 0;
   setPhase("done");
   console.log("COMPLETE", output, "ok=" + evidence.ok);
   if (!evidence.ok) {
