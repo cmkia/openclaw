@@ -157,7 +157,8 @@ function registerFileTests(storage: "local" | "remote") {
       requestGeneration: 0,
       agents: { recordFile: () => null },
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileEditors: {},
       agentFileConflict: null,
       agentFileSaving: false,
@@ -192,7 +193,9 @@ function registerFileTests(storage: "local" | "remote") {
     });
     const editor = await loadEditor("unsaved new memory");
     expect(await saveDraft(editor)).toBe(false);
-    expect(editor.agentFilesError).toContain("Update its workspace provider");
+    expect(await editor.agentFileOutcome).toMatchObject({
+      error: expect.stringContaining("Update its workspace provider"),
+    });
     expect(editor.agentFileEditors[memory]?.draft).toBe("unsaved new memory");
     expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
 

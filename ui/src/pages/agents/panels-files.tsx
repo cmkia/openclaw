@@ -9,6 +9,7 @@ import {
   isPending,
   latest,
   Loading,
+  onSettled,
   Show,
 } from "solid-js";
 import type { AgentFileEntry } from "../../api/types.ts";
@@ -112,7 +113,10 @@ export function AgentFiles(
       canWrite: boolean;
     },
 ) {
-  const contentRead = createMemo(() => params.readData().agentFileRead ?? undefined, {
+  const contentRequest = createMemo(() => ({ request: params.readData().agentFileRead }), {
+    equals: (previous, next) => previous.request === next.request,
+  });
+  const contentRead = createMemo(() => contentRequest().request ?? undefined, {
     loadingValue: undefined,
   });
   const loading = () =>
@@ -120,16 +124,20 @@ export function AgentFiles(
     (params.readData().agentFileRead !== null &&
       (isPending(contentRead) || latest(contentRead) === undefined));
   // The owner admits writes synchronously, including overwrite's preceding hash read.
-  const [saving, setSaving] = createOptimistic(() => params.readData().agentFileSaving);
-  const savingAction = action(function* (completion: Promise<boolean> | undefined) {
-    if (params.readData().agentFileSaving) {
-      setSaving(true);
-    }
+  const [optimisticSaving, setSaving] = createOptimistic(false);
+  const saving = () => optimisticSaving() || params.readData().agentFileSaving;
+  const savingAction = action(function* (completion: Promise<boolean>) {
+    setSaving(true);
     yield completion;
   });
   const save = (name: string, overwrite = false) => {
     const completion = overwrite ? params.onFileOverwrite(name) : params.onFileSave(name);
-    return savingAction(completion);
+    if (completion) {
+      // Publish the admitted owner state before opening the optimistic transaction.
+      onSettled(() => {
+        void savingAction(completion);
+      });
+    }
   };
   const list = () =>
     params.readData().agentFilesList?.agentId === params.agentId
@@ -203,7 +211,7 @@ export function AgentFiles(
                 class="btn btn--sm"
                 type="button"
                 disabled={loading() || saving() || !params.canWrite}
-                onClick={() => void save(name(), true)}
+                onClick={() => save(name(), true)}
               >
                 {t("agents.files.overwrite")}
               </button>
@@ -328,7 +336,7 @@ export function AgentFiles(
                           <button
                             class="btn btn--sm primary"
                             disabled={!params.canWrite || !hasContent() || saving() || !isDirty()}
-                            onClick={() => void save(entry().name)}
+                            onClick={() => save(entry().name)}
                           >
                             {saving() ? t("common.saving") : t("common.save")}
                           </button>

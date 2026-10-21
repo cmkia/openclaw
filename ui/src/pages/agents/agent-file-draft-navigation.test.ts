@@ -131,7 +131,16 @@ it.each([
       expect(page.read().readData().agentFilesList?.agentId).toBe(selection.state.selectedId);
       expect(page.read().readData().agentFilesLoading).toBe(false);
       paint();
-      expect(container.querySelector(".agent-file-textarea")).not.toBeNull();
+      const data = page.read().readData();
+      const editor = data.agentFileEditors[data.agentFileActive ?? ""];
+      expect(container.querySelector<HTMLTextAreaElement>(".agent-file-textarea")?.value).toBe(
+        editor?.draft ?? editor?.content,
+      );
+      expect(
+        container.querySelector<HTMLButtonElement>(
+          '.agent-file-tabs [role="tab"][aria-selected="true"]',
+        )?.disabled,
+      ).toBe(false);
     });
   };
   const tab = (name: string) => {
@@ -165,19 +174,27 @@ it.each([
     } else if (transition !== "reconnect") {
       if (transition === "pending save") {
         save().click();
-        await vi.waitFor(() =>
+        await vi.waitFor(() => {
           expect(request).toHaveBeenCalledWith("agents.files.set", {
             agentId: "main",
             name: "AGENTS.md",
             content: draft,
             expectedHash: "a".repeat(64),
-          }),
-        );
+          });
+          expect(save().textContent).toContain("Saving");
+          expect(save().disabled).toBe(true);
+        });
+        // The next user input starts in a new browser task, after the action's first frame.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       }
       selection.set("research");
       await settle();
       expect(textarea().value).toBe("research AGENTS.md saved");
       if (transition === "pending save") {
+        expect(save().textContent).not.toContain("Saving");
+        expect(textarea().disabled).toBe(false);
         pendingSave.resolve();
         await request.mock.results.find(
           (_, index) => request.mock.calls[index]?.[0] === "agents.files.set",

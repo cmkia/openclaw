@@ -88,7 +88,7 @@ describe("agent file native status", () => {
       });
     });
     const editor = mounted.view.container.querySelector("textarea");
-    mounted.view.getByRole("button", { name: "Save", exact: true }).click();
+    mounted.view.getByRole("button", { name: /^Save$/ }).click();
     await waitForSolid(() =>
       expect(mounted.view.getByRole("button", { name: /^Saving/ })).toHaveProperty(
         "disabled",
@@ -104,10 +104,7 @@ describe("agent file native status", () => {
     await waitForSolid(() =>
       expect(mounted.view.container.textContent).toContain("Synthetic write rejected"),
     );
-    expect(mounted.view.getByRole("button", { name: "Save", exact: true })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    expect(mounted.view.getByRole("button", { name: /^Save$/ })).toHaveProperty("disabled", false);
     expect(mounted.view.container.querySelector("textarea")).toBe(editor);
     expect(editor).toHaveProperty("value", "A newer edit");
   });
@@ -124,8 +121,8 @@ describe("agent file native status", () => {
     await waitForSolid(() =>
       expect(mounted.view.container.textContent).not.toContain("Synthetic file conflict"),
     );
-    expect(mounted.view.getByRole("button", { name: "Reload", exact: true })).toBeTruthy();
-    expect(mounted.view.getByRole("button", { name: "Overwrite", exact: true })).toHaveProperty(
+    expect(mounted.view.getByRole("button", { name: /^Reload$/ })).toBeTruthy();
+    expect(mounted.view.getByRole("button", { name: /^Overwrite$/ })).toHaveProperty(
       "disabled",
       false,
     );

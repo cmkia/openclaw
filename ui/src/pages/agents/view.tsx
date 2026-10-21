@@ -246,12 +246,16 @@ export function Agents(props: AgentsProps) {
                     </Show>
                   </Match>
                   <Match when={props.readData().agentsPanel === "files"}>
-                    <AgentFiles
-                      {...props.agentFiles}
-                      readData={props.readData}
-                      agentId={agent().id}
-                      canWrite={props.access.canWriteFiles}
-                    />
+                    <Show when={agent().id} keyed>
+                      {(agentId) => (
+                        <AgentFiles
+                          {...props.agentFiles}
+                          readData={props.readData}
+                          agentId={agentId}
+                          canWrite={props.access.canWriteFiles}
+                        />
+                      )}
+                    </Show>
                   </Match>
                   <Match when={props.readData().agentsPanel === "tools"}>
                     <AgentTools
