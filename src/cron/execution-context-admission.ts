@@ -18,6 +18,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { bindScheduledExecutionFacts } from "./execution-context-registry.js";
 import {
   buildScheduledExecutionContext,
   classifyScheduledParent,
@@ -247,12 +248,14 @@ export async function admitScheduledOccurrence(
           ? () => lease.assertCurrent()
           : () => {};
       let context: ScheduledExecutionContext | undefined;
+      let unbind = () => {};
       return {
         result,
-        bind(assertAdmitted) {
+        bind(admittedRun, assertAdmitted) {
           if (result.status !== "ready") {
             return;
           }
+          unbind = bindScheduledExecutionFacts(admittedRun, result.facts);
           context = {
             ...result.facts,
             assertCurrent: () => {
@@ -263,6 +266,8 @@ export async function admitScheduledOccurrence(
         },
         current: () => context,
         release() {
+          unbind();
+          unbind = () => {};
           context = undefined;
         },
       };
