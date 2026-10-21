@@ -8,6 +8,7 @@ import { build, createServer, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
 import controlUiViteConfig from "../../vite.config.ts";
+import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
 let root: string;
 beforeEach(async () => {
@@ -80,7 +81,15 @@ async function fixture() {
 }
 
 async function compile(inputs = new Set<string>()) {
-  const config = controlUiViteConfig({ command: "build" });
+  const config = controlUiViteConfig({
+    command: "build",
+    buildInfo: normalizeControlUiBuildInfo({
+      version: "1.0.0",
+      commit: "a".repeat(40),
+      dirty: false,
+      release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
+    }),
+  });
   return build({
     ...config,
     root,
