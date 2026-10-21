@@ -355,37 +355,32 @@ describe("project GitHub search", () => {
     expect(searchUrl).not.toContain("sort=");
   });
 
-  it("resolves exact owner/name queries directly and ranks the repository first", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      if (requestUrl(input).includes("/repos/openclaw/openclaw")) {
-        return json(repository("openclaw/openclaw", "2026-08-20T00:00:00Z"));
-      }
-      return page(
-        repository("someone/openclaw-tutorial", "2026-08-25T00:00:00Z"),
-        repository("openclaw/openclaw", "2026-08-20T00:00:00Z"),
-      );
-    });
-    expect(projectNames(await search("openclaw/openclaw", fetchImpl))).toEqual([
+  it.each([
+    [
+      "hit",
       "openclaw/openclaw",
-      "someone/openclaw-tutorial",
-    ]);
-    expect(fetchImpl.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
-      expect.stringContaining("/repos/openclaw/openclaw"),
-      expect.stringContaining("/search/repositories?"),
-    ]);
-  });
-
-  it("degrades to search results when the exact owner/name lookup misses", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      if (requestUrl(input).includes("/repos/")) {
-        return json({ message: "Not Found" }, 404);
-      }
-      return page(repository("acme/missing-exact", "2026-08-10T00:00:00Z"));
-    });
-    expect(projectNames(await search("acme/missing-exact-repo", fetchImpl))).toEqual([
-      "acme/missing-exact",
-    ]);
-  });
+      ["someone/openclaw-tutorial", "openclaw/openclaw"],
+      ["openclaw/openclaw", "someone/openclaw-tutorial"],
+    ],
+    ["miss", "acme/missing-exact-repo", ["acme/missing-exact"], ["acme/missing-exact"]],
+  ] as const)(
+    "ranks exact owner/name lookup %s before global results",
+    async (outcome, query, global, expected) => {
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        if (requestUrl(input).includes("/repos/")) {
+          return outcome === "hit"
+            ? json(repository(query, "2026-08-20T00:00:00Z"))
+            : json({ message: "Not Found" }, 404);
+        }
+        return page(...global.map((name) => repository(name, "2026-08-25T00:00:00Z")));
+      });
+      expect(projectNames(await search(query, fetchImpl))).toEqual(expected);
+      expect(fetchImpl.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+        expect.stringContaining(`/repos/${query}`),
+        expect.stringContaining("/search/repositories?"),
+      ]);
+    },
+  );
 
   it("degrades optional lanes to global results when their requests reject in transport", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {

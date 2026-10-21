@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   resolveGatewayCredentialsFromConfig,
   resolveGatewayCredentialsFromValues,
@@ -23,16 +24,30 @@ function envSecretRef(id: string) {
   return { source: "env", provider: "default", id } as const;
 }
 
+function gatewayConfig(gateway: GatewayConfig, secretProvider = false): OpenClawConfig {
+  return {
+    gateway,
+    ...(secretProvider && { secrets: { providers: { default: { source: "env" as const } } } }),
+  };
+}
+
+function authoredConfig(authored: string, env: NodeJS.ProcessEnv, mode?: "local") {
+  const read = resolveConfigForRead(
+    { gateway: { ...(mode && { mode }), auth: { mode: "token", token: authored } } },
+    env,
+  );
+  const config = read.resolvedConfigRaw as OpenClawConfig;
+  setConfigResolutionFacts(config, read.resolutionFacts);
+  return config;
+}
+
 function resolveGatewayCredentialsFor(
   gateway: GatewayConfig,
   overrides: ResolveFromConfigOverrides = {},
   secretProvider = false,
 ) {
   return resolveGatewayCredentialsFromConfig({
-    cfg: {
-      gateway,
-      ...(secretProvider && { secrets: { providers: { default: { source: "env" as const } } } }),
-    },
+    cfg: gatewayConfig(gateway, secretProvider),
     env: DEFAULT_GATEWAY_ENV,
     ...overrides,
   });
@@ -232,14 +247,8 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   ])(
     "classifies gateway credentials from authored provenance: $name",
     ({ authored, env, expected }) => {
-      const read = resolveConfigForRead(
-        { gateway: { auth: { mode: "token", token: authored } } },
-        env,
-      );
-      const config = read.resolvedConfigRaw as OpenClawConfig;
-      setConfigResolutionFacts(config, read.resolutionFacts);
-      const resolve = () =>
-        resolveGatewayCredentialsFromConfig({ cfg: config, env: EMPTY_GATEWAY_ENV });
+      const cfg = authoredConfig(authored, env);
+      const resolve = () => resolveGatewayCredentialsFromConfig({ cfg, env: EMPTY_GATEWAY_ENV });
 
       if (expected === null) {
         expect(resolve).toThrow("gateway.auth.token");
@@ -249,6 +258,105 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         token: expected,
         password: undefined,
       });
+    },
+  );
+});
+
+describe("resolveGatewayCredentialsWithSecretInputs", () => {
+  type Options = Partial<
+    Omit<Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0], "config" | "env">
+  >;
+  const localAuth = { token: "local-token", password: "local-password" }; // pragma: allowlist secret
+  const remoteConfig = (
+    mode: "local" | "remote" = "remote",
+    remote: GatewayConfig["remote"] = DEFAULT_REMOTE_AUTH,
+  ) => gatewayConfig({ mode, auth: localAuth, remote: { url: "wss://remote.example", ...remote } });
+  const remoteFirst: Options = {
+    remoteTokenPrecedence: "remote-first",
+    remotePasswordPrecedence: "remote-first", // pragma: allowlist secret
+  };
+  it.each([
+    [
+      "local env-first",
+      gatewayConfig({ mode: "local", auth: DEFAULT_GATEWAY_AUTH }),
+      { localPrecedence: "env-first" },
+      ENV_AUTH,
+    ],
+    ["remote defaults", remoteConfig(), {}, { token: "remote-token", password: "env-password" }], // pragma: allowlist secret
+    [
+      "remote precedence overrides",
+      remoteConfig(),
+      { ...remoteFirst, remoteTokenPrecedence: "env-first" },
+      { token: "env-token", password: "remote-password" },
+    ], // pragma: allowlist secret
+    [
+      "remote-only fallback",
+      remoteConfig("remote", { token: "remote-token" }),
+      { remoteTokenFallback: "remote-only", remotePasswordFallback: "remote-only" },
+      { token: "remote-token", password: undefined },
+    ],
+    [
+      "remote mode override",
+      remoteConfig("local"),
+      { ...remoteFirst, modeOverride: "remote" },
+      DEFAULT_REMOTE_AUTH,
+    ],
+  ] satisfies [string, OpenClawConfig, Options, { token?: string; password?: string }][])(
+    "%s",
+    async (_name, config, options, expected) => {
+      await expect(
+        resolveGatewayCredentialsWithSecretInputs({ config, env: DEFAULT_GATEWAY_ENV, ...options }),
+      ).resolves.toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["pending bare shorthand", "$SOURCE", {}, { SOURCE: "${OTHER}" }],
+    ["substituted template-looking literal", "${SOURCE}", { SOURCE: "${OTHER}" }, {}],
+  ] satisfies [string, string, NodeJS.ProcessEnv, NodeJS.ProcessEnv][])(
+    "materializes authored provenance atomically: %s",
+    async (_name, authored, readEnv, runtimeEnv) => {
+      await expect(
+        resolveGatewayCredentialsWithSecretInputs({
+          config: authoredConfig(authored, readEnv, "local"),
+          env: runtimeEnv,
+        }),
+      ).resolves.toEqual({ token: "${OTHER}", password: undefined });
+    },
+  );
+
+  it.each([
+    ["token", true],
+    ["password", true],
+    ["token", false],
+    ["password", false],
+  ] as const)(
+    "resolves config-first %s only when available (%s)",
+    async (credential, available) => {
+      const id = `${available ? "CONFIG_FIRST" : "MISSING_CONFIG_FIRST"}_${credential.toUpperCase()}`;
+      const ref = envSecretRef(id);
+      const config = gatewayConfig(
+        {
+          mode: "local",
+          auth: credential === "token" ? { token: ref } : { mode: "password", password: ref },
+        },
+        true,
+      );
+      const result = resolveGatewayCredentialsWithSecretInputs({
+        config,
+        env: {
+          [`OPENCLAW_GATEWAY_${credential.toUpperCase()}`]: `env-${credential}`,
+          ...(available && { [id]: `config-first-${credential}` }),
+        },
+      });
+      if (available) {
+        await expect(result).resolves.toEqual({
+          ...NO_AUTH,
+          [credential]: `config-first-${credential}`,
+        });
+      } else {
+        await expect(result).rejects.toThrow(`gateway.auth.${credential}`);
+      }
     },
   );
 });
