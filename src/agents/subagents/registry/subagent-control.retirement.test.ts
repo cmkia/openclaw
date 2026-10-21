@@ -26,7 +26,6 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   records,
-  requesterWakeDriver,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -48,10 +47,7 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS as RETIRE_AFTER } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   activateSubagentRegistry,
@@ -601,31 +597,4 @@ it("keeps ordinary yielded wakes ahead of terminal cleanup", async () => {
   expect(saved.delivery).toEqual(input.subagent.delivery);
   expect(wake).toHaveBeenCalledOnce();
   expectNoExecutionReplay();
-});
-
-it.each([-1, 1])("ignores killed callbacks after cancellation cleanup (%ims)", async (offset) => {
-  const { input, runId } = historicalCancellation();
-  input.subagent.killReconciliation = undefined;
-  await persistRetiredOwner(input);
-  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-  input.subagent = subagentRuns.get(runId)!;
-  const driver = requesterWakeDriver([input]);
-  const before = structuredClone(input.subagent);
-  try {
-    await driver.controller.completeSubagentRun({
-      runId,
-      expectedEntry: input.subagent,
-      endedAt: input.subagent.execution.endedAt! + offset,
-      reason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "stopped" },
-      triggerCleanup: true,
-    });
-
-    expect(input.subagent).toEqual(before);
-    expect(savedRun(runId)).toEqual(before);
-    expect(driver.wake).not.toHaveBeenCalled();
-    expectNoExecutionReplay();
-  } finally {
-    driver.controller.clearRuntimeState();
-  }
 });

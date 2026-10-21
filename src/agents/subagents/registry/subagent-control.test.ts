@@ -22,7 +22,6 @@ import { ensureContextEnginesInitialized } from "../../../context-engine/init.js
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import * as controllerLifecycle from "../../../sessions/session-controller.lifecycle.js";
 import {
-  beginSessionEffect,
   consumeSessionEffectHandoff,
   getSessionMutationCount,
   isSessionMutationActive,
@@ -33,13 +32,18 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { startControlProducer as startProducer } from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
-import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
+import {
+  beginControlAdmission,
+  enqueueControlRun,
+} from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
-import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
-import { registerQueuedReservationFailureTests } from "./subagent-control.queued-failure.test-support.js";
+import {
+  registerAdmissionDrainControlTests,
+  registerLateDescendantControlTests,
+  registerQueuedReservationFailureTests,
+} from "./subagent-control.late-registration.test-support.js";
 import { registerControlledSubagentReadTests } from "./subagent-control.reads.test-support.js";
 import {
   registerQueuedStopControlTests,
@@ -206,6 +210,12 @@ function publishRun(runId: string, update: (current: SubagentRunRecord) => Subag
   }));
 }
 
+async function expectRunning(sessionKey: string, expected: Partial<SubagentRunRecord>) {
+  const run = await latestRun(sessionKey);
+  expect(run).toMatchObject({ ...expected, execution: { status: "running" } });
+  expect(run?.execution.endedAt).toBeUndefined();
+}
+
 function runFixture(suffix: string, overrides: Partial<SubagentRunRecordOverrides> = {}) {
   return createSubagentRunRecord({
     runId: `run-${suffix}`,
@@ -269,10 +279,7 @@ describe("killSubagentRunAdmin", () => {
         runId,
       );
       operation.freezeAbort();
-      const result = await killSubagentRunAdmin({
-        cfg: cfgWithSessionStore(storePath),
-        sessionKey: childSessionKey,
-      });
+      const result = await adminKill(childSessionKey, storePath);
       expect(result).toMatchObject({
         found: true,
         killed: false,
@@ -407,13 +414,7 @@ describe("killSubagentRunAdmin", () => {
         killed: false,
         runId,
       });
-      const persistedChild = await latestRun(childSessionKey);
-      expect(persistedChild).toMatchObject({
-        runId,
-        generation: 2,
-        execution: { status: "running" },
-      });
-      expect(persistedChild?.execution.endedAt).toBeUndefined();
+      await expectRunning(childSessionKey, { runId, generation: 2 });
       if (producer) {
         expect(producer.cancel).not.toHaveBeenCalled();
       }
@@ -770,11 +771,7 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
       error: expect.stringContaining("Failed to persist subagent kill intent"),
     });
-    expect(await latestRun(childSessionKey)).toMatchObject({
-      runId: "run-worker-store-fail",
-      execution: { status: "running" },
-    });
-    expect((await latestRun(childSessionKey))?.execution.endedAt).toBeUndefined();
+    await expectRunning(childSessionKey, { runId: "run-worker-store-fail" });
   });
 });
 
@@ -857,20 +854,14 @@ describe("controlled subagent cancellation races", () => {
     expect(successorProducers.every(({ operation }) => !operation.abortSignal.aborted)).toBe(true);
     expect(clearQueues).not.toHaveBeenCalled();
     for (const [index, childSessionKey] of successorKeys.entries()) {
-      const persistedChild = await latestRun(childSessionKey);
-      expect(persistedChild).toMatchObject({
+      await expectRunning(childSessionKey, {
         runId: `run-old-${index}`,
         controllerSessionKey,
         generation: 2,
-        execution: { status: "running" },
       });
-      expect(persistedChild?.execution.endedAt).toBeUndefined();
-      const persistedDescendant = await latestRun(descendantKeys[index]!);
-      expect(persistedDescendant).toMatchObject({
+      await expectRunning(descendantKeys[index]!, {
         runId: `run-successor-leaf-${index}`,
-        execution: { status: "running" },
       });
-      expect(persistedDescendant?.execution.endedAt).toBeUndefined();
     }
   });
 
@@ -944,12 +935,7 @@ describe("controlled subagent cancellation races", () => {
       [childSessionKey, "run-persist-successor"],
       [descendantSessionKey, "run-persist-successor-leaf"],
     ] as const) {
-      const successor = await latestRun(sessionKey);
-      expect(successor).toMatchObject({
-        runId,
-        execution: { status: "running" },
-      });
-      expect(successor?.execution.endedAt).toBeUndefined();
+      await expectRunning(sessionKey, { runId });
     }
   });
 
@@ -1134,16 +1120,16 @@ describe("controlled subagent cancellation races", () => {
         abortedLastRun: true,
       });
       const interrupted = createDeferred();
-      const admission = await beginSessionEffect({
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        run: { runId: entry.runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
-        assertAllowed: () => {},
-        onInterrupt: () => {
+      const admission = await beginControlAdmission(
+        storePath,
+        childSessionKey,
+        sessionId,
+        () => {
           interrupted.resolve();
           return { runId: entry.runId };
         },
-      });
+        entry.runId,
+      );
       const handoffId = admission.createHandoff();
       const recoveryInterrupted = vi.fn();
       const abort = exact
@@ -1182,12 +1168,7 @@ describe("controlled subagent cancellation races", () => {
             killed: false,
             runId: entry.runId,
           });
-          const recoveredSuccessor = await latestRun(childSessionKey);
-          expect(recoveredSuccessor).toMatchObject({
-            runId: "recovery-successor",
-            execution: { status: "running" },
-          });
-          expect(recoveredSuccessor?.execution.endedAt).toBeUndefined();
+          await expectRunning(childSessionKey, { runId: "recovery-successor" });
           expect(abort).not.toHaveBeenCalled();
         } else {
           await expect(pendingKill).resolves.toMatchObject({ status: "ok" });
@@ -1416,12 +1397,13 @@ describe("killAllControlledSubagentRuns", () => {
         sessionId,
         updatedAt: 1,
       });
-      const admission = await beginSessionEffect({
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        run: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
-        assertAllowed: () => {},
-      });
+      const admission = await beginControlAdmission(
+        storePath,
+        childSessionKey,
+        sessionId,
+        undefined,
+        runId,
+      );
       const response = createDeferred();
       const started = createDeferred();
       const launchDone = createDeferred();
@@ -1434,22 +1416,15 @@ describe("killAllControlledSubagentRuns", () => {
           return { runId };
         },
       });
-      enqueueSwarmRun({
-        groupId: "remapping",
-        runId,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          started.resolve();
-          try {
-            await response.promise;
-            expect(await startQueuedSubagentRun(runId, "accepted-launch")).toBe(true);
-          } finally {
-            lease?.release();
-            launchDone.resolve();
-          }
-        },
-        onStartFailure: () => true,
+      enqueueControlRun("remapping", runId, [], async () => {
+        started.resolve();
+        try {
+          await response.promise;
+          expect(await startQueuedSubagentRun(runId, "accepted-launch")).toBe(true);
+        } finally {
+          lease?.release();
+          launchDone.resolve();
+        }
       });
       try {
         await started.promise;
@@ -1497,15 +1472,8 @@ describe("killAllControlledSubagentRuns", () => {
       entries[index] = await addRun(entry);
     }
     for (const entry of entries) {
-      enqueueSwarmRun({
-        groupId: entry.runId,
-        runId: entry.runId,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          started.push(entry.requesterAgentId!);
-        },
-        onStartFailure: () => true,
+      enqueueControlRun(entry.runId, entry.runId, [], async () => {
+        started.push(entry.requesterAgentId!);
       });
     }
     const result = await killAllControlledSubagentRuns({
