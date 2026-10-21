@@ -4,6 +4,7 @@ import { once } from "node:events";
 import {
   appendFileSync,
   createWriteStream,
+  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -115,6 +116,7 @@ const { values } = parseArgs({
     "session-row-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
+    "start-file": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
     "poll-seed": { type: "string" },
   },
@@ -383,7 +385,10 @@ const recordListRequests =
   values["stream-start-diagnostics"] ||
   values["cpu-profile"] ||
   values["poll-seed"] !== undefined;
-const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+let startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+if (values["start-at"] && values["start-file"]) {
+  throw new Error("--start-at and --start-file are mutually exclusive");
+}
 if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
   throw new Error("--session-envelope-refs requires --session-row-deltas");
 }
@@ -3243,11 +3248,27 @@ try {
     );
   } while (performance.now() - warmupStartedAt < warmupMs);
   console.log("PHASE warmed");
-  if (startAt !== undefined) {
-    if (Date.now() >= startAt) {
-      throw new Error("--start-at passed before fixture readiness and warmup");
+  const startFile = values["start-file"];
+  if (startFile) {
+    if (existsSync(startFile)) {
+      throw new Error("--start-file must be created after fixture readiness and warmup");
     }
-    await delay(startAt - Date.now());
+    writeFileSync(`${startFile}.ready`, "ready\n", { flag: "wx" });
+    const deadline = Date.now() + 2 * 60 * 60 * 1000;
+    while (!existsSync(startFile)) {
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for --start-file after two hours");
+      }
+      await delay(250);
+    }
+    startAt = integer(readFileSync(startFile, "utf8").trim(), "--start-file");
+  }
+  if (startAt !== undefined) {
+    const waitMs = startAt - Date.now();
+    if (waitMs <= 0 || waitMs > 2_147_483_647) {
+      throw new Error("--start-at must be a future epoch within Node's timer range");
+    }
+    await delay(waitMs);
   }
   const initialRetainedResources = reasoningScenario
     ? await readGatewayResources(gateway, {

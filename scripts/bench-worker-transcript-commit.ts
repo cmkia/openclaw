@@ -2,6 +2,7 @@
 // Measures real commit/publication owners, excluding inference-worker RPC and UI delivery.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { Session as InspectorSession } from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -51,6 +52,7 @@ const { values } = parseArgs({
     "graph-counts": { type: "boolean", default: false },
     mode: { type: "string", default: "committer" },
     "start-at": { type: "string" },
+    "start-file": { type: "string" },
   },
 });
 
@@ -78,6 +80,9 @@ const publicationChars = integer(
 );
 if (!["committer", "publication"].includes(values.mode)) {
   throw new Error("mode must be committer or publication");
+}
+if (values["start-at"] && values["start-file"]) {
+  throw new Error("start-at and start-file are mutually exclusive");
 }
 if (values["cpu-profile"] && values["allocation-profile"]) {
   throw new Error("CPU and allocation profiles need separate runs");
@@ -218,9 +223,12 @@ async function runSample(
   shape: typeof fixture,
   profilePath?: string,
   allocationPath?: string,
-  startAt?: number,
+  scheduledStartAt?: number,
+  startFile?: string,
 ) {
   const sampleStart = performance.now();
+  let startGateWaitMs = 0;
+  let startAt = scheduledStartAt;
   const result = await withOpenClawTestState(
     { label: "worker-commit-benchmark" },
     async (state) => {
@@ -280,11 +288,35 @@ async function runSample(
         syncBuiltinESMExports();
       }
       try {
-        if (startAt !== undefined) {
-          if (Date.now() >= startAt) {
-            throw new Error("start-at passed before fixture readiness");
+        const gateWaitStart = performance.now();
+        if (startFile) {
+          if (existsSync(startFile)) {
+            throw new Error("start-file must be created after fixture readiness");
           }
-          await delay(startAt - Date.now());
+          await fs.writeFile(`${startFile}.ready`, "ready\n", { flag: "wx" });
+          const deadline = Date.now() + 2 * 60 * 60 * 1000;
+          while (!existsSync(startFile)) {
+            if (Date.now() >= deadline) {
+              throw new Error("Timed out waiting for start-file after two hours");
+            }
+            await delay(250);
+          }
+          startAt = integer(
+            await fs.readFile(startFile, "utf8"),
+            "start-file",
+            1,
+            Number.MAX_SAFE_INTEGER,
+          );
+        }
+        if (startAt !== undefined) {
+          const waitMs = startAt - Date.now();
+          if (waitMs <= 0 || waitMs > 2_147_483_647) {
+            throw new Error("start-at must be a future epoch within Node's timer range");
+          }
+          await delay(waitMs);
+        }
+        if (startFile || startAt !== undefined) {
+          startGateWaitMs = performance.now() - gateWaitStart;
         }
         inspector?.connect();
         if (inspector && profilePath) {
@@ -473,7 +505,11 @@ async function runSample(
       }
     },
   );
-  return { ...result, fixtureAndCleanupMs: performance.now() - sampleStart - result.elapsedMs };
+  return {
+    ...result,
+    startGateWaitMs,
+    fixtureAndCleanupMs: performance.now() - sampleStart - result.elapsedMs - startGateWaitMs,
+  };
 }
 
 async function main(): Promise<void> {
@@ -490,6 +526,7 @@ async function main(): Promise<void> {
         values["cpu-profile"],
         values["allocation-profile"],
         run === 0 ? startAt : undefined,
+        run === 0 ? values["start-file"] : undefined,
       ),
     );
   }

@@ -2003,6 +2003,16 @@ runs after warmup. The publication mode verifies the final transcript and messag
 ordering; the default committer mode additionally verifies event emission and its
 replay ledger.
 
+Both this driver and `transcript-broadcast-measure.ts` accept
+`--start-file /path/to/start` instead of `--start-at`. Each writes
+`/path/to/start.ready` after preparation and warmup, then waits up to two hours
+for the start file to contain a future epoch in milliseconds. Use separate start
+files for the two sides and write the same epoch to both after acquiring the
+measurement lock. This keeps preparation outside the lock while the prepared
+processes stay responsive. A preexisting start file, stale epoch, epoch beyond
+Node's timer range, or both start options together fail the run. The worker
+driver reports gate waiting separately from fixture preparation and cleanup.
+
 For live operator attribution, `diagnostics.heapProfile` accepts
 `{ "durationMs": 10000, "includeCollected": true }` with the existing admin
 scope and 30-second churn cap; it remains a timed sample, not an RPC denominator.
