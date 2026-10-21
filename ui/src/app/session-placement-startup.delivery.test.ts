@@ -11,6 +11,7 @@ import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat
 import { chatStartupStatusLabel } from "../pages/chat/chat-run-startup.ts";
 import { buildChatItems } from "../pages/chat/chat-thread-build.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import createRuntime from "./session-placement-startup.runtime.ts";
 import {
@@ -68,7 +69,7 @@ describe("application placement delivery recovery", () => {
       writeSessionPlacementRecovery(input.recovery);
       startup.start(input);
       try {
-        await vi.waitFor(() =>
+        await waitForFast(() =>
           expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"),
         );
         expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).toBeNull();
@@ -87,7 +88,7 @@ describe("application placement delivery recovery", () => {
           input.recovery.sessionKey,
         );
         expect(replacement?.messageId).not.toBe(input.recovery.messageId);
-        await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)).toBeNull());
+        await waitForFast(() => expect(startup.get(input.recovery.sessionKey)).toBeNull());
         const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
         expect(sends).toHaveLength(2);
         expect(sends[1]?.[1]).toMatchObject({
