@@ -369,22 +369,18 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
   }
 }
 
-function NotificationActions(props: { children: JSX.Element }) {
-  return (
-    <div class="settings-row">
-      <div class="settings-row__control">{props.children}</div>
-    </div>
-  );
-}
-function BlockedNotifications(props: { description: string }) {
-  return (
-    <SettingsRow
-      title={t("configView.notifications.blocked")}
-      description={props.description}
-      control={<SettingsStatus kind="danger" label={t("configView.notifications.denied")} />}
-    />
-  );
-}
+const NotificationActions = (props: { children: JSX.Element }) => (
+  <div class="settings-row">
+    <div class="settings-row__control">{props.children}</div>
+  </div>
+);
+const BlockedNotifications = (props: { description: string }) => (
+  <SettingsRow
+    title={t("configView.notifications.blocked")}
+    description={props.description}
+    control={<SettingsStatus kind="danger" label={t("configView.notifications.denied")} />}
+  />
+);
 function NotificationSection(props: {
   title: string;
   status: JSX.Element;
@@ -474,30 +470,33 @@ function NativeNotificationSection(props: {
       <Show when={props.native.permission === "denied"}>
         <BlockedNotifications description={t("configView.notifications.nativeBlockedHint")} />
       </Show>
-      {testPending() ? (
+      <Show
+        when={testPending()}
+        fallback={
+          <Show when={props.native.test} keyed>
+            {(test) => {
+              // A new attempt retires the old error region without replacing the send control.
+              const outcome = createMemo(() => {
+                if (test.state === "error") {
+                  throw new UserFacingError(test.message);
+                }
+                return test.state;
+              });
+              return (
+                <Errored
+                  fallback={(error) => (
+                    <NativeTestStatus state="error" message={formatUiError(error())} />
+                  )}
+                >
+                  <NativeTestStatus state={outcome()} />
+                </Errored>
+              );
+            }}
+          </Show>
+        }
+      >
         <NativeTestStatus state="pending" />
-      ) : (
-        <Show when={props.native.test} keyed>
-          {(test) => {
-            // A new attempt retires the old error region without replacing the send control.
-            const outcome = createMemo(() => {
-              if (test.state === "error") {
-                throw new UserFacingError(test.message);
-              }
-              return test.state;
-            });
-            return (
-              <Errored
-                fallback={(error) => (
-                  <NativeTestStatus state="error" message={formatUiError(error())} />
-                )}
-              >
-                <NativeTestStatus state={outcome()} />
-              </Errored>
-            );
-          }}
-        </Show>
-      )}
+      </Show>
     </NotificationSection>
   );
 }

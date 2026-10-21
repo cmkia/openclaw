@@ -117,7 +117,10 @@ describe("native notification test outcome", () => {
       { permission: "granted", test: { state: "error", message } },
     );
     let completion = createDeferredCore<undefined>();
-    const onSend = vi.fn(() => completion.promise);
+    const onSend = vi.fn(() => {
+      setNative({ permission: "granted", test: { state: "pending" } });
+      return completion.promise;
+    });
     const { container } = renderSection({
       get nativeNotifications() {
         return native();
@@ -125,13 +128,16 @@ describe("native notification test outcome", () => {
       onNativeNotificationsSendTest: onSend,
     });
     const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
-    expect(container.textContent).toContain(message);
+    await waitForSolid(() => expect(container.textContent).toContain(message));
 
     for (const result of [{ state: "error", message }, { state: "sent" }] as const) {
       button.click();
       flush();
       expect(container.textContent).not.toContain(message);
       expect(button.disabled).toBe(true);
+      expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
+        "Sending test",
+      );
       setNative({ permission: "granted", test: result });
       completion.resolve(undefined);
       await waitForSolid(() => expect(button.disabled).toBe(false));
