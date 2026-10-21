@@ -36,7 +36,7 @@ async function fixture(
       audio.writeUInt16LE(16, 34);
       audio.write("data", 36);
       audio.writeUInt32LE(2004, 40);
-      const filePath = home + "/sample.wav";
+      const filePath = home + "/meeting (1).wav";
       await fs.writeFile(filePath, audio);
       const requests: Capture[] = [];
       await withServer(
@@ -110,7 +110,7 @@ describe("ClawRouter registered file transcription", () => {
       expect(form.get("language")).toBe("en");
       expect(form.get("prompt")).toBe("synthetic hint");
       const file = form.get("file") as File;
-      expect(file.name).toBe("sample.wav");
+      expect(file.name).toBe("meeting (1).wav");
       expect(file.type).toBe("audio/x-wav");
       expect(Buffer.from(await file.arrayBuffer())).toEqual(audio);
     });

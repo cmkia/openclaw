@@ -112,7 +112,7 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
     }
     // The shared helper normalizes paths/AAC names; reject unsupported names rather than silently relabeling bytes.
     if (
-      !/^[A-Za-z0-9][A-Za-z0-9._ -]{0,126}$/.test(context.fileName) ||
+      !/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(context.fileName) ||
       context.fileName.includes("..") ||
       context.fileName !== context.fileName.trim() ||
       /\.aac$/i.test(context.fileName) ||
