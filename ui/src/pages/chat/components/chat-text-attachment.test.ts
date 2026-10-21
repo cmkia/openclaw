@@ -73,7 +73,7 @@ it("keeps one pending presentation through metadata and text-body loading", asyn
     src: undefined,
     resolveSource: () => (pending ? { status: "pending" } : { status: "ready", src: "/notes.txt" }),
   });
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(panel.querySelector('[role="status"]:not([hidden])')).not.toBeNull(),
   );
   const presentation = panel.querySelector('[role="status"]:not([hidden])');
@@ -81,11 +81,11 @@ it("keeps one pending presentation through metadata and text-body loading", asyn
   expect(fetchMock).not.toHaveBeenCalled();
   pending = false;
   panel.content = { ...panel.content };
-  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
   expect(panel.querySelector('[role="status"]:not([hidden])')).toBe(presentation);
   expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
   resolveBody(new Response("Ready text"));
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Ready text"));
+  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Ready text"));
   expect(panel.querySelector('[role="status"]:not([hidden])')).toBeNull();
 });
 
@@ -106,13 +106,13 @@ it("retries a source-resolution failure through the attachment owner", async () 
             },
           },
   });
-  await vi.waitFor(() => expect(panel.textContent).toContain("Temporarily unavailable"));
+  await waitForSolid(() => expect(panel.textContent).toContain("Temporarily unavailable"));
   const retry = Array.from(panel.querySelectorAll("button")).find(
     (button) => button.textContent?.trim() === "Retry",
   );
   expect(retry).toBeDefined();
   retry!.click();
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Recovered text"));
+  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Recovered text"));
 });
 
 it.each([
@@ -128,7 +128,7 @@ it.each([
   const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(text));
   vi.stubGlobal("fetch", fetchMock);
   const panel = await mountAttachment({ title, mimeType });
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
+  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
   expect(panel.querySelector("script, iframe, textarea, h1, table")).toBeNull();
   expect(panel.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
     "/__openclaw__/assistant-media?mediaTicket=text-preview",
@@ -154,12 +154,12 @@ it.each([
   vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
   const panel = await mountAttachment({ title, mimeType });
   if (kind === "long") {
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(panel.querySelector("article h2")?.textContent).toBe("Last section"),
     );
     return;
   }
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(panel.querySelector("article h1")?.textContent).toBe(
       kind === "inert" ? "שלום" : "Release notes",
     ),
@@ -262,7 +262,7 @@ it.each<RejectedAttachment>([
       await vi.advanceTimersByTimeAsync(10_000);
       expect(panel.textContent).toContain("Download it to read the full file");
     } else {
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(panel.textContent).toContain("Download it to read the full file"),
       );
     }
@@ -293,7 +293,7 @@ it.each(["same", "different"])(
       .mockResolvedValueOnce(new Response("Current file"));
     vi.stubGlobal("fetch", fetchMock);
     const panel = await mountAttachment({ sourceIdentity: "attachment:notes" });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
     const signal = fetchMock.mock.calls[0]?.[1]?.signal;
     panel.content = {
       kind: "attachment",
@@ -302,10 +302,10 @@ it.each(["same", "different"])(
       mimeType: "text/plain",
       sourceIdentity: identity === "same" ? "attachment:notes" : "attachment:next",
     };
-    await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Current file"));
+    await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Current file"));
     expect(signal?.aborted).toBe(true);
     resolveOld(new Response("Old file"));
-    await vi.waitFor(() => expect(fetchMock.mock.settledResults[0]?.type).toBe("fulfilled"));
+    await waitForSolid(() => expect(fetchMock.mock.settledResults[0]?.type).toBe("fulfilled"));
     await panel.querySelector("openclaw-chat-text-attachment")?.updateComplete;
     expect(panel.querySelector("pre")?.textContent).toBe("Current file");
   },
@@ -325,11 +325,11 @@ it("aborts a closed preview and reloads it after remount", async () => {
     .mockResolvedValueOnce(new Response("Reloaded text"));
   vi.stubGlobal("fetch", fetchMock);
   const panel = await mountAttachment();
-  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
   await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
+  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
 });
 
 it.each([
@@ -350,13 +350,13 @@ it.each([
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
     const panel = await mountAttachment(content);
     if (suffix) {
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(panel.textContent).toContain("Download it to read the full file"),
       );
       expect(panel.querySelector("openclaw-chat-html-preview")).toBeNull();
       expect(panel.textContent).toContain("2 MiB");
     } else {
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(panel.querySelector("openclaw-chat-html-preview")).not.toBeNull(),
       );
       expect(panel.querySelector("pre")?.textContent).toBe(text);
@@ -379,10 +379,10 @@ it.each([
       sourceIdentity: "retained",
       sizeBytes: text.length,
     });
-    await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
+    await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
     const reader = panel.querySelector("openclaw-chat-text-attachment");
     panel.content = { ...panel.content, ...change };
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(panel.textContent).toContain("Text previews require UTF-8 files up to 256 KiB"),
     );
     expect(panel.querySelector("openclaw-chat-text-attachment")).toBe(reader);
