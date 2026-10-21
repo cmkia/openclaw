@@ -8,7 +8,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as providerRuntime from "../plugins/provider-runtime.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
+import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
   catalogEntry,
@@ -17,13 +19,19 @@ import {
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import { markPreparedModelRuntimeSnapshotsStale } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import { expectLegacyWorkerCatalogRetention } from "./test-helpers/prepared-model-catalog-legacy-fixture.js";
-import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import {
+  loadCompletedFullCatalog,
+  observeSyntheticAuth,
+  usePreparedCatalogWorkerFixtures,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest, readCatalogWorkers } = usePreparedCatalogWorkerFixtures();
+const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
 it("retains configured dynamic models alongside native harness models after full refresh", async () => {
   await expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest });
@@ -326,4 +334,94 @@ it("keeps stalled native admission terminal after parent auth failure", async ({
   expect(records.filter(({ event }) => event === "started")).toHaveLength(1);
   expect(records.some(({ event }) => event === "admitted" || event === "catalog")).toBe(false);
   expect([retained.refreshFailed, retained.pendingProviders]).toEqual([true, undefined]);
+});
+
+it("keeps settled fleet generations idle without a timer", async () => {
+  const createWorker = catalogWorker.createPreparedModelCatalogWorker;
+  let checks = 0;
+  const observe = vi
+    .spyOn(catalogWorker, "createPreparedModelCatalogWorker")
+    .mockImplementation((params) =>
+      createWorker({
+        ...params,
+        isCurrent: () => {
+          checks += 1;
+          return params.isCurrent();
+        },
+      }),
+    );
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    const fixture = await createFleetFixture();
+    await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
+    await Promise.all(
+      fixture.snapshots.map((snapshot) =>
+        loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),
+      ),
+    );
+    expect(catalogWorker.getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+      workers: 1,
+      activeTasks: 0,
+      pendingTasks: 0,
+    });
+    const settledChecks = checks;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(checks).toBe(settledChecks);
+  } finally {
+    await closePreparedModelRuntimeSnapshots();
+    vi.useRealTimers();
+    observe.mockRestore();
+  }
+});
+
+it("joins a parent capture retired synchronously before its promise is registered", async ({
+  signal,
+}) => {
+  const fixture = await createFleetFixture(undefined, false, { asyncSyntheticAuth: true });
+  await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
+  const [retired, sibling] = fixture.snapshots;
+  await loadPreparedModelRuntimeAuth(retired!, { providerIds: [] });
+  const hold = path.join(fixture.root, "synthetic-auth-hold");
+  const cancelled = path.join(fixture.root, "synthetic-auth-cancel.txt");
+  fs.writeFileSync(hold, "");
+  const auth = observeSyntheticAuth(fixture.root);
+  const capture = providerRuntime.captureProviderSyntheticAuthFacts;
+  const retirement = vi
+    .spyOn(providerRuntime, "captureProviderSyntheticAuthFacts")
+    .mockImplementationOnce((params) => {
+      const pending = capture(params);
+      markPreparedModelRuntimeSnapshotsStale(undefined, {
+        agentIds: new Set([fixture.agentIds[0]!]),
+      });
+      return pending;
+    });
+  const settled = vi.fn();
+  const request = loadPreparedModelRuntimeAuth(retired!, { providerIds: [] }).finally(settled);
+  void request.catch(() => {});
+  let closing: Promise<void> | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        auth.aborted,
+        request,
+        "parent auth capture settled before observing retirement",
+      ),
+      signal,
+    );
+    expect([retired!.isCurrent(), sibling!.isCurrent()]).toEqual([false, true]);
+    expect(settled).not.toHaveBeenCalled();
+    const closed = vi.fn();
+    closing = closePreparedModelRuntimeSnapshots().then(closed);
+    await checkpoint();
+    expect(closed).not.toHaveBeenCalled();
+    fs.rmSync(hold);
+    await expect(request).rejects.toThrow("superseded");
+    await closing;
+    expect(fs.readFileSync(cancelled, "utf8")).toBe("abort\njoined\n");
+  } finally {
+    fs.rmSync(hold, { force: true });
+    auth.close();
+    await Promise.allSettled([request, closing]);
+    retirement.mockRestore();
+  }
 });

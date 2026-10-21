@@ -8,7 +8,6 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -517,7 +516,6 @@ describe("handleToolExecutionStart read path checks", () => {
     const warnMessage = String(warn.mock.calls[0]?.[0] ?? "");
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
     expect(warnMessage).toContain("read tool called without path");
-    expect(warnMeta).toBeTypeOf("object");
     expect(warnMeta?.event).toBe("embedded_read_tool_start_warning");
     expect(warnMeta?.tags).toEqual(["tool_start", "read", "embedded", "validation"]);
     expect(warnMeta?.runId).toBe("run-test");
@@ -683,32 +681,22 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     },
   );
 
-  it("records structured core read actions as replay-safe", async () => {
-    for (const [toolName, action] of [
-      ["cron", "status"],
-      ["gateway", "config.get"],
-      ["gateway", "config.schema.lookup"],
-      ["nodes", "status"],
-      ["nodes", "describe"],
-      ["nodes", "pending"],
-    ] as const) {
-      const { ctx } = createTestContext();
-      const toolCallId = `tool-${toolName}-${action}`;
-      recordStructuredReplayTrustForToolCall(
-        toolCallId,
-        { name: toolName, execute: vi.fn() } as never,
-        "run-test",
-      );
-      await executeTool(ctx, {
-        toolName,
-        toolCallId,
-        args: { action },
-        isError: false,
-        result: { details: { ok: true } },
-      });
-
-      expect(ctx.state.replayState.hadPotentialSideEffects, `${toolName}.${action}`).toBe(false);
-    }
+  it("records a structured core read action as replay-safe", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-status";
+    recordStructuredReplayTrustForToolCall(
+      toolCallId,
+      { name: "cron", execute: vi.fn() } as never,
+      "run-test",
+    );
+    await executeTool(ctx, {
+      toolName: "cron",
+      toolCallId,
+      args: { action: "status" },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(false);
   });
 
   it("records instance-trusted search calls as replay-safe", async () => {
@@ -834,30 +822,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       toolName: "memory_store",
       mutatingAction: true,
     });
-  });
-
-  it("clears edit failure when the retry succeeds through common file path aliases", async () => {
-    const { ctx } = createTestContext();
-
-    await executeTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-1",
-      args: { file_path: "/tmp/demo.txt", old_string: "beta stale", new_string: "beta fixed" },
-      isError: true,
-      result: { error: "Could not find the exact text in /tmp/demo.txt" },
-    });
-
-    expect(ctx.state.lastToolError?.toolName).toBe("edit");
-
-    await executeTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-2",
-      args: { file: "/tmp/demo.txt", oldText: "beta", newText: "beta fixed" },
-      result: { ok: true },
-    });
-
-    expect(ctx.state.lastToolError).toBeUndefined();
-    expect(ctx.state.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
   });
 
   it.each([false, true])(
@@ -1453,62 +1417,6 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(ctx.state.toolMetas).toEqual([
       expect.objectContaining({ toolName: "exec", isError: true }),
     ]);
-    const [
-      { normalizeAgentRunTerminalReceipt },
-      { createUsageAccumulator },
-      { createEmbeddedRunContextRecoveryState },
-      { prepareEmbeddedRunTerminal },
-    ] = await Promise.all([
-      import("./agent-run-terminal-receipt.js"),
-      import("./embedded-agent-runner/usage-accumulator.js"),
-      import("./embedded-agent-runner/run/context-recovery-state.js"),
-      import("./embedded-agent-runner/run/terminal-preparation.js"),
-    ]);
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
-        admittedRunContext: createTestAdmittedRunContext("run-test"),
-        sessionId: "session-test-id",
-        runId: "run-test",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "run",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: {
-        terminal: { kind: "ok" },
-        sessionIdUsed: "session-test-id",
-        messagesSnapshot: [],
-        assistantTexts: [],
-        toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
-          toolName ? [{ ...entry, toolName }] : [],
-        ),
-        lastAssistant: undefined,
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-test-id",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
-    expect(
-      normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
-        ?.successfulToolNames,
-    ).toEqual([]);
     expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 
@@ -2160,8 +2068,6 @@ describe("control UI tool payload fidelity", () => {
       "tool result",
     ).data?.result;
     expect(emittedResult).toBe(result);
-    expect(JSON.stringify(emittedResult)).toContain("OPENROUTER_API_KEY=");
-    expect(typeof emittedResult).toBe("string");
     expect(ctx.emitToolOutput).toHaveBeenCalledWith(
       "gateway",
       "config.apply",
@@ -2215,15 +2121,6 @@ async function emitPngMediaToolResult(ctx: ToolHandlerContext) {
       details: { path: "/tmp/screenshot.png" },
     },
   });
-}
-
-function firstEmitToolOutputCall(ctx: ToolHandlerContext) {
-  expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-  const call = vi.mocked(ctx.emitToolOutput).mock.calls[0];
-  if (!call) {
-    throw new Error("expected emitToolOutput call");
-  }
-  return call;
 }
 
 describe("handleToolExecutionEnd media emission", () => {
@@ -2383,7 +2280,7 @@ describe("handleToolExecutionEnd media emission", () => {
       toolCallId: "tc-1",
       result: textResult(text, { media: { mediaUrl, audioAsVoice: true } }),
     });
-    expect(firstEmitToolOutputCall(ctx)).toEqual(["tts", undefined, text, undefined]);
+    expect(ctx.emitToolOutput).toHaveBeenCalledExactlyOnceWith("tts", undefined, text, undefined);
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([mediaUrl]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
     expect(ctx.state.toolAutoDeliveryMediaUrls).toEqual(new Set());

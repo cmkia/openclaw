@@ -69,6 +69,15 @@ function deliveryHarness(params: Omit<Params, "session" | "runId"> = {}) {
   return { ...observers, ...harness({ ...observers, blockReplyBreak: "message_end", ...params }) };
 }
 
+const recordedCall = (toolCallId: string, name: string, args: Record<string, unknown>) => [
+  "tool.call",
+  { toolCallId, name, args },
+];
+const recordedResult = (toolCallId: string, name: string, success: boolean, result: unknown) => [
+  "tool.result",
+  { toolCallId, name, success, result },
+];
+
 describe("tool result ordering", () => {
   it.each(["discarded", "rejected"] as const)(
     "settles nested lifecycle accounting when terminal presentation is %s",
@@ -290,38 +299,17 @@ describe("tool result ordering", () => {
       expect(onBlockReplyFlush).toHaveBeenCalledOnce();
       expect(recordEvent.mock.calls).toEqual([
         ["tool.call", expect.objectContaining({ toolCallId: "first-call", name: "exec" })],
-        [
-          "tool.result",
-          {
-            toolCallId: "first-call",
-            name: "exec",
-            success: true,
-            result: {
-              content: [{ type: "image", mimeType: "image/png", bytes: 5, omitted: true }],
-              details: {
-                status: "completed",
-                aggregated: `${"x".repeat(8_000)}\n...(live output truncated)...`,
-              },
-            },
+        recordedResult("first-call", "exec", true, {
+          content: [{ type: "image", mimeType: "image/png", bytes: 5, omitted: true }],
+          details: {
+            status: "completed",
+            aggregated: `${"x".repeat(8_000)}\n...(live output truncated)...`,
           },
-        ],
-        [
-          "tool.call",
-          {
-            toolCallId: "second-call",
-            name: "read",
-            args: { path: "/tmp/missing-trajectory-fixture" },
-          },
-        ],
-        [
-          "tool.result",
-          {
-            toolCallId: "second-call",
-            name: "read",
-            success: false,
-            result: { details: { status: "error", error: "Fixture does not exist" } },
-          },
-        ],
+        }),
+        recordedCall("second-call", "read", { path: "/tmp/missing-trajectory-fixture" }),
+        recordedResult("second-call", "read", false, {
+          details: { status: "error", error: "Fixture does not exist" },
+        }),
       ]);
       pending.resolve();
       await h.subscription.waitForPendingEvents();
@@ -381,14 +369,10 @@ describe("tool result ordering", () => {
       })),
     );
     expect(recordEvent.mock.calls).toEqual([
-      [
-        "tool.call",
-        {
-          toolCallId: "nested-call",
-          name: "read",
-          args: { path: "/tmp/nested-trajectory-fixture", parentToolCallId: "argument-value" },
-        },
-      ],
+      recordedCall("nested-call", "read", {
+        path: "/tmp/nested-trajectory-fixture",
+        parentToolCallId: "argument-value",
+      }),
       [
         "tool.result",
         expect.objectContaining({ toolCallId: "nested-call", name: "read", success: false }),

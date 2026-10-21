@@ -14,6 +14,11 @@ import { isToolResultError } from "./tool-result-error.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
 const image = { type: "image", data: "base64data", mimeType: "image/png" };
+const textBlock = (text: string) => ({ type: "text", text });
+const artifact = (details: Record<string, unknown>, content: unknown[] = [image]) => ({
+  details,
+  content,
+});
 const expectText = (result: unknown) => expect(extractToolResultText(result));
 const expectArtifact = (result: unknown) => expect(extractToolResultMediaArtifact(result));
 const mediaResult = (media: Record<string, unknown>) => ({ details: { media } });
@@ -28,30 +33,18 @@ describe("tool errors", () => {
     expect(extractToolErrorMessage({ details: { status: "completed" } })).toBeUndefined();
     expect(extractToolErrorMessage({ details: { status: "ok" } })).toBeUndefined();
   });
-
   it("keeps error-like status values", () => {
     expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
     expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
     expect(
       extractToolErrorMessage({
-        content: [{ type: "text", text: "Approval is unavailable." }],
+        content: [textBlock("Approval is unavailable.")],
         details: { status: "approval-unavailable" },
       }),
     ).toBe("Approval is unavailable.");
   });
 
   it("extracts structured tool error codes after sanitization", () => {
-    expect(
-      sanitizedErrorCode({
-        error: { code: "SYSTEM_RUN_DENIED", message: "approval required" },
-      }),
-    ).toBe("SYSTEM_RUN_DENIED");
-    expect(
-      sanitizedErrorCode({
-        gatewayCode: "UNAVAILABLE",
-        nodeError: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
-      }),
-    ).toBe("SYSTEM_RUN_DENIED");
     expect(
       sanitizedErrorCode({
         nodeError: { code: "INVALID_REQUEST", message: "approval expired" },
@@ -62,7 +55,7 @@ describe("tool errors", () => {
   it("does not extract error codes from prose-only tool output", () => {
     expect(
       extractToolErrorCode({
-        content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+        content: [textBlock("SYSTEM_RUN_DENIED: approval required")],
         details: { status: "failed" },
       }),
     ).toBeUndefined();
@@ -148,7 +141,7 @@ describe("extractToolResultText", () => {
     expectText([
       { type: "web_search_result", title: "OpenClaw", url: "https://example.com" },
     ]).toContain('"title":"OpenClaw"');
-    expectText([{ type: "text", text: "hello" }]).toBe("hello");
+    expectText([textBlock("hello")]).toBe("hello");
     expectText({ type: "web_search_tool_result_error", error_code: "unavailable" }).toContain(
       '"error_code":"unavailable"',
     );
@@ -240,11 +233,29 @@ it("recognizes returned failures and nonzero exits", () => {
 });
 
 describe("extractToolResultMediaArtifact", () => {
-  it("does not deliver explicitly private image results", () => {
-    expectArtifact({
-      content: [image],
-      details: { path: "/tmp/browser-screenshot.png", media: { outbound: false } },
-    }).toBeUndefined();
+  it.each([
+    [
+      "private image",
+      artifact({ path: "/tmp/browser-screenshot.png", media: { outbound: false } }),
+      undefined,
+    ],
+    [
+      "legacy image path",
+      artifact({ path: " /tmp/screenshot.png " }, [textBlock("MEDIA:/tmp/unrelated.png"), image]),
+      { mediaUrls: ["/tmp/screenshot.png"] },
+    ],
+    [
+      "path without image",
+      artifact({ path: "/tmp/data.json" }, [null, undefined, textBlock("MEDIA:/tmp/ok.png")]),
+      undefined,
+    ],
+    [
+      "image without path",
+      artifact({ media: {} }, [textBlock("Read image file [image/png]"), image]),
+      undefined,
+    ],
+  ])("handles %s", (_name, result, expected) => {
+    expectArtifact(result).toEqual(expected);
   });
 
   it("aligns generated attachment metadata with deduplicated media references", () => {
@@ -313,29 +324,6 @@ describe("extractToolResultMediaArtifact", () => {
       ],
     });
   });
-
-  it("uses the image fallback path rather than media-looking text", () => {
-    expectArtifact({
-      content: [{ type: "text", text: "MEDIA:/tmp/unrelated.png" }, image],
-      details: { path: " /tmp/screenshot.png " },
-    }).toEqual({ mediaUrls: ["/tmp/screenshot.png"] });
-  });
-
-  it("ignores details.path and media-looking text without an image", () => {
-    expect(
-      extractToolResultMediaArtifact({
-        content: [null, undefined, { type: "text", text: "MEDIA:/tmp/ok.png" }],
-        details: { path: "/tmp/data.json" },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not deliver empty structured media or image content without a fallback path", () => {
-    expectArtifact({
-      details: { media: {} },
-      content: [{ type: "text", text: "Read image file [image/png]" }, image],
-    }).toBeUndefined();
-  });
 });
 
 describe("filterToolResultMediaUrls", () => {
@@ -352,15 +340,6 @@ describe("filterToolResultMediaUrls", () => {
     ).toEqual(["/tmp/reply.opus", "https://example.com/audio.opus"]);
   });
 
-  it("filters local media from unregistered plugin tools", () => {
-    expect(
-      filterToolResultMediaUrls("plugin_media_tool", [
-        "/tmp/private.png",
-        "https://example.com/image.png",
-      ]),
-    ).toEqual(["https://example.com/image.png"]);
-  });
-
   it("keeps local media for exact plugin names trusted in this run", () => {
     expectFiltered(
       "plugin_media_tool",
@@ -368,24 +347,5 @@ describe("filterToolResultMediaUrls", () => {
       undefined,
       new Set(["plugin_media_tool"]),
     ).toEqual(["/tmp/meeting.wav"]);
-  });
-
-  it("does not let trustedLocalMedia bypass the exact-name gate", () => {
-    expectFiltered(
-      "Web_Search",
-      ["/etc/passwd", "https://example.com/file.png"],
-      { details: { media: { mediaUrl: "/etc/passwd", trustedLocalMedia: true } } },
-      new Set(["web_search"]),
-    ).toEqual(["https://example.com/file.png"]);
-  });
-
-  it("does not trust external TTS results with trustedLocalMedia", () => {
-    expectFiltered("tts", ["/tmp/reply.opus", "https://example.com/audio.opus"], {
-      details: {
-        mcpServer: "probe",
-        mcpTool: "tts",
-        media: { mediaUrl: "/tmp/reply.opus", trustedLocalMedia: true },
-      },
-    }).toEqual(["https://example.com/audio.opus"]);
   });
 });

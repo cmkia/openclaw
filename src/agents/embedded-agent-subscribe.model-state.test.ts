@@ -473,12 +473,15 @@ it.each([
         ? [{ stream: "usage", data: { outputTokens: expected.output } }]
         : [],
     );
-    expectDefined(terminal, "Expected assistant completion").usage.input = 999;
+    const original = expectDefined(terminal, "Expected assistant completion");
+    original.usage.input = 999;
+    original.content = [];
     const snapshot = expectDefined(
       subscription.getCurrentAttemptAssistant(),
       "Expected owned snapshot",
     );
     expect(snapshot.usage.input).toBe(expected.input);
+    expect(snapshot.content).toEqual(completed?.content);
   },
 );
 
