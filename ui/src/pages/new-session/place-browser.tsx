@@ -15,9 +15,6 @@ export function PlaceBrowser(props: {
   });
   const listingRead = createMemo(() => {
     const completion = readCompletion().promise;
-    if (props.params.registeringProject) {
-      return undefined;
-    }
     return completion?.then((error) => {
       if (error) {
         throw new Error(error);

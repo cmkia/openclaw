@@ -26,6 +26,9 @@ it("keeps the focused folder input and retained rows through a failed refresh an
     browser = new PlaceBrowserState(listDirectory, () => setRevision((value) => value + 1));
     registerProject = (pending, error) => {
       browser.error = error ?? null;
+      if (pending) {
+        browser.readCompletion = null;
+      }
       setRegisteringProject(pending);
     };
     onSettled(() => () => browser.reset());
@@ -73,6 +76,17 @@ it("keeps the focused folder input and retained rows through a failed refresh an
 
   registerProject(true);
   await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
+  expect(mounted.queryByRole("status")).toBeNull();
+  expect(document.activeElement).toBe(input);
+  const concurrentRead = createDeferred<FsListDirResult>();
+  listDirectory.mockReturnValueOnce(concurrentRead.promise);
+  const browsingWhileRegistering = browser.navigate(workspace.path);
+  await waitForSolid(() => expect(mounted.getByRole("status").textContent).toContain("Loading"));
+  concurrentRead.reject(new Error("Unavailable"));
+  await browsingWhileRegistering;
+  await waitForSolid(() =>
+    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
+  );
   expect(mounted.queryByRole("status")).toBeNull();
   expect(document.activeElement).toBe(input);
   registerProject(false, "Couldn't register project.");
