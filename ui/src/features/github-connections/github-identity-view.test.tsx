@@ -69,10 +69,10 @@ describe("GitHub identity view", () => {
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByText("ABCD-1234")).toBeTruthy();
-    view.getByRole("button", { name: "Cancel", exact: true }).click();
+    view.getByRole("button", { name: "Cancel" }).click();
     flush();
     expect(view.getByText("Requesting cancellation…")).toBeTruthy();
-    expect(view.queryByRole("button", { name: "Cancel", exact: true })).toBeNull();
+    expect(view.queryByRole("button", { name: "Cancel" })).toBeNull();
     cancel.resolve({ cancelled: true });
     await vi.advanceTimersByTimeAsync(0);
     flush();

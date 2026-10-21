@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import {
   createGitHubIdentityView,
   type GitHubIdentityView,
@@ -50,7 +50,7 @@ export function githubIdentityViewFixture(
   };
   return {
     read: () => state,
-    saving: () => false,
+    saving: createSignal(state.busy)[0],
     subscribe: () => () => {},
     dispose() {},
     sync() {},
