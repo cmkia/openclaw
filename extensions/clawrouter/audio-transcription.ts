@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { requireApiKey, resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
-import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
+import { normalizeClawRouterRootUrl } from "./base-url.js";
 
 const MODEL = "gpt-4o-transcribe";
 
