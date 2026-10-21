@@ -190,4 +190,30 @@ describe("session discussion panel", () => {
     expect(panel.querySelector("iframe")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();
   });
+
+  it("recovers a failed discussion read when its source is replaced", async () => {
+    const loadInfo = vi
+      .fn<SessionDiscussionInfoLoader>()
+      .mockRejectedValueOnce(new Error("Discussion provider unavailable"))
+      .mockResolvedValueOnce({
+        state: "open",
+        embedUrl: "https://discussion.example/recovered",
+      });
+    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+    await vi.waitFor(() => {
+      expect(panel.querySelector(".callout.danger")?.textContent).toContain(
+        "Discussion provider unavailable",
+      );
+    });
+
+    panel.sourceGeneration += 1;
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://discussion.example/recovered",
+      );
+    });
+    expect(panel.querySelector(".callout.danger")).toBeNull();
+    expect(loadInfo).toHaveBeenCalledTimes(2);
+  });
 });
