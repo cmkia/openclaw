@@ -24,6 +24,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([row]),
@@ -58,7 +59,7 @@ suite.define(() => {
         limit: 100,
       };
       await gateway.waitForRequest("sessions.list", { match: activityQuery });
-      await page.waitForTimeout(1_200);
+      await page.clock.runFor(1_200);
       const before = (await gateway.getRequests("sessions.list", activityQuery)).length;
       await captureUiProof(suite, page, "roster-recap-before.png");
       for (let index = 0; index < 3; index += 1) {
@@ -68,7 +69,7 @@ suite.define(() => {
           reason: "activity-summary",
           session: row,
         });
-        await page.waitForTimeout(300);
+        await page.clock.runFor(300);
       }
       await captureUiProof(suite, page, "roster-recap-after.png");
       expect((await gateway.getRequests("sessions.list", activityQuery)).length - before).toBe(0);
@@ -152,6 +153,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const video = page.video();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       methodResponses: { "sessions.list": sessionsListResponse([row]) },
       sessionKey: key,
@@ -163,7 +165,7 @@ suite.define(() => {
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await gateway.waitForRequest("sessions.subscribe");
       // Let startup reconciliation settle before counting event-driven network traffic.
-      await page.waitForTimeout(1_200);
+      await page.clock.runFor(1_200);
       const before = (await gateway.getRequests("sessions.list")).length;
       await captureUiProof(suite, page, "roster-before-other-agent-events.png");
       for (let burst = 0; burst < 3; burst += 1) {
@@ -174,9 +176,9 @@ suite.define(() => {
             updatedAt: burst + 2,
           });
         }
-        // Each burst crosses the real debounce window; sustained traffic must
-        // not make an unrelated selected roster poll once per burst.
-        await page.waitForTimeout(300);
+        // Keep the three original 300ms observation intervals, running every
+        // scheduled callback while checking unrelated selected-roster traffic.
+        await page.clock.runFor(300);
       }
       await captureUiProof(suite, page, "roster-after-other-agent-events.png");
       expect((await gateway.getRequests("sessions.list")).length - before).toBe(0);
