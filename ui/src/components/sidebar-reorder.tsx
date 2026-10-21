@@ -28,7 +28,9 @@ export function renderSidebarReorderMenu(params: {
   };
   const items: MenuItem[] = (["before", "after"] as const).map((position) => ({
     id: position,
-    label: t(position === "before" ? "chat.sidebar.moveUp" : "chat.sidebar.moveDown"),
+    get label() {
+      return t(position === "before" ? "chat.sidebar.moveUp" : "chat.sidebar.moveDown");
+    },
     get disabled() {
       revision();
       return adjacent(position) === null;

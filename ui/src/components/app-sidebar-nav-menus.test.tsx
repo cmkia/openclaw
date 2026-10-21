@@ -1,5 +1,7 @@
 import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { de } from "../i18n/locales/de.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import {
@@ -8,6 +10,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { renderSidebarAgentMenu as AgentMenu } from "./app-sidebar-agent-menu.tsx";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
@@ -17,6 +20,76 @@ import {
   renderSidebarSessionMenuForMenus,
 } from "./sidebar-menus-render.tsx";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
+import { renderSidebarReorderMenu as ReorderMenu } from "./sidebar-reorder.tsx";
+
+it.each(["reorder", "agent creation"])(
+  "updates retained %s menu labels when the locale changes",
+  async (kind) => {
+    await i18n.setLocale("en");
+    onTestFinished(async () => {
+      await i18n.setLocale("en");
+      i18n.registerTranslation("de", de);
+    });
+    if (kind === "agent creation") {
+      // This new action does not have a foreign catalog translation yet.
+      i18n.registerTranslation("de", {
+        ...de,
+        agentChip: { createAgent: "Neuen Agenten erstellen" },
+      });
+    }
+    const view = render(() =>
+      kind === "reorder" ? (
+        <ReorderMenu label="Work" sectionId="work" sections={new Map()} onMove={vi.fn()} />
+      ) : (
+        <AgentMenu
+          activeId="main"
+          agents={[]}
+          identities={new Map()}
+          openMode="click"
+          position={{ x: 12, top: 30 }}
+          basePath=""
+          rosterMode={false}
+          creationDisabledReason={null}
+          resolveAvatarUrl={(url) => url}
+          avatarErrorHandler={() => vi.fn()}
+          agentUnreadCount={() => 0}
+          onShowAllAgents={vi.fn()}
+          onCreateAgent={vi.fn()}
+          onPointerEnter={vi.fn()}
+          onPointerLeave={vi.fn()}
+          onAfterShow={vi.fn()}
+          onSwitchAgent={vi.fn()}
+          onClose={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      ),
+    );
+    flush();
+    const labels: readonly (readonly [string, string, string])[] =
+      kind === "reorder"
+        ? [
+            ["before", "Move up", "Nach oben verschieben"],
+            ["after", "Move down", "Nach unten verschieben"],
+          ]
+        : [["command:new-agent", "Create new agent", "Neuen Agenten erstellen"]];
+    const menu = view.getByRole("menu", { hidden: true });
+    const rows = labels.map(([value, english]) => {
+      const row = view.getByRole("menuitem", { name: english, hidden: true });
+      expect(row.getAttribute("data-value")).toBe(value);
+      return row;
+    });
+
+    await i18n.setLocale("de");
+    await waitForSolid(() => {
+      labels.forEach(([value, , german], index) => {
+        expect(rows[index]!.getAttribute("aria-label")).toBe(german);
+        expect(rows[index]!.textContent?.trim()).toBe(german);
+        expect(menu.querySelector(`[data-value="${value}"]`)).toBe(rows[index]);
+      });
+    });
+    expect(view.getByRole("menu", { hidden: true })).toBe(menu);
+  },
+);
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
   const navigate = vi.fn();
