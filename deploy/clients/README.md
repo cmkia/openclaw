@@ -75,6 +75,10 @@ The script creates `oc-example-chat`, `oc-example-image` and the key
 and has no administrator scope. Prompt logging is disabled for that key. Usage
 metadata and OAuth account quotas remain shared in OmniRoute.
 
+When updating key permissions through the API, retain `modelAccessMode:
+"restricted"` explicitly when setting `allowedModels: []`. Clearing the model
+list without an explicit restricted mode can normalize the key to allow-all.
+
 The protected operator directory `/opt/openclaw/clients/example` records the
 combo IDs, key ID, stack definition, deployment variables and recovery copies of
 the two secrets. It contains live secrets: do not commit or share that directory.
