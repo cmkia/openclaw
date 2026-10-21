@@ -38,6 +38,29 @@ function samePullRequest(
   );
 }
 
+/** The conversation as preparation and adoption compare it, including its skills snapshot. */
+export function preparePullRequestSession(
+  sessionKey: string,
+  options: { agentId?: string; assertCurrent: () => void },
+) {
+  return prepareGitHubPublicationSession(sessionKey, {
+    ...options,
+    // The worktree owner retains its binding; preparation itself writes the nested PR association.
+    fields: [
+      "sessionId",
+      "lifecycleRevision",
+      "archivedAt",
+      "repositoryWorkspaceId",
+      "owner",
+      "createdActor",
+      "visibility",
+      "incognito",
+    ],
+    // Adoption's file-source check selects skill libraries from the full entry.
+    projection: ["skillsSnapshot"],
+  });
+}
+
 export async function performSessionGitHubPreparation(
   options: Omit<GatewayRequestHandlerOptions, "params"> & {
     params: Extract<SessionGitHubActionParams, { action: "prepare_pr" }>;
@@ -64,20 +87,9 @@ export async function performSessionGitHubPreparation(
   ) {
     throw new Error("PR preparation must use the current conversation's workspace.");
   }
-  using selected = await prepareGitHubPublicationSession(params.sessionKey, {
+  using selected = await preparePullRequestSession(params.sessionKey, {
     agentId: caller.agentId ?? params.agentId,
     assertCurrent: () => options.sessionMutationAuthorization?.assertCurrent(),
-    // The worktree owner retains its binding; preparation itself writes the nested PR association.
-    fields: [
-      "sessionId",
-      "lifecycleRevision",
-      "archivedAt",
-      "repositoryWorkspaceId",
-      "owner",
-      "createdActor",
-      "visibility",
-      "incognito",
-    ],
   });
   const loaded = selected.readCurrent();
   if (!loaded.entry?.sessionId) {

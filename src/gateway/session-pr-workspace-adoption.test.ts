@@ -33,6 +33,7 @@ import {
 } from "../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { preparePullRequestSession } from "./github-pr-workspace-preparation.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
@@ -51,7 +52,24 @@ it("adopts one empty owner and keeps original message files separate from same-n
       sessionKey: "agent:main:adopt",
       storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
     };
-    const entry = { sessionId: "adopt", updatedAt: 1, sessionRoot: state.workspaceDir };
+    // A guest's first turn records its selected skill libraries before adoption.
+    const entry = {
+      sessionId: "adopt",
+      updatedAt: 1,
+      sessionRoot: state.workspaceDir,
+      skillsSnapshot: {
+        prompt: "",
+        skills: [],
+        librarySelections: [
+          {
+            skillId: "11111111-1111-4111-8111-111111111111",
+            revision: "a".repeat(64),
+            name: "notes",
+            ownerProfileId: "adopt-owner",
+          },
+        ],
+      },
+    };
     const sibling = { ...target, sessionKey: "agent:main:sibling" };
     await upsertSessionEntryCore(target, entry);
     await upsertSessionEntryCore(sibling, { ...entry, sessionId: "sibling" });
@@ -97,10 +115,18 @@ it("adopts one empty owner and keeps original message files separate from same-n
         workspaceSource: undefined,
       },
     });
+    // The registered handler reads the conversation through this owner.
+    const handlerRead = await preparePullRequestSession(target.sessionKey, {
+      agentId: target.agentId,
+      assertCurrent() {},
+    });
+    const handlerEntry = handlerRead.readCurrent().entry;
+    handlerRead.release();
+    assert(handlerEntry, "PR preparation must read the conversation");
     const input = {
       context,
       target,
-      entry,
+      entry: handlerEntry,
       sandbox,
       assertCurrent() {},
       async verifyBeforeBinding() {},
