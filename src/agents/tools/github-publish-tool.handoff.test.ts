@@ -41,7 +41,7 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-it.each(["prepared", "failed", "stop", "undelivered"] as const)(
+it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome) => {
     await withOpenClawTestState(
@@ -142,11 +142,18 @@ it.each(["prepared", "failed", "stop", "undelivered"] as const)(
             return {
               id: "result",
               cancel: () => false,
-              accepted: Promise.resolve(
-                outcome === "undelivered"
+              accepted: (async () => {
+                if (outcome === "reset") {
+                  // A same-ID reset rotates the lifecycle before the abandoned resume reports.
+                  await upsertSessionEntryCore(
+                    { agentId: "main", sessionKey },
+                    { sessionId, updatedAt: 2, lifecycleRevision: "after-reset" },
+                  );
+                }
+                return outcome === "undelivered" || outcome === "reset"
                   ? { ok: false as const, error: "Session event was abandoned before execution" }
-                  : { ok: true as const },
-              ),
+                  : { ok: true as const };
+              })(),
               settled: Promise.resolve({
                 status: "completed",
                 executionStarted: true,
@@ -265,6 +272,20 @@ it.each(["prepared", "failed", "stop", "undelivered"] as const)(
                             "PR preparation could not continue this conversation automatically: Session event was abandoned before execution",
                           );
                           expect(text).toContain('"status":"prepared"');
+                        } else if (outcome === "reset") {
+                          await noticed.promise;
+                          const history = await readSessionMessagesAsync(
+                            {
+                              agentId: "main",
+                              sessionKey,
+                              sessionId,
+                              storePath: resolveSessionStorePathCore(undefined, {
+                                agentId: "main",
+                              }),
+                            },
+                            { mode: "full", reason: "reset handoff notice" },
+                          );
+                          expect(JSON.stringify(history)).not.toContain("could not continue");
                         } else {
                           expect(notice).not.toHaveBeenCalled();
                         }

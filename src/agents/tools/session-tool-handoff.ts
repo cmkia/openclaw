@@ -216,7 +216,9 @@ export async function handoffSessionTool(params: {
             agentId: caller.agentId,
             sessionKey: caller.sessionKey,
             storePath,
+            // The captured conversation only: a same-ID reset rotates the lifecycle revision.
             expectedSessionId: params.sessionId,
+            expectedLifecycleRevision: target.lifecycleRevision ?? null,
             idempotencyKey: contextKey + ":undelivered",
             text:
               `${params.name} could not continue this conversation automatically: ${reason}. ` +
