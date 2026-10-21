@@ -9,6 +9,8 @@ import {
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Placement error Unicode boundary" });
 const storagePrefix = "openclaw.new-session.session-placement-recovery.v1:";
 const storageWarning = "Recovery could not be saved in this tab. Keep this page open.\n";
@@ -19,7 +21,10 @@ suite.define(() => {
     async (writeFails) => {
       const viewport = { width: 1280, height: 900 };
       await suite.withPage(
-        { viewport, recordVideo: { dir: suite.artifactDir, size: viewport } },
+        {
+          viewport,
+          recordVideo: captureUiProof ? { dir: suite.artifactDir, size: viewport } : undefined,
+        },
         async ({ page }) => {
           const sessionKey = "agent:cloud:unicode-placement-proof";
           const message = "Keep this task after a Unicode placement failure";
@@ -128,7 +133,9 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          await page.screenshot({ path: path.join(suite.artifactDir, "paused-error.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "paused-error.png") });
+          }
           await writeFile(
             path.join(suite.artifactDir, "diagnostic.json"),
             JSON.stringify(
