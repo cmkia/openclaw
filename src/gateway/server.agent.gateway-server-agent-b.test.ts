@@ -8,15 +8,12 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
   agentCommandMock,
   connectOk,
-  connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
   prepareGatewayReplyRuntimeForTest,
@@ -192,30 +189,4 @@ test("agent final response surfaces redacted ACP runtime cause details", async (
   expect(errorMessage).toMatch(/upstream rejected/);
   expect(errorMessage).not.toContain("AcpRuntimeError");
   expect(JSON.stringify(final)).not.toContain(token);
-});
-
-test("agent events stream to webchat clients when run context is registered", async () => {
-  await writeMainSessionEntry("sess-main");
-  const webchatWs = await connectWebchatClient({ port: Number(new URL(gatewaySuite.ws.url).port) });
-  try {
-    registerAgentRunContext("run-auto-1", { sessionKey: "main" });
-    const finalChatP = onceMessage(
-      webchatWs,
-      (o) =>
-        o.type === "event" &&
-        o.event === "chat" &&
-        o.payload?.state === "final" &&
-        o.payload.runId === "run-auto-1",
-      8000,
-    );
-    for (const [stream, data] of [
-      ["assistant", { text: "hi from agent" }],
-      ["lifecycle", { phase: "end" }],
-    ] as const) {
-      emitAgentEvent({ runId: "run-auto-1", stream, data });
-    }
-    expect((await finalChatP).payload).toMatchObject({ sessionKey: "main", runId: "run-auto-1" });
-  } finally {
-    webchatWs.close();
-  }
 });

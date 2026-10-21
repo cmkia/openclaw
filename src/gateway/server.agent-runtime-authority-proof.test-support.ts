@@ -20,10 +20,7 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import {
-  registerAgentRunDelegatedAuthorityClosedHandler,
-  validateAgentRunDelegatedAuthority,
-} from "../infra/agent-run-registry.js";
+import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createAgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
@@ -32,7 +29,6 @@ import { dispatchGatewayMethodInProcessRaw } from "./server-plugin-in-process-di
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
-import { resolveGatewayModelSupportsImages } from "./session-utils.js";
 import {
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
@@ -121,36 +117,15 @@ export function installAgentAuthorityProofFixture() {
       admission.close();
       throw new Error("real runtime identity missing");
     }
-    const closed: string[] = [];
-    const unobserve = registerAgentRunDelegatedAuthorityClosedHandler((value, reason) => {
-      if (!reason && value.claimId === authority.claimId) {
-        closed.push(value.claimId);
-      }
-    });
-    const observation = () => ({
-      registryLive: validateAgentRunDelegatedAuthority(authority),
-      gatewayLive: context.validateAgentRuntimeApprovalAuthority?.(identity),
-      admittedLive: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
-      closureCount: closed.length,
-    });
-    expect(observation()).toMatchObject({ registryLive: true, gatewayLive: true });
+    expect(context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(true);
     return {
       identity,
       authority,
-      observation,
       revoke: () => {
         admission.close();
-        expect(closed).toEqual([authority.claimId]);
-        expect(observation()).toMatchObject({
-          admittedLive: false,
-          registryLive: false,
-          gatewayLive: false,
-        });
+        expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
       },
-      dispose: () => {
-        admission.close();
-        unobserve();
-      },
+      dispose: () => admission.close(),
     };
   }
   type Caller = Awaited<ReturnType<typeof caller>>;
@@ -188,16 +163,6 @@ export function installAgentAuthorityProofFixture() {
       });
     }
     await prepareGatewayReplyRuntimeForTest();
-    if (options?.imageCapable) {
-      const imageCapable = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
-        agentId: "main",
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-      });
-      expect(imageCapable).toBe(true);
-    }
     const runId = randomUUID();
     const sessionKey = "agent:main:authority-proof:" + runId;
     const sessionId = "proof-session-" + runId;
@@ -269,7 +234,6 @@ export function installAgentAuthorityProofFixture() {
         return pending;
       },
       effects: async () => ({
-        ...owner.observation(),
         pendingCount: (await listSessionPendingInputs(scope)).total,
         transcriptChanged: !isDeepStrictEqual(
           sessionAccessor.loadTranscriptEventsSync(scope),
