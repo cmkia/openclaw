@@ -197,6 +197,32 @@ describe("scheduled occurrence admission", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it.each(MATRIX)(
+    "a paused $kind occurrence on $sessionTarget (trigger: $withTrigger) runs nothing",
+    async ({ kind, sessionTarget, withTrigger }) => {
+      const { state, seen } = harness();
+      const pause = {
+        reason: "archived" as const,
+        parentSessionKey: "agent:main:dashboard:parent",
+      };
+      state.deps.admitScheduledOccurrence = async () => ({
+        ...unadmittedScheduledOccurrence("paused"),
+        pause,
+      });
+      const result = await executeJobCore(state, {
+        ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
+        ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
+      });
+      expect(seen).toEqual([]);
+      expect(state.deps.requestHeartbeatAndWait).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        status: "skipped",
+        parentUnavailable: pause,
+        executionStarted: false,
+      });
+    },
+  );
+
   it("gives every run a fail context when no admitter is configured", async () => {
     const { state, seen } = harness();
     delete state.deps.admitScheduledOccurrence;

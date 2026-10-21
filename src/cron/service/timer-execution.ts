@@ -27,7 +27,7 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import { waitForCronExecutionIdle } from "./execution-idle.js";
-import { admitCronOccurrence } from "./occurrence-admission.js";
+import { admitCronOccurrence, resolvePausedOccurrence } from "./occurrence-admission.js";
 import type { CronServiceState, CronSessionRunPreparation } from "./state.js";
 import { executeScriptCronJob } from "./timer-execution-script.js";
 import {
@@ -239,6 +239,10 @@ export async function executeJobCore(
     // One admission per occurrence. Heartbeat turns belong to the heartbeat runner and
     // never mint from it; a heartbeat job's trigger script does.
     occurrence = await admitCronOccurrence(state, job, agentId);
+    const paused = resolvePausedOccurrence(job, occurrence);
+    if (paused) {
+      return paused;
+    }
     assertCurrent();
     let effectiveJob = job;
     let triggerEval: CronTriggerEvalOutcome | undefined;

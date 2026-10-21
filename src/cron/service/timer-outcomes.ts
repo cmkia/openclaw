@@ -28,6 +28,7 @@ import {
   resolveNextRunAtMsOrDisable,
   resolveCronRestartRetryAtMs,
 } from "./jobs-scheduling.js";
+import { cronNotificationJob } from "./notification-intents.js";
 import {
   isCronOneShotContinuationJob,
   resolveManualOneShotOccurrenceAtMs,
@@ -287,6 +288,21 @@ export function applyJobResult(
         notify: failureNotification === "unavailable" && !opts.replay,
         deferredNotifications: opts.deferredNotifications,
       });
+    }
+    // One-shot handling may already have disabled the job above; the notice
+    // belongs to the pause either way, sent once while the job was still enabled.
+    // A newer operator edit owns enablement, so a stale pause result changes nothing.
+    if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
+      // The parent conversation is gone; pause until someone re-enables the job.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      if (!opts.replay) {
+        opts.deferredNotifications.push({
+          kind: "auto-disabled",
+          job: cronNotificationJob(job),
+          text: result.error ?? "Automation paused: its parent conversation is unavailable.",
+        });
+      }
     }
     return shouldDelete;
   };
