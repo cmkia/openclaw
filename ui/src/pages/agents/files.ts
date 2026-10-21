@@ -10,6 +10,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 
 type AgentFileVersion = { hash: string } | { missing: true };
 
+export type AgentFileOutcome =
+  | { result: boolean; error?: never }
+  | { error: string; result?: never };
+
 type AgentFileEditor = {
   content?: string;
   draft?: string;
@@ -23,7 +27,8 @@ export type AgentFilesState = {
   requestGeneration: number;
   agents: Pick<AgentCapability, "recordFile">;
   agentFilesLoading: boolean;
-  agentFilesError: string | null;
+  agentFileRead: Promise<AgentFileOutcome> | null;
+  agentFileOutcome: Promise<AgentFileOutcome> | null;
   agentFileEditors: Record<string, AgentFileEditor>;
   agentFileConflict: string | null;
   agentFileSaving: boolean;
@@ -33,7 +38,8 @@ export type AgentFilesState = {
 export type AgentFilesViewState = Pick<
   AgentFilesState,
   | "agentFilesLoading"
-  | "agentFilesError"
+  | "agentFileRead"
+  | "agentFileOutcome"
   | "agentFileEditors"
   | "agentFileSaving"
   | "agentFileConflict"
@@ -45,7 +51,8 @@ export type AgentFilesViewState = Pick<
 /** Retire the selected agent's file cache and drafts with its request generation. */
 export function resetAgentFiles(state: AgentFilesState & AgentFilesViewState): void {
   state.agentFilesList = null;
-  state.agentFilesError = null;
+  state.agentFileRead = null;
+  state.agentFileOutcome = null;
   state.agentFileActive = null;
   state.agentFileEditors = {};
   state.agentFileConflict = null;
@@ -129,8 +136,12 @@ async function requestAgentFile(
     isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
   const version = state.agentFileEditors[name]?.version;
   const resolution = operation.kind === "read" ? operation.resolution : undefined;
+  const completion = Promise.withResolvers<AgentFileOutcome>();
+  state.agentFileOutcome = completion.promise;
+  if (!saving) {
+    state.agentFileRead = completion.promise;
+  }
   state[busy] = true;
-  state.agentFilesError = null;
   try {
     const res = await client.request<AgentsFilesGetResult | AgentsFilesSetResult | null>(
       saving ? "agents.files.set" : "agents.files.get",
@@ -174,13 +185,13 @@ async function requestAgentFile(
       if (rebasesVersion && state.agentFileConflict === name) {
         state.agentFileConflict = null;
       }
-      state.agentFilesError = null;
       agents.recordFile(res);
+      completion.resolve({ result: true });
       return true;
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = formatUiError(err);
+      completion.resolve({ error: formatUiError(err) });
       if (
         err instanceof GatewayRequestError &&
         isRecord(err.details) &&
@@ -191,6 +202,7 @@ async function requestAgentFile(
     }
     return false;
   } finally {
+    completion.resolve({ result: false });
     if (isConnected()) {
       if (saving) {
         advanceWriteRevision();
@@ -230,7 +242,7 @@ export function resetAgentFile(state: AgentFilesState, name: string): void {
   };
   if (state.agentFileConflict === name) {
     state.agentFileConflict = null;
-    state.agentFilesError = null;
+    state.agentFileOutcome = null;
   }
 }
 

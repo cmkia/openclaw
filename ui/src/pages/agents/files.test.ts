@@ -21,7 +21,8 @@ function createState(client: GatewayBrowserClient): FilesState {
     requestGeneration: 0,
     agents: { recordFile: vi.fn(() => null) },
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFileEditors: {},
     agentFileConflict: null,
     agentFileSaving: false,
@@ -66,7 +67,7 @@ describe("agent file requests", () => {
         read.resolve(fileResult("", "a".repeat(64)));
         expect(await load).toBe(true);
       } else {
-        expect(state.agentFilesError).toBe("workspace read failed");
+        expect(await state.agentFileOutcome).toEqual({ error: "workspace read failed" });
         expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
       }
       request.mockResolvedValueOnce({
@@ -210,7 +211,7 @@ describe("agent file requests", () => {
       expect(await load).toBe(false);
       expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
       expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
-      expect(state.agentFilesError).toBeNull();
+      expect(await state.agentFileOutcome).toEqual({ result: true });
       expect(state.agentFilesLoading).toBe(false);
     },
   );
@@ -273,7 +274,7 @@ describe("agent file requests", () => {
     expect(await load).toBe(false);
     expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
     expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("unsaved");
-    expect(state.agentFilesError).toBe("workspace write failed");
+    expect(await state.agentFileOutcome).toEqual({ error: "workspace write failed" });
   });
 
   it("does not let an old-client read overwrite or finish a replacement read", async () => {
@@ -377,7 +378,7 @@ describe("agent file requests", () => {
     expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
     expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\noperator note");
     expect(state.agentFileConflict).toBe("AGENTS.md");
-    expect(state.agentFilesError).toContain("changed since it was read");
+    expect((await state.agentFileOutcome)?.error).toContain("changed since it was read");
     expect(state.agentFileSaving).toBe(false);
     expect(state.agentFilesLoading).toBe(false);
   });
@@ -561,7 +562,7 @@ describe("agent file requests", () => {
       expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original\noperator note");
       expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: writtenHash });
       expect(state.agentFileConflict).toBeNull();
-      expect(state.agentFilesError).toBeNull();
+      expect(await state.agentFileOutcome).toEqual({ result: true });
     },
   );
 });

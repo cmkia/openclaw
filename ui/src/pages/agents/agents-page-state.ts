@@ -122,7 +122,8 @@ export function createAgentsPageState(
     toolsEffectiveResult: null,
     chatModelCatalogRead: null,
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFilesList: null,
     agentFileEditors: {},
     agentFileConflict: null,
@@ -308,6 +309,8 @@ export function createAgentsPageState(
   function invalidateTransientRequests() {
     gateway.invalidate();
     state.agentFilesLoading = false;
+    state.agentFileRead = null;
+    state.agentFileOutcome = null;
     state.agentFileSaving = false;
     state.identitySaving = false;
     state.agentSkillsLoading = false;
@@ -543,7 +546,7 @@ export function createAgentsPageState(
     }
     const generation = state.requestGeneration;
     state.agentFilesLoading = true;
-    state.agentFilesError = null;
+    state.agentFileOutcome = null;
     try {
       const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
       if (!isCurrentRequest(client, generation, agentId, { agents })) {
@@ -750,9 +753,9 @@ export function createAgentsPageState(
 
   function saveSelectedAgentFile(agentId: string, name: string, write = saveAgentFile) {
     if (agentId !== state.agentsSelectedId || !canCall("agents.files.set", "operator.admin")) {
-      return;
+      return undefined;
     }
-    void write(
+    return write(
       state,
       agentId,
       name,
@@ -840,7 +843,7 @@ export function createAgentsPageState(
         onRunNow: (jobId: string) => runCronJobNow(jobId),
       },
       agentFiles: {
-        agentFilesError: state.agentFilesError ?? agentFilesListError,
+        agentFilesError: agentFilesListError,
         onLoadFiles: (agentId: string) => void loadAgentFiles(agentId, true),
         onSelectFile: (name: string) => {
           state.agentFileActive = name;
@@ -862,21 +865,14 @@ export function createAgentsPageState(
             resetAgentFile(state, name);
           }
         },
-        onFileSave: (name: string) => {
-          if (selectedAgentId) {
-            saveSelectedAgentFile(selectedAgentId, name);
-          }
-        },
-        onFileReload: (name: string) => {
-          if (selectedAgentId) {
-            void reloadAgentFile(state, selectedAgentId, name);
-          }
-        },
-        onFileOverwrite: (name: string) => {
-          if (selectedAgentId) {
-            saveSelectedAgentFile(selectedAgentId, name, overwriteAgentFile);
-          }
-        },
+        onFileSave: (name: string) =>
+          selectedAgentId ? saveSelectedAgentFile(selectedAgentId, name) : undefined,
+        onFileReload: (name: string) =>
+          selectedAgentId ? reloadAgentFile(state, selectedAgentId, name) : undefined,
+        onFileOverwrite: (name: string) =>
+          selectedAgentId
+            ? saveSelectedAgentFile(selectedAgentId, name, overwriteAgentFile)
+            : undefined,
       },
       agentIdentityById: Object.fromEntries(
         identities.read().map((entry) => [entry.agentId, entry]),
