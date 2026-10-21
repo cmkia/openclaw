@@ -13,6 +13,7 @@ import {
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { mountConfigPage } from "./config-page.test-support.ts";
 import {
   expectVoiceState,
   mountTalkPage,
@@ -463,6 +464,36 @@ describe("Talk device and voice wake settings", () => {
       expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
     },
   );
+
+  it("leaves Talk while a trigger write is unresolved", async () => {
+    const pending = createDeferred<{ triggers: string[] }>();
+    const voiceWakeRequest = vi.fn(async (method: string) =>
+      method === "voicewake.get" ? { triggers: ["openclaw"] } : pending.promise,
+    );
+    const { page } = createTalkMutationHarness({ voiceWakeRequest });
+    const context = page.context;
+    page.remove();
+    const view = mountConfigPage(context, { pageId: "talk" });
+    await waitForSolid(() =>
+      expect(view.container.querySelector("textarea")?.value).toBe("openclaw"),
+    );
+    vi.useFakeTimers();
+    const input = view.container.querySelector("textarea")!;
+    input.value = "new phrase";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
+      triggers: ["new phrase"],
+    });
+
+    view.update({ pageId: "notifications" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
+    expect(view.container.querySelector("openclaw-talk-settings")).toBeNull();
+
+    pending.resolve({ triggers: ["new phrase"] });
+    await vi.advanceTimersByTimeAsync(0);
+  });
 
   it.each(["latest phrase", "first phrase"])(
     "flushes the latest queued trigger draft on navigation: %s",
