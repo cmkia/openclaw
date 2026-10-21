@@ -646,7 +646,7 @@ describe("setDefaultAgent", () => {
       config.state.configFormDirty = true;
       return true;
     });
-    await setDefaultAgent(config, "kimi", refreshAgents);
+    expect(await setDefaultAgent(config, "kimi", refreshAgents)).toBe(true);
 
     expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
     expect(config.save).toHaveBeenCalledTimes(1);
@@ -659,7 +659,7 @@ describe("setDefaultAgent", () => {
     config.state.configForm = { agents: { entries: { main: {} } } };
     vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
 
-    await setDefaultAgent(config, "ghost", refreshAgents);
+    expect(await setDefaultAgent(config, "ghost", refreshAgents)).toBeUndefined();
 
     expect(config.stageDefaultAgent).toHaveBeenCalledWith("ghost");
     expect(config.save).not.toHaveBeenCalled();
@@ -691,7 +691,7 @@ describe("setDefaultAgent", () => {
       return true;
     });
 
-    await setDefaultAgent(config, "kimi", refreshAgents);
+    expect(await setDefaultAgent(config, "kimi", refreshAgents)).toBeUndefined();
 
     expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
     expect(config.save).not.toHaveBeenCalled();
@@ -719,7 +719,7 @@ describe("setDefaultAgent", () => {
     });
     vi.mocked(config.save).mockResolvedValue(false);
 
-    await setDefaultAgent(config, "kimi", refreshAgents);
+    expect(await setDefaultAgent(config, "kimi", refreshAgents)).toBe(false);
 
     expect(refreshAgents).not.toHaveBeenCalled();
   });
@@ -738,7 +738,7 @@ describe("setDefaultAgent", () => {
       return options?.canDispatch?.() ?? true;
     });
 
-    await setDefaultAgent(config, "kimi", refreshAgents, () => canDispatch);
+    expect(await setDefaultAgent(config, "kimi", refreshAgents, () => canDispatch)).toBe(false);
 
     expect(config.save).toHaveBeenCalledOnce();
     expect(refreshAgents).not.toHaveBeenCalled();

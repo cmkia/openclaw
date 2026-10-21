@@ -1,4 +1,4 @@
-import { Show, Switch, Match, createMemo } from "solid-js";
+import { action, createMemo, createOptimistic, Match, onSettled, Show, Switch } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
@@ -65,6 +65,17 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
+  const [settingDefault, setSettingDefault] = createOptimistic(false);
+  const defaultAction = action(function* (completion: Promise<boolean | undefined>) {
+    setSettingDefault(true);
+    yield completion;
+  });
+  const setDefault = (agentId: string) => {
+    const completion = props.onSetDefault(agentId);
+    onSettled(() => {
+      void defaultAction(completion);
+    });
+  };
   const config = () => currentConfigObject(props.config);
   const defaultId = () =>
     props.readData().agentsList?.selectionRequired
@@ -144,10 +155,18 @@ export function Agents(props: AgentsProps) {
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
-                    disabled={!props.access.canUpdateConfig || agent().id === defaultId()}
-                    onClick={() => props.onSetDefault(agent().id)}
+                    disabled={
+                      !props.access.canUpdateConfig ||
+                      settingDefault() ||
+                      agent().id === defaultId()
+                    }
+                    onClick={() => setDefault(agent().id)}
                   >
-                    {agent().id === defaultId() ? t("agents.default") : t("agents.setDefault")}
+                    {settingDefault()
+                      ? t("common.saving")
+                      : agent().id === defaultId()
+                        ? t("agents.default")
+                        : t("agents.setDefault")}
                   </button>
                   <button
                     type="button"

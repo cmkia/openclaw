@@ -141,9 +141,9 @@ export async function setDefaultAgent(
   agentId: string,
   refreshAgents: () => Promise<unknown>,
   canDispatch: () => boolean = () => true,
-): Promise<void> {
+): Promise<boolean | undefined> {
   if (!canDispatch()) {
-    return;
+    return undefined;
   }
   const hadPendingConfigDraft = config.state.configFormDirty;
   if (config.stageDefaultAgent(agentId) && !hadPendingConfigDraft && config.state.configFormDirty) {
@@ -151,7 +151,9 @@ export async function setDefaultAgent(
     if (saved && canDispatch()) {
       await refreshAgents();
     }
+    return saved;
   }
+  return undefined;
 }
 
 type AgentIdentityUpdate = {

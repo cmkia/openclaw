@@ -732,7 +732,7 @@ export function createAgentsPageState(
   async function selectDefaultAgent(agentId: string) {
     const client = state.client;
     if (!client || !canCall("config.set", "operator.admin")) {
-      return;
+      return undefined;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
@@ -743,9 +743,9 @@ export function createAgentsPageState(
       canCall("config.set", "operator.admin");
     await runtimeConfig.ensureLoaded();
     if (!canDispatch()) {
-      return;
+      return undefined;
     }
-    await setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
+    return setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
   }
 
   function saveSelectedAgentFile(agentId: string, name: string, write = saveAgentFile) {
@@ -969,7 +969,7 @@ export function createAgentsPageState(
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
-      onSetDefault: (agentId: string) => void selectDefaultAgent(agentId),
+      onSetDefault: selectDefaultAgent,
     };
   }
 
