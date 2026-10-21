@@ -1,16 +1,14 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
-import { createComponent, createRoot, Show } from "solid-js";
+import { createComponent, createSignal, Show } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import type { SolidRouteProps } from "../app-route-types.ts";
 import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
-import {
-  createSolidControlUiReadiness,
-  type SolidReadinessShell,
-} from "./control-ui-readiness-solid.ts";
+import { SolidControlUiReadiness, type SolidReadinessShell } from "./control-ui-readiness-solid.ts";
 import { ControlUiReadiness, type ControlUiCommittedPresentation } from "./control-ui-readiness.ts";
 import {
   disposeRouterOutlets,
@@ -203,38 +201,46 @@ it("does not advertise a retained terminal after it is detached", async () => {
   shell.element.append(workspace);
   root.append(shell.element);
   document.body.append(root);
-  const { owner, dispose } = createRoot((disposeRoot) => ({
-    dispose: disposeRoot,
-    owner: createSolidControlUiReadiness(
+  let owner: ControlUiReadiness | undefined;
+  let invalidate!: () => void;
+  const view = mountSolid(() => {
+    const [revision, setRevision] = createSignal(0);
+    invalidate = () => setRevision((value) => value + 1);
+    return createComponent(SolidControlUiReadiness, {
       root,
       runtime,
-      () => {},
-      () => ({ shell, terminal }),
-    ),
-  }));
-  owners.push(owner);
+      trackRoot: revision,
+      elements: () => ({ shell, terminal }),
+      onReadiness: (current) => {
+        owner = current;
+      },
+    });
+  });
   try {
-    owner.commitRoot();
     await waitForSolid(() => {
-      expect(owner.hook.snapshot().routeReady).toBe(true);
-      expect(owner.hook.snapshot().terminalActivationReady).toBe(true);
+      expect(owner?.hook.snapshot().routeReady).toBe(true);
+      expect(owner?.hook.snapshot().terminalActivationReady).toBe(true);
     });
 
     terminal.remove();
-    owner.commitRoot();
+    invalidate();
     await waitForSolid(() => {
-      expect(owner.hook.snapshot().routeReady).toBe(true);
-      expect(owner.hook.snapshot().terminalActivationReady).toBe(false);
+      expect(owner?.hook.snapshot().routeReady).toBe(true);
+      expect(owner?.hook.snapshot().terminalActivationReady).toBe(false);
     });
 
     workspace.append(terminal);
-    owner.commitRoot();
+    invalidate();
     await waitForSolid(() => {
-      expect(owner.hook.snapshot().routeReady).toBe(true);
-      expect(owner.hook.snapshot().terminalActivationReady).toBe(true);
+      expect(owner?.hook.snapshot().routeReady).toBe(true);
+      expect(owner?.hook.snapshot().terminalActivationReady).toBe(true);
     });
+    view.unmount();
+    expect(owner).toBeUndefined();
+    expect(window.openclawControlUi).toBeUndefined();
+    expect(root.hasAttribute("data-openclaw-ready")).toBe(false);
   } finally {
-    dispose();
+    view.unmount();
     root.remove();
   }
 });

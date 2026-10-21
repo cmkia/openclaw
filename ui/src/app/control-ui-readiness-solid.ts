@@ -1,4 +1,4 @@
-import { createEffect } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import type { AppSidebarMethods } from "../components/app-sidebar.tsx";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -47,45 +47,57 @@ async function settleShellReadiness(
   return { kind: "shell", navigationVisible, sessionKey: shell.activeSessionKey };
 }
 
-/** Loaded on automation's first read; effects observe current facts and commit without a redraw. */
-export function createSolidControlUiReadiness(
-  root: HTMLElement,
-  runtime: ApplicationRuntime,
-  trackRoot: () => void,
+type SolidControlUiReadinessProps = {
+  root: HTMLElement;
+  runtime: ApplicationRuntime;
+  trackRoot: () => void;
   elements: () => {
     login?: HTMLElement;
     shell?: SolidReadinessShell;
     terminal?: CommittedElement & { readonly available?: boolean };
-  },
-): ControlUiReadiness {
-  const readiness = new ControlUiReadiness(root);
-  readiness.connect(runtime, async () => {
-    await Promise.resolve();
-    const { login, shell, terminal } = elements();
-    let presentation: ControlUiCommittedPresentation;
-    if (runtime.documentMode || runtime.focusLocation) {
-      presentation = { kind: "standalone", navigationVisible: false };
-    } else if (login?.isConnected) {
-      presentation = { kind: "login", navigationVisible: false };
-    } else {
-      presentation = shell?.element.isConnected
-        ? await settleShellReadiness(shell, readiness)
-        : { kind: "loading", navigationVisible: false };
-    }
-    await terminal?.updateComplete;
-    return {
-      ...presentation,
-      terminalActivationReady: terminal?.isConnected === true && terminal.available === true,
+  };
+  onReadiness: (readiness: ControlUiReadiness | undefined) => void;
+};
+
+/** Loaded on automation's first read; observes current facts without rendering DOM. */
+export function SolidControlUiReadiness(props: SolidControlUiReadinessProps) {
+  const readiness = new ControlUiReadiness(props.root);
+  onSettled(() => {
+    readiness.connect(props.runtime, async () => {
+      await Promise.resolve();
+      const { login, shell, terminal } = props.elements();
+      let presentation: ControlUiCommittedPresentation;
+      if (props.runtime.documentMode || props.runtime.focusLocation) {
+        presentation = { kind: "standalone", navigationVisible: false };
+      } else if (login?.isConnected) {
+        presentation = { kind: "login", navigationVisible: false };
+      } else {
+        presentation = shell?.element.isConnected
+          ? await settleShellReadiness(shell, readiness)
+          : { kind: "loading", navigationVisible: false };
+      }
+      await terminal?.updateComplete;
+      return {
+        ...presentation,
+        terminalActivationReady: terminal?.isConnected === true && terminal.available === true,
+      };
+    });
+    // Connecting clears the root receipt; this setup runs after the DOM has settled.
+    readiness.commitRoot();
+    props.onReadiness(readiness);
+    return () => {
+      readiness.disconnect();
+      props.onReadiness(undefined);
     };
   });
   // Publish committed DOM readiness to the external automation hook.
   createEffect(
     () => {
-      trackRoot();
+      props.trackRoot();
       readiness.invalidateRoot();
       return {};
     },
     () => readiness.commitRoot(),
   );
-  return readiness;
+  return null;
 }

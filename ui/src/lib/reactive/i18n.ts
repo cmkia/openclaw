@@ -48,3 +48,4 @@ const translation = projectI18n(i18n);
 export const t = translation.t;
 export const getLocale = translation.locale;
 export const i18nRevision = translation.revision;
+export const subscribeI18n = translation.subscribe;

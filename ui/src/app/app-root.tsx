@@ -9,10 +9,8 @@ import {
   Switch,
   createMemo,
   createSignal,
-  getOwner,
   lazy,
   onSettled,
-  runWithOwner,
 } from "solid-js";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -67,6 +65,10 @@ const FocusDashboard = lazy(() => import("./app-root-focus-view.tsx"), {
   export: "FocusDashboard",
 });
 
+const Readiness = lazy(() => import("./control-ui-readiness-solid.ts"), {
+  export: "SolidControlUiReadiness",
+});
+
 /** Mount into index.html's plain host; the returned disposer owns this application epoch. */
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
   return render(() => OpenClawApp(host, runtime), host);
@@ -74,9 +76,9 @@ export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplicati
 
 function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.Element {
   const context = runtime.context;
-  const rootOwner = getOwner();
   let readiness: ControlUiReadiness | undefined;
   let readinessLoad: Promise<void> | undefined;
+  const [readinessRequested, setReadinessRequested] = createSignal(false);
   let shell: SolidReadinessShell | undefined;
   let login: HTMLElement | undefined;
   let terminalElement: (HTMLElement & { readonly available?: boolean }) | undefined;
@@ -175,16 +177,10 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   };
   const loadReadiness = () => {
     if (active && !readiness && !readinessLoad) {
-      readinessLoad = import("./control-ui-readiness-solid.ts")
-        .then(({ createSolidControlUiReadiness }) => {
+      readinessLoad = Readiness.preload()
+        .then(() => {
           if (active) {
-            readiness = runWithOwner(rootOwner, () =>
-              createSolidControlUiReadiness(host, runtime, trackRoot, () => ({
-                login,
-                shell,
-                terminal: shell?.element.isConnected ? shell.terminalPanel : terminalElement,
-              })),
-            );
+            setReadinessRequested(true);
           }
         })
         .catch((error: unknown) => {
@@ -282,7 +278,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       .catch((error: unknown) => console.error("[openclaw] application start failed", error));
     return () => {
       active = false;
-      readiness?.disconnect();
       if (
         window &&
         Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === loadReadiness
@@ -624,6 +619,23 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           )}
         </Show>
       </openclaw-tooltip-provider>
+      <Show when={readinessRequested()}>
+        <Loading>
+          <Readiness
+            root={host}
+            runtime={runtime}
+            trackRoot={trackRoot}
+            elements={() => ({
+              login,
+              shell,
+              terminal: shell?.element.isConnected ? shell.terminalPanel : terminalElement,
+            })}
+            onReadiness={(owner) => {
+              readiness = owner;
+            }}
+          />
+        </Loading>
+      </Show>
     </ApplicationProvider>
   );
 }
