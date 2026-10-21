@@ -346,13 +346,9 @@ suite.define(() => {
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
-      .poll(() =>
-        inbox.evaluate((button) => ({
-          focusVisible: button.matches(":focus-visible"),
-          focusRing: getComputedStyle(button).boxShadow !== "none",
-        })),
-      )
-      .toEqual({ focusVisible: true, focusRing: true });
+      .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
+      .toBe(true);
+    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");
