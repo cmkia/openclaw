@@ -10,6 +10,8 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Comment pane retirement" });
 const passage = "Alpha deployment checklist needs review.";
 const unsaved = "Keep this unsaved comment in Alpha.";
@@ -103,7 +105,9 @@ suite.define(() => {
             await textbox.fill(unsaved);
             expect(await hasFocus(textbox)).toBe(true);
           }
-          await page.screenshot({ path: path.join(suite.artifactDir, "before-archive.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "before-archive.png") });
+          }
           const target = archivedPane === "own" ? alpha : beta;
           const archived = { ...target, archived: true, archivedAt: 3, updatedAt: 3 };
           await gateway.setSessionsListResponse(
@@ -133,7 +137,9 @@ suite.define(() => {
             path.join(suite.artifactDir, "observations.json"),
             JSON.stringify({ editorKind, archivedPane, ...observations, errors }, null, 2),
           );
-          await page.screenshot({ path: path.join(suite.artifactDir, "after-archive.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "after-archive.png") });
+          }
           expect(errors).toEqual([]);
           if (archivedPane === "own") {
             expect(observations.editorPresent).toBe(false);
