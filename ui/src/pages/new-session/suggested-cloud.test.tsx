@@ -161,8 +161,12 @@ it("presents held adoption, retains its error, and selects only the accepted ret
   expect(result.place.cloudProfileId).toBe("");
   const retry = Promise.withResolvers<unknown>();
   result.request.mockImplementation(async (method) => {
-    if (method === "environments.adoptSuggestedProfile") return retry.promise;
-    if (method === "environments.list") return { environments: [], profiles: [profile] };
+    if (method === "environments.adoptSuggestedProfile") {
+      return retry.promise;
+    }
+    if (method === "environments.list") {
+      return { environments: [], profiles: [profile] };
+    }
     return {};
   });
   result.place.browser.popoverCallbacks("where").onPopoverShow();
