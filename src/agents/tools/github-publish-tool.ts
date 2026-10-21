@@ -129,8 +129,10 @@ export function createGitHubPublishTool(
   const tool: AnyAgentTool = {
     label: "GitHub Publish",
     name: githubPublishToolDefinition.name,
+    // An unbound sandboxed preparation yields this turn. Like sessions_yield, it stays a direct
+    // call: a Code Mode exec cannot carry a turn handoff.
     ...(options.sandbox?.enabled && options.sandbox.workspaceSource !== "managed-worktree"
-      ? { async: false as const }
+      ? { async: false as const, catalogMode: "direct-only" as const }
       : {}),
     description: describeGitHubPublishTool(
       false,

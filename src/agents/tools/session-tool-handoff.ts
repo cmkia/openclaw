@@ -25,7 +25,7 @@ import {
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -106,9 +106,13 @@ export async function handoffSessionTool(params: {
       `${params.name} handed off; resume with its result in this same conversation.`,
     );
     const retained = continuation;
-    // No CLI child or prepared-generation borrow belongs to this work.
+    const contextKey = "tool-handoff:" + randomUUID();
+    let result: Record<string, unknown> | undefined;
+    // Start from the context-free root: the yielded turn's caller identity, retired receipts and
+    // aborted run signal must reach neither this work nor the resumed turn's tools. Every input is
+    // captured above; no CLI child or prepared-generation borrow belongs to this work.
     // A process crash before delivery may lose this in-memory handoff; retry explicitly.
-    void runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    void runInDetachedAsyncContext(() =>
       runWithGatewayDetachedWorkContinuation(
         () =>
           withExecRequestTurn(
@@ -129,7 +133,6 @@ export async function handoffSessionTool(params: {
               if (signal.aborted) {
                 return;
               }
-              let result: Record<string, unknown>;
               try {
                 const destination = await prepareSessionEventTargetForHost(target);
                 try {
@@ -164,7 +167,10 @@ export async function handoffSessionTool(params: {
                   }),
                 });
                 if (!released.settled) {
-                  return;
+                  if (signal.aborted) {
+                    return;
+                  }
+                  throw new Error("the conversation did not become ready to resume");
                 }
               }
               if (signal.aborted) {
@@ -180,7 +186,7 @@ export async function handoffSessionTool(params: {
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
                     source: "plugin",
-                    contextKey: "tool-handoff:" + randomUUID(),
+                    contextKey,
                     expectedTarget: target,
                     assertCurrent: retained.assertCurrent,
                     abortSignal: signal,
@@ -199,15 +205,37 @@ export async function handoffSessionTool(params: {
             },
           ),
         "agent:tool-handoff",
-      ),
-    )
-      .catch((error: unknown) =>
-        log.error(params.name + " handoff failed: " + formatErrorMessage(error)),
       )
-      .finally(() => {
-        handoffSettled.resolve(undefined);
-        retained.release();
-      });
+        .catch(async (error: unknown) => {
+          const reason = formatErrorMessage(error);
+          log.error(params.name + " handoff failed: " + reason);
+          // An undelivered result must not leave the conversation silent.
+          const { appendAssistantMessageToSessionTranscript } =
+            await import("../../config/sessions/transcript.js");
+          const notice = await appendAssistantMessageToSessionTranscript({
+            agentId: caller.agentId,
+            sessionKey: caller.sessionKey,
+            storePath,
+            expectedSessionId: params.sessionId,
+            idempotencyKey: contextKey + ":undelivered",
+            text:
+              `${params.name} could not continue this conversation automatically: ${reason}. ` +
+              (result
+                ? `Its result: ${params.formatResult(result)}. Send a message to continue from it; do not repeat it.`
+                : "Send a message to retry."),
+          }).catch((noticeError: unknown) => ({
+            ok: false,
+            reason: formatErrorMessage(noticeError),
+          }));
+          if (!notice.ok) {
+            log.error(params.name + " handoff notice failed: " + notice.reason);
+          }
+        })
+        .finally(() => {
+          handoffSettled.resolve(undefined);
+          retained.release();
+        }),
+    );
     // The shared async-result receipt is also the yield owner's continuation evidence.
     return jsonResult({
       status: "started",
