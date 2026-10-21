@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { action, createOptimistic, For, Show } from "solid-js";
+import { action, createMemo, createOptimistic, Errored, For, Show } from "solid-js";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -14,7 +14,7 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText, UserFacingError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -403,6 +403,25 @@ function NotificationSection(props: {
   );
 }
 
+const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?: string }) => (
+  <SettingsRow
+    title={t("configView.notifications.testOutcome")}
+    description={props.message}
+    control={
+      <SettingsStatus
+        kind={props.state === "pending" ? "accent" : props.state === "sent" ? "ok" : "danger"}
+        label={t(
+          props.state === "pending"
+            ? "configView.notifications.sendingTest"
+            : props.state === "sent"
+              ? "configView.notifications.testQueued"
+              : "configView.notifications.testFailed",
+        )}
+      />
+    }
+  />
+);
+
 function NativeNotificationSection(props: {
   native: NonNullable<NotificationsSectionProps["nativeNotifications"]>;
   actions: NotificationsSectionProps;
@@ -414,10 +433,6 @@ function NativeNotificationSection(props: {
     setSending(true);
     yield props.actions.onNativeNotificationsSendTest?.();
   });
-  const testDescription = () => {
-    const test = props.native.test;
-    return !testPending() && test?.state === "error" ? test.message : undefined;
-  };
   return (
     <NotificationSection
       title={t("configView.notifications.nativeTitle")}
@@ -459,26 +474,30 @@ function NativeNotificationSection(props: {
       <Show when={props.native.permission === "denied"}>
         <BlockedNotifications description={t("configView.notifications.nativeBlockedHint")} />
       </Show>
-      <Show when={testPending() || props.native.test}>
-        <SettingsRow
-          title={t("configView.notifications.testOutcome")}
-          description={testDescription()}
-          control={
-            <SettingsStatus
-              kind={
-                testPending() ? "accent" : props.native.test?.state === "sent" ? "ok" : "danger"
+      {testPending() ? (
+        <NativeTestStatus state="pending" />
+      ) : (
+        <Show when={props.native.test} keyed>
+          {(test) => {
+            // A new attempt retires the old error region without replacing the send control.
+            const outcome = createMemo(() => {
+              if (test.state === "error") {
+                throw new UserFacingError(test.message);
               }
-              label={t(
-                testPending()
-                  ? "configView.notifications.sendingTest"
-                  : props.native.test?.state === "sent"
-                    ? "configView.notifications.testQueued"
-                    : "configView.notifications.testFailed",
-              )}
-            />
-          }
-        />
-      </Show>
+              return test.state;
+            });
+            return (
+              <Errored
+                fallback={(error) => (
+                  <NativeTestStatus state="error" message={formatUiError(error())} />
+                )}
+              >
+                <NativeTestStatus state={outcome()} />
+              </Errored>
+            );
+          }}
+        </Show>
+      )}
     </NotificationSection>
   );
 }

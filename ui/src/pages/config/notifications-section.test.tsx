@@ -110,6 +110,39 @@ describe("native notification test outcome", () => {
       expect(container.querySelector(".settings-status--danger")).not.toBeNull();
     }
   });
+
+  it("retires a failed receipt during retry and preserves the send control", async () => {
+    const message = "Open System Settings and try again.";
+    const [native, setNative] = createSignal<NonNullable<NotificationProps["nativeNotifications"]>>(
+      { permission: "granted", test: { state: "error", message } },
+    );
+    let completion = createDeferredCore<undefined>();
+    const onSend = vi.fn(() => completion.promise);
+    const { container } = renderSection({
+      get nativeNotifications() {
+        return native();
+      },
+      onNativeNotificationsSendTest: onSend,
+    });
+    const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
+    expect(container.textContent).toContain(message);
+
+    for (const result of [{ state: "error", message }, { state: "sent" }] as const) {
+      button.click();
+      flush();
+      expect(container.textContent).not.toContain(message);
+      expect(button.disabled).toBe(true);
+      setNative({ permission: "granted", test: result });
+      completion.resolve(undefined);
+      await waitForSolid(() => expect(button.disabled).toBe(false));
+      completion = createDeferredCore<undefined>();
+      expect(container.querySelector("button")).toBe(button);
+      expect(container.textContent).toContain(
+        result.state === "error" ? message : "Test notification queued",
+      );
+    }
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("Web Push preference saves", () => {
