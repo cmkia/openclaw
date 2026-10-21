@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import {
   createUsagePageFixture,
@@ -80,7 +81,7 @@ async function refreshOverview(
     refreshButton(page).click();
   } else {
     context.publishUsage({ usageUpdatedAt: 1 });
-    await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
+    await waitForSolid(() => expect(page.read().data.loading).toBe(false));
   }
 }
 
@@ -107,7 +108,7 @@ it.each([
   async ({ refresh, points, activeDrag }) => {
     const fixture = await timelineFixture("original-instance");
     const { page, state } = fixture;
-    await vi.waitFor(() => expect(page.querySelectorAll(".session-log-entry")).toHaveLength(3));
+    await waitForSolid(() => expect(page.querySelectorAll(".session-log-entry")).toHaveLength(3));
     const drag = dragTimelineRange(page);
     try {
       await page.updateComplete;
@@ -118,7 +119,7 @@ it.each([
       state.row.sessionId = "replacement-instance";
       state.points = usagePoints(state.points[0]!.timestamp + 60_000, points);
       await refreshOverview(fixture, refresh);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(page.read().detail.timeSeries?.sessionId).toBe(state.row.sessionId),
       );
       if (activeDrag) {
@@ -165,12 +166,12 @@ it.each([
     });
     const fixture = await selectSession(request);
     const { context, page } = fixture;
-    await vi.waitFor(() => expect(page.textContent).toContain("Original turn"));
+    await waitForSolid(() => expect(page.textContent).toContain("Original turn"));
     expect(page.read().detail.timeSeries?.sessionId).toBe("original-instance");
 
     holdOriginal = true;
     const oldLoad = page.refresh();
-    await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(true));
+    await waitForSolid(() => expect(page.read().detail.timeSeriesLoading).toBe(true));
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     replaced = true;
@@ -182,14 +183,14 @@ it.each([
     }
     const beforeRefresh = request.mock.calls.length;
     await refreshOverview(fixture, refresh);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(textOf(page, ".session-bar-selection")).toContain("Replacement session"),
     );
     expect.soft(page.usageSelectedSessions).toEqual(["global"]);
     expect.soft(page.read().detail).toMatchObject({ timeSeries: null, sessionLogs: null });
     retired.resolve({ sessionId: "retired-instance", points: [] });
     await oldLoad;
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.read().detail).toMatchObject({
         timeSeriesLoading: false,
         sessionLogsLoading: false,
@@ -221,7 +222,7 @@ it.each([
   async ({ sessionId, refresh }) => {
     const fixture = await timelineFixture(sessionId, "Retained turn");
     const { context, page, request, state, overview } = fixture;
-    await vi.waitFor(() => expect(page.textContent).toContain("Retained turn"));
+    await waitForSolid(() => expect(page.textContent).toContain("Retained turn"));
     dragTimelineRange(page).end();
     await page.updateComplete;
     expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
@@ -232,13 +233,15 @@ it.each([
     state.row.usage!.input = state.row.usage!.totalTokens = 350;
     overview.updatedAt += 1;
     await refreshOverview(fixture, refresh);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(textOf(page, ".session-bar-selection")).toContain(state.row.label),
     );
-    await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await waitForSolid(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
     await page.updateComplete;
     expect(textOf(page, ".session-bar-selection")).toContain(state.row.label);
-    await vi.waitFor(() => expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350));
+    await waitForSolid(() =>
+      expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350),
+    );
     expect(textOf(page, ".session-detail-stats strong")).toBe("200");
     expect(page.usageSelectedSessions).toEqual(["global"]);
     expect(page.read().detail.timeSeries).toEqual(timeSeries);
@@ -247,7 +250,7 @@ it.each([
     expect(textOf(page, ".timeseries-summary__range")).toBe(range);
     const summaryReads = usageCalls(request).length;
     context.publishUsage({ usageUpdatedAt: 2 });
-    await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
+    await waitForSolid(() => expect(page.read().data.loading).toBe(false));
     expect(usageCalls(request)).toHaveLength(summaryReads + 1);
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
       expect(usageCalls(request, method), method).toHaveLength(refresh === "manual" ? 2 : 1);
@@ -285,7 +288,7 @@ it.each([
       return { providers: [], logs: [], points: [] };
     });
     const { page } = await selectSession(request);
-    await vi.waitFor(() => expect(page.read().detail.context.loading).toBe(false));
+    await waitForSolid(() => expect(page.read().detail.context.loading).toBe(false));
     await page.updateComplete;
     if (conflict) {
       expect.soft(page.read().detail.context.weight).toBeUndefined();
@@ -300,7 +303,7 @@ it.each([
     returnedId = captured;
     report = "Recovered context";
     refreshButton(page).click();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.read().detail.context.weight).toEqual(contextWeight(report)),
     );
     expect(page.read().detail.context.status.error).toBeNull();
