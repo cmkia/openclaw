@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, Show, untrack } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -32,9 +32,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = createSignal(0);
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = createSignal(initialModel.collapsed);
   const [draftRevision, setDraftRevision] = createSignal(0);
-  const [pendingKind, setPendingKind] = createSignal<"submit" | "skip" | null>(null);
+  const [pendingKind, setPendingKind] = createOptimistic<"submit" | "skip" | null>(null);
   let resolving = false;
-  let live = true;
   let panel: HTMLElement | undefined;
   let answerControl: HTMLInputElement | HTMLTextAreaElement | undefined;
   let hostsInput: HTMLInputElement | undefined;
@@ -51,7 +50,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     draftRevision();
     return model().drafts.get(question()?.questionId ?? "");
   };
-  const disabled = () => model().disabled || model().submitting || pendingKind() !== null;
+  const disabled = () => pendingKind() !== null || model().disabled || model().submitting;
   const answerValues = (value: QuestionPanelViewModel, item: QuestionPanelQuestion) =>
     questionDraftValues(value.drafts.get(item.questionId), item);
   const canAdvance = () => {
@@ -67,9 +66,6 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     requested: ([isCollapsed], previous) =>
       !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
     focus: () => panel?.focus({ preventScroll: true }),
-  });
-  onSettled(() => () => {
-    live = false;
   });
   const setCollapsed = (value: boolean) => {
     if (props.panel.onCollapsedChange) {
@@ -106,6 +102,13 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       freeText: value,
     });
   };
+  const presentResolution = action(function* (
+    kind: "submit" | "skip",
+    result: void | Promise<void>,
+  ) {
+    setPendingKind(kind);
+    yield result;
+  });
   const resolve = async (kind: "submit" | "skip") => {
     const value = model();
     if (value.disabled || value.submitting || resolving) {
@@ -132,16 +135,15 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       run = onSkip;
     }
     resolving = true;
-    setPendingKind(kind);
     try {
-      await run();
+      const result = run();
+      // The caller publishes its authoritative state before the presentation action joins.
+      await Promise.resolve();
+      await presentResolution(kind, result);
     } catch {
       /* The caller owns the error shown in model.error. */
     } finally {
       resolving = false;
-      if (live) {
-        setPendingKind(null);
-      }
     }
   };
   const advanceOrSubmit = (item: QuestionPanelQuestion) => {
