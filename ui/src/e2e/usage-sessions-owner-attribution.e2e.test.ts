@@ -241,6 +241,7 @@ suite.define(() => {
                   name: `Molty (agent:${agentId})`,
                   exact: true,
                 });
+                await chip.waitFor({ state: "visible" });
                 await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
                 await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
               }
