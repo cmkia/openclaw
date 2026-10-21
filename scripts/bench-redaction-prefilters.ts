@@ -3,6 +3,7 @@
 // Add --logs --expose-gc (Node flag) for real console/tail allocation and byte-identity samples.
 // Synthetic warm-path CPU timings; this does not estimate total Gateway CPU savings.
 import { createHash } from "node:crypto";
+import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
@@ -40,6 +41,8 @@ async function measureLogRecords() {
   const sampleCount = Number(
     process.argv.find((arg) => arg.startsWith("--samples="))?.split("=")[1] ?? 5,
   );
+  const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+    node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
   const session = new Session();
   session.connect();
   const results = [];
@@ -76,8 +79,7 @@ async function measureLogRecords() {
         const { profile } = await session.post("HeapProfiler.stopSampling");
         const count = iterations * records.length;
         samples.push({
-          allocationBytesPerRecord:
-            profile.samples.reduce((sum, item) => sum + item.size, 0) / count,
+          allocationBytesPerRecord: sampledBytes(profile.head) / count,
           cpuUsPerRecord: (used.user + used.system) / count,
           elapsedUsPerRecord: (elapsedMs * 1000) / count,
           outputChars,
