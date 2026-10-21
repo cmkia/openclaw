@@ -641,12 +641,11 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   });
 
   it("serves attachment fixtures and blob previews under the same isolation policy", async () => {
-    const attachments = await startFixtureServer("attachments");
     let context: BrowserContext | undefined;
     await runQaGatewayFixture(
       async () => {
         const artifacts = createControlUiE2eArtifactDir("standalone-isolated-attachments");
-        const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
+        const isolated = await isolatedPage(fixtureServer.url, { serviceWorkers: "block" });
         context = isolated.context;
         const { page, origin, escaped } = isolated;
         await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
@@ -679,7 +678,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         );
       },
       () => context?.close(),
-      () => stopFixtureServer(attachments),
     );
   });
 

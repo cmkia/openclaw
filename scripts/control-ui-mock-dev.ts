@@ -3907,7 +3907,9 @@ try {
                 createSessionDesignFileFixturePlugin(scenario),
               ]
             : []),
-          ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
+          ...(options.fixture === undefined || options.fixture === "attachments"
+            ? [createChatAttachmentFixturePlugin()]
+            : []),
         ],
         publicDir: path.join(uiRoot, "public"),
         resolve: {
