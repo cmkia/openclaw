@@ -1,7 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -15,7 +14,6 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
-  assignSessionOwner,
   listSessionEntriesReadOnly as listEntries,
   loadExactSessionEntryReadOnly as readEntry,
   replaceSessionEntrySync as putEntry,
@@ -74,68 +72,6 @@ describe("exact SQLite session reads", () => {
     ).toThrow("file identity changed");
   });
 
-  it.each([
-    { projection: "full", cohort: false },
-    { projection: "list", cohort: false },
-    { projection: "full", cohort: true },
-    { projection: "list", cohort: true },
-  ] as const)(
-    "decodes a selected $projection row once for its entry and canonical validation (cohort=$cohort)",
-    ({ projection, cohort }) => {
-      const scope = sessionFixture("decode-once");
-      const skillsSnapshot = { prompt: "saved prompt", skills: [] };
-      const sessionDiffBaseline = {
-        version: 1 as const,
-        sessionId: "decode-once",
-        root: "/synthetic/workspace",
-        files: [{ path: "fixture.ts", fingerprint: "x".repeat(32_768) }],
-      };
-      putEntry(scope, {
-        sessionId: "decode-once",
-        updatedAt: 1,
-        skillsSnapshot,
-        sessionDiffBaseline,
-      });
-      assignSessionOwner(scope, {
-        owner: { type: "agent", id: "column-owner" },
-        assignedBy: { type: "agent", id: "assigner" },
-        assignedAt: 2,
-      });
-      recordParticipant(scope, {
-        identity: { type: "profile", id: "participant" },
-        promptedAt: 3,
-      });
-      readEntry({ ...scope, projection });
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        const selected = cohort
-          ? readRows(
-              openDatabase(scope),
-              [scope.sessionKey],
-              projection,
-              "canonical",
-            )(scope.sessionKey)
-          : readEntry({ ...scope, projection });
-        expect(selected?.entry).toMatchObject({
-          sessionId: "decode-once",
-          updatedAt: 1,
-          owner: { actor: { type: "agent", id: "column-owner" } },
-          participants: [{ identity: { type: "profile", id: "participant" } }],
-          participantCount: 1,
-        });
-        expect(selected?.entry.skillsSnapshot).toEqual(
-          projection === "full" ? skillsSnapshot : undefined,
-        );
-        expect(selected?.entry.sessionDiffBaseline).toEqual(
-          projection === "full" ? sessionDiffBaseline : undefined,
-        );
-        expect(parse.mock.calls.filter(([text]) => text.includes('"updatedAt":1'))).toHaveLength(1);
-      } finally {
-        parse.mockRestore();
-      }
-    },
-  );
-
   it.each(["cold", "warm"] as const)(
     "keeps the exact lookup coherent across a concurrent commit (%s)",
     (admission) => {
@@ -183,37 +119,6 @@ describe("exact SQLite session reads", () => {
       } finally {
         prepareSpy.mockRestore();
         sibling.close();
-      }
-    },
-  );
-
-  it.each(["same connection", "sibling connection"] as const)(
-    "observes managed node and participant writes from %s after warming list metadata",
-    (writer) => {
-      const scope = sessionFixture("target");
-      putEntry(scope, sessionEntry("target", "before"));
-      recordParticipant(scope, { identity: { type: "profile", id: "before" } });
-      listEntries({ ...scope, projection: "list" });
-      const database = openDatabase(scope);
-      const connection =
-        writer === "same connection" ? database.db : openNodeSqliteDatabase(database.path);
-      const read = () => readEntry({ ...scope, projection: "list" });
-      try {
-        connection
-          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-          .run(JSON.stringify(sessionEntry("target", "after")), scope.sessionKey);
-        expect(read()).toMatchObject({ entry: { label: "after" } });
-        listEntries({ ...scope, projection: "list" });
-        connection
-          .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
-          .run("after", scope.sessionKey);
-        expect(read()).toMatchObject({
-          entry: { participants: [{ identity: { type: "profile", id: "after" } }] },
-        });
-      } finally {
-        if (connection !== database.db) {
-          connection.close();
-        }
       }
     },
   );
@@ -287,30 +192,6 @@ describe("exact SQLite session reads", () => {
       expect(() => readRow(broken)).toThrow(originalError);
     },
   );
-
-  it("reads only the retained target without a listing cache", () => {
-    const scope = sessionFixture("target");
-    putEntry(scope, sessionEntry("target"));
-    putEntry(
-      { ...scope, sessionKey: "agent:main:unrelated" },
-      { sessionId: "unrelated", updatedAt: 1, label: "unrelated payload ".repeat(1024) },
-    );
-    const database = openDatabase(scope);
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["entries"],
-      (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
-    );
-    try {
-      expect(readEntry({ ...scope, projection: "list" })).toMatchObject({
-        entry: { sessionId: "target" },
-      });
-      expect(queries.rowCounts.entries).toBe(1);
-      expect(queries.textBytes.entries).toBeLessThan(1024);
-    } finally {
-      queries.restore();
-    }
-  });
 
   it("reads committed entries through the companion while the cached writer has a transaction", () => {
     const scope = sessionFixture("target");

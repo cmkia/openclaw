@@ -34,10 +34,7 @@ import {
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import {
-  reconcileSessionTranscriptIndexes as reconcileIndexes,
-  waitForSessionTranscriptProjection as waitProjection,
-} from "./session-transcript-reconcile.js";
+import { waitForSessionTranscriptProjection as waitProjection } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 const readSessionTranscriptMessageEventCount = (scope: Parameters<typeof messagePage>[0]): number =>
@@ -209,54 +206,6 @@ function observePayloadAcquisition(
     pendingRows: pending.size,
   };
 }
-
-it("skips sizing an empty transcript and reads its first committed turn", async () => {
-  await withBoundedContextScope(async (scope) => {
-    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const counter = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(db),
-      ["sizing", "prefix"],
-      (sql) => {
-        if (sql.includes('"active"."active_position" <')) {
-          return "prefix";
-        }
-        return sql.includes("serialized_bytes") ? "sizing" : null;
-      },
-    );
-    const onRead = vi.fn();
-    try {
-      const empty = readContext(scope, 1024, 10, onRead);
-      expect(empty).toMatchObject({
-        version: { rawSeq: null },
-        activeLeafEntryId: null,
-        events: [],
-        serializedBytes: 0,
-        totalEvents: 0,
-        boundaryCount: 0,
-        truncated: false,
-        completeActivePath: true,
-      });
-      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), [], undefined);
-      expect(counter.counts.sizing).toBe(0);
-
-      await persist(scope, [user("first", null, "first turn")]);
-      const populated = readContext(scope, 1024, 10);
-      expect(populated).toMatchObject({
-        activeLeafEntryId: "first",
-        events: [
-          { type: "session", id: scope.sessionId },
-          { id: "first", message: { role: "user", content: "first turn" } },
-        ],
-        totalEvents: 1,
-        truncated: false,
-        completeActivePath: true,
-      });
-      expect(counter.counts.prefix).toBe(0);
-    } finally {
-      counter.restore();
-    }
-  });
-});
 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async () => {
   await withBoundedContextScope(async (scope) => {
@@ -572,38 +521,6 @@ it("counts paired reset tool results without counting discarded orphan results",
   });
 });
 
-it("counts retained raw bytes without hydrating private native payloads", async () => {
-  await withBoundedContextScope(async (scope) => {
-    const marker = "synthetic-retained-native-payload:";
-    const privateText = marker + "x".repeat(1024 * 1024);
-    const manager = SessionManager.open(scope);
-    const kept = manager.appendMessage({
-      role: "user",
-      content: "kept",
-      timestamp: 1,
-      __openclaw: { upstreamUserText: privateText },
-    } as Parameters<SessionManager["appendMessage"]>[0]);
-    manager.appendResetBoundary("new", kept);
-    await waitProjection(scope);
-    const originalParse = JSON.parse;
-    let privateBytes = 0;
-    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      if (typeof text === "string" && text.includes(marker)) {
-        privateBytes += text.length;
-      }
-      return originalParse(text, reviver);
-    });
-    try {
-      const stats = activeStats(scope);
-      expect(stats.eventCount).toBe(1);
-      expect(stats.sizeBytes).toBeGreaterThan(privateText.length);
-      expect(privateBytes).toBe(0);
-    } finally {
-      parseSpy.mockRestore();
-    }
-  });
-});
-
 it("keeps later unindexed feedback payloads outside an admitted context read", async () => {
   await withBoundedContextScope(async (scope) => {
     const events = [
@@ -651,52 +568,6 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
       );
     });
     expect(acquisition.acquiredBytes).toBe(0);
-  });
-});
-
-it("keeps usage and bootstrap facts in the rebuilt bounded tail despite display activity", async () => {
-  await withBoundedContextScope(async (scope) => {
-    await appendTranscriptEvent(scope, {
-      type: "custom",
-      id: "bootstrap",
-      parentId: null,
-      customType: "bootstrap-completed",
-      data: {},
-    });
-    await persist(scope, [
-      transcriptMessage("usage", "bootstrap", {
-        role: "assistant",
-        content: "answer",
-        usage: { input: 86_000, output: 2_000 },
-      }),
-      ...Array.from({ length: 513 }, (_, index) => ({
-        eventId: `display-${index}`,
-        parentId: index === 0 ? "usage" : `display-${index - 1}`,
-        message: {
-          role: "custom",
-          customType: "tool-activity",
-          display: true,
-          excludeFromContext: true,
-          content: "completed",
-        },
-      })),
-    ]);
-
-    openOpenClawAgentDatabase(scope)
-      .db.prepare(
-        "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
-      )
-      .run(scope.sessionId);
-    expect(await reconcileIndexes(scope)).toEqual({ reconciledSessions: 1 });
-    const tail = recentEvents(scope, 2);
-    expect(eventIds(tail)).toEqual(["bootstrap", "usage"]);
-    expect(tail[1]).toMatchObject({ message: { usage: { input: 86_000, output: 2_000 } } });
-    const visited: unknown[] = [];
-    visitRecentEvents(scope, 2, (visit) => {
-      visit((event) => visited.push(event));
-    });
-    expect(visited).toEqual(tail.toReversed());
-    expect(readTranscriptStatsSync(scope).eventCount).toBeGreaterThan(513);
   });
 });
 

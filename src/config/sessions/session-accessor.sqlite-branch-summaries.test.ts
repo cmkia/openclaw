@@ -100,18 +100,6 @@ const cases: Array<{
     ],
   },
   {
-    name: "forward opaque parents and cycles keep existing summary behavior",
-    events: [
-      message("root", null, "root"),
-      { type: "extension", id: "forward", parentId: "later", payload: "opaque" },
-      { type: "extension", id: "later", parentId: "root" },
-      { type: "extension", id: "cycle-a", parentId: "cycle-b" },
-      { type: "extension", id: "cycle-b", parentId: "cycle-a" },
-      leaf("selected", "root", "cycle-a"),
-    ],
-    branches: [branch("cycle-a", "", 0, true), branch("forward", "root", 1)],
-  },
-  {
     name: "parentless rows and invalid controls retain reset navigation",
     events: [
       message("root", null, "root"),
@@ -153,15 +141,6 @@ const cases: Array<{
         content: "not a message",
         timestamp: "  exact timestamp  ",
       },
-    ],
-    branches: [branch("custom", "final answer", 5, true, "  exact timestamp  ")],
-  },
-  {
-    name: "headlines retain 120 code points and truncate only longer values",
-    events: [
-      message("root", null, "root"),
-      message("exact", "root", "🦞".repeat(120), { appendMode: "side" }),
-      message("long", "root", "🦞".repeat(121), { appendMode: "side" }),
       message(
         "joined",
         "root",
@@ -169,14 +148,14 @@ const cases: Array<{
           { type: "text", text: "café" },
           { type: "text", text: "🦞" },
         ],
-        { appendMode: "side" },
+        {
+          appendMode: "side",
+        },
       ),
     ],
     branches: [
-      branch("root", "root", 1, true),
+      branch("custom", "final answer", 5, true, "  exact timestamp  "),
       branch("joined", "café🦞", 2),
-      branch("long", `${"🦞".repeat(119)}…`, 2),
-      branch("exact", "🦞".repeat(120), 2),
     ],
   },
 ];

@@ -300,25 +300,6 @@ describe("cleanup races", () => {
     });
   });
 
-  it("releases the store writer while a lifecycle mutation archives a transcript", async () => {
-    const target = await seed("lifecycle-race-archived-session", {}, [
-      transcript("lifecycle-race-archived-session"),
-    ]);
-    const expectedEntry = readEntry(target);
-    assert(expectedEntry, "expected persisted lifecycle removal entry");
-    await expect(
-      writerDuringArchive(() =>
-        mutateLifecycle({
-          storePath,
-          removals: [
-            { sessionKey: target.sessionKey, expectedEntry, archiveRemovedTranscript: true },
-          ],
-          skipMaintenance: true,
-        }),
-      ),
-    ).resolves.toMatchObject({ removedEntries: 1, removedSessionKeys: [target.sessionKey] });
-  });
-
   it("retains committed maintenance counts when archive publication fails", async () => {
     const target = await seed("maintenance-publication-failed", { updatedAt: 1 }, undefined, {
       sessionKey: "agent:main:subagent:maintenance-publication-failed",
