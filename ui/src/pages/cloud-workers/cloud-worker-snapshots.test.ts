@@ -123,7 +123,9 @@ describe("Cloud environments", () => {
       expect(reads).toBe(5);
       expect(page.querySelector('[role="alert"]')).toBeNull();
     } finally {
-      for (const request of pending) request.resolve(inventory);
+      for (const request of pending) {
+        request.resolve(inventory);
+      }
     }
   });
 
