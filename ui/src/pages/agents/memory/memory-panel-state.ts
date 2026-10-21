@@ -1,6 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, createStore, onSettled } from "solid-js";
+import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import {
@@ -74,6 +74,8 @@ export function createAgentMemory(
   let pendingEnabled: boolean | null = null;
   let wikiPreview: WikiPreviewRequest | null = null;
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
+  const [diaryRequest, setDiaryRequest] = createOptimistic<DreamingState>();
+  const [diarySaving, setDiarySaving] = createOptimistic(false);
   const [viewState, setViewState] = createStore(createDreamingViewState());
   function updateViewState(update: (draft: DreamingViewState) => void) {
     const now = Date.now();
@@ -232,21 +234,31 @@ export function createAgentMemory(
     if (!scope || !(await showConfirmDialog(confirmation)) || !isTaskScopeCurrent(scope)) {
       return;
     }
-    await runDreamingTask(
-      (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
-      scope,
-    );
+    await mutateDiary(method, scope);
   }
 
   function runDiaryAction(method: DreamDiaryActionMethod) {
     const scope = captureTaskScope();
-    return scope
-      ? runDreamingTask(
-          (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
-          scope,
-        )
-      : undefined;
+    return scope ? mutateDiary(method, scope) : undefined;
   }
+
+  const mutateDiary = action(function* (method: DreamDiaryActionMethod, scope: DreamingTaskScope) {
+    if (!isTaskScopeCurrent(scope) || scope.state.dreamDiaryActionLoading) {
+      return;
+    }
+    setDiaryRequest(scope.state);
+    setDiarySaving(true);
+    try {
+      yield runDreamingTask(
+        (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
+        scope,
+      );
+    } finally {
+      if (isTaskScopeCurrent(scope)) {
+        setDiarySaving(false);
+      }
+    }
+  });
 
   async function loadResources(
     resource: DreamingResourceKey | "all" = "all",
@@ -423,7 +435,6 @@ export function createAgentMemory(
         statusError: dreaming.dreamingStatusError,
         modeSaving: dreaming.dreamingModeSaving,
         dreamDiaryLoading: dreaming.dreamDiaryLoading,
-        dreamDiaryActionLoading: dreaming.dreamDiaryActionLoading,
         dreamDiaryActionMessage: dreaming.dreamDiaryActionMessage,
         dreamDiaryActionArchivePath: dreaming.dreamDiaryActionArchivePath,
         dreamDiaryError: dreaming.dreamDiaryError,
@@ -537,6 +548,18 @@ export function createAgentMemory(
     }
   }
   const projection = projectMutableSource(context, read);
+  // Keep the action affordance outside the held owner snapshot and retire it on scope changes.
+  const diaryActionBusy = () => {
+    projection.revision();
+    return diaryRequest() === dreaming && diarySaving();
+  };
+  const diaryOutcome = createMemo(() => {
+    projection.revision();
+    return {
+      message: dreaming.dreamDiaryActionMessage,
+      archivePath: dreaming.dreamDiaryActionArchivePath,
+    };
+  });
   const wikiSource = createMemo(() => {
     projection.revision();
     return wikiPreview?.source ?? null;
@@ -561,6 +584,8 @@ export function createAgentMemory(
     };
   });
   return {
+    diaryActionBusy,
+    diaryOutcome,
     loadResources,
     setEnabled,
     view() {

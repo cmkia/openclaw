@@ -254,7 +254,7 @@ it.each([false, true])("scopes confirmed actions (agent changed: %s)", async (ch
     page.setAgentId("support");
   }
   confirmation.resolve(true);
-  await waitForSolid(() => expect(page.dreaming.dreamDiaryActionLoading).toBe(false));
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
   await waitForSolid(() =>
     expect(page.request.mock.calls.filter(([method]) => method === REPAIR)).toEqual(
       changed ? [] : [[REPAIR, { agentId: "main" }]],
@@ -325,9 +325,9 @@ it.each([false, true])(
       : "Connection lost before the memory action was confirmed. It may have completed.";
     expect(page.text("[role='status']")).toContain(message);
     expect(page.dreaming).toMatchObject({
-      dreamDiaryActionLoading: false,
       access: { canRepairDreamingArtifacts: false },
     });
+    expect(page.state.diaryActionBusy()).toBe(false);
 
     context.emit({ phase: "connected", hello });
     action.resolve(result);
@@ -348,6 +348,50 @@ it.each([false, true])(
     });
   },
 );
+
+it("keeps a replacement agent's diary action busy after the old action settles", async () => {
+  const oldAction = deferred<unknown>();
+  const nextAction = deferred<unknown>();
+  const method = "doctor.memory.backfillDreamDiary";
+  const page = await createPage(
+    (name, params) =>
+      name === method
+        ? asOptionalRecord(params)?.agentId === "main"
+          ? oldAction.promise
+          : nextAction.promise
+        : emptyReply(name),
+    "main",
+    gatewayHelloForMethods([STATUS, DIARY, method], ["operator.read", "operator.write"]),
+  );
+  click(page.container, "#dreams-tab-advanced");
+  page.dreaming.onBackfillDiary();
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
+  page.dreaming.onBackfillDiary();
+  expect(page.request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+
+  page.setAgentId("support");
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
+  page.dreaming.onBackfillDiary();
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
+  const working = () =>
+    Array.from(page.container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Working…",
+    );
+  await waitForSolid(() => expect(working()?.disabled).toBe(true));
+  oldAction.resolve({ written: 1 });
+  await oldAction.promise;
+  flush();
+  expect(page.state.diaryActionBusy()).toBe(true);
+  expect(working()?.disabled).toBe(true);
+
+  nextAction.resolve({ written: 2 });
+  await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
+  expect(working()).toBeUndefined();
+  expect(page.dreaming.dreamDiaryActionMessage).toEqual({
+    kind: "success",
+    text: "Backfilled 2 dream diary entries.",
+  });
+});
 
 it("retains diary, preview and toggle drafts through reconnect while rejecting old reads", async () => {
   const stale = deferred<unknown>();
