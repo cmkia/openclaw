@@ -871,14 +871,14 @@ try {
               ? "openclaw-board-view mcp-app-view iframe"
               : ".board-widget__frame",
           )
-          .frameLocator("iframe")
+          .frameLocator("iframe:visible")
           .getByText("Team metric 1", { exact: true })
           .waitFor();
       }
       await page
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
-        .frameLocator("iframe")
+        .frameLocator("iframe:visible")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
       if (face === "dashboard") {
