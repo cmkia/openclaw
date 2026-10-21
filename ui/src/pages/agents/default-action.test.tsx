@@ -14,6 +14,7 @@ it("shows admitted default commands and follows confirmed roster state", async (
     .mockReturnValueOnce(first.promise)
     .mockReturnValueOnce(retry.promise);
   const props = createProps({ onSetDefault });
+  props.config.configSaving = true;
   const mounted = mountSolid(Agents, props);
   const control = () =>
     Array.from(
@@ -26,7 +27,13 @@ it("shows admitted default commands and follows confirmed roster state", async (
       expect(control().disabled).toBe(true);
     });
     expect(props.readData().agentsList?.defaultId).toBe("alpha");
+    mounted.update({ ...props, config: { ...props.config, configSaving: false } });
+    await vi.waitFor(() => {
+      expect(control().textContent).toContain("Set Default");
+      expect(control().disabled).toBe(false);
+    });
     first.resolve(false);
+    mounted.update(props);
     await vi.waitFor(() => {
       expect(control().textContent).toContain("Set Default");
       expect(control().disabled).toBe(false);

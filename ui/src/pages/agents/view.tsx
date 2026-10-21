@@ -65,7 +65,8 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
-  const [settingDefault, setSettingDefault] = createOptimistic(false);
+  const [defaultPending, setSettingDefault] = createOptimistic(false);
+  const settingDefault = () => defaultPending() && props.config.configSaving;
   const defaultAction = action(function* (completion: Promise<boolean | undefined>) {
     setSettingDefault(true);
     yield completion;
