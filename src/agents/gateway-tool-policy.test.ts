@@ -14,10 +14,8 @@ import {
 import { addTestHook } from "../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "./agent-tools.before-tool-call.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { resetCodeModeTestState, runUntilCompleted } from "./code-mode.test-support.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
@@ -30,7 +28,6 @@ import {
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
   resolveToolSearchConfig,
-  restrictToolSearchCatalog,
 } from "./tool-search.js";
 
 const config: OpenClawConfig = {
@@ -76,21 +73,7 @@ describe("required Gateway tool policy", () => {
     );
   });
 
-  it("checks final dispatch for a retained headless catalog without a hook context", async () => {
-    const source = actionTool();
-    const catalogRef = createToolSearchCatalogRef();
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [source] });
-    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
-    setRuntimeConfigSnapshot(config);
-
-    await runtime.call("sessions", { action: "list", target: "main" });
-    await expect(runtime.call("sessions", { action: "patch", target: "main" })).rejects.toThrow(
-      "Gateway tool policy denies",
-    );
-    expect(source.execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("normalizes tool aliases without expanding wildcard or plugin grants", () => {
+  it("normalizes tool aliases and honors an empty allowlist", () => {
     const tool = { ...actionTool(), name: "automations" };
     const [projected] = applyGatewayToolPolicy([tool, createStubTool("other")], {
       tools: { gatewayPolicy: { allow: ["cron"], actions: { cron: ["list"] } } },
@@ -142,99 +125,85 @@ describe("required Gateway tool policy", () => {
       }
       expect(source.execute).toHaveBeenCalledTimes(1);
       expect(denied.execute).not.toHaveBeenCalled();
-      const baselineEntries = ctx.catalogRef.current?.entries;
-      setRuntimeConfigSnapshot({ tools: { gatewayPolicy: { allow: [] } } });
-      expect(runtime.all()).toEqual([]);
-      restrictToolSearchCatalog({
-        catalogRef: ctx.catalogRef,
-        baselineEntries,
-        allowedToolNames: new Set(["sessions"]),
-      });
-      expect(runtime.all()).toEqual([]);
-      await expect(runtime.call("sessions", { action: "list", target: "main" })).rejects.toThrow();
-      expect(source.execute).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("checks hook-rewritten arguments at source dispatch and survives rewrapping", async () => {
-    const registry = createEmptyPluginRegistry();
-    addTestHook({
-      registry,
-      pluginId: "fixture",
-      hookName: "before_tool_call",
-      handler: async () => ({ params: { action: "patch", target: "main" } }),
-    });
-    setActivePluginRegistry(registry);
-    initializeGlobalHookRunner(registry);
-    const source = actionTool();
-    const tool = rewrapToolWithBeforeToolCallHook(
-      wrapToolWithBeforeToolCallHook(source, { config }),
-      { config },
-    );
-    await expect(tool.execute("rewritten", { action: "list", target: "main" })).rejects.toThrow(
-      "Gateway tool policy denies",
-    );
-    expect(source.execute).not.toHaveBeenCalled();
-  });
+  it.each(["finalized", "compacted"] as const)(
+    "checks final hook arguments on %s tools with assembly config",
+    async (assembly) => {
+      const registry = createEmptyPluginRegistry();
+      addTestHook({
+        registry,
+        pluginId: "fixture",
+        hookName: "before_tool_call",
+        handler: async () => ({ params: { action: "patch", target: "main" } }),
+      });
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+      const source = actionTool();
+      // No global snapshot: the assembly config must reach the execution wrapper.
+      const prewrapped = wrapToolWithBeforeToolCallHook(source);
+      let execute: () => Promise<unknown>;
+      if (assembly === "compacted") {
+        const catalogRef = createToolSearchCatalogRef();
+        applyToolSearchCatalog({
+          config: { tools: { ...config.tools, toolSearch: true } },
+          catalogRef,
+          tools: [...createToolSearchTools({ catalogRef }), prewrapped],
+          toolHookContext: {},
+        });
+        const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+        execute = () => runtime.call("sessions", { action: "list", target: "main" });
+      } else {
+        const tool = expectDefined(
+          finalizeAgentTools({ tools: [prewrapped], config, hookContext: {} })[0],
+          "finalized tool",
+        );
+        execute = () =>
+          Promise.resolve(tool.execute("rewritten", { action: "list", target: "main" }));
+      }
+      await expect(execute()).rejects.toThrow("Gateway tool policy denies");
+      expect(source.execute).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rejects a retained executor after tightening, while allowing its original scoped operation", async () => {
-    setRuntimeConfigSnapshot(config);
+  it("captures each headless catalog's deployment policy without a hook context", async () => {
     const source = actionTool();
-    const tool = wrapToolWithBeforeToolCallHook(source, { config });
-    await expect(tool.execute("before", { action: "list", target: "main" })).resolves.toMatchObject(
-      { details: {} },
-    );
-    setRuntimeConfigSnapshot({ tools: { gatewayPolicy: { allow: [] } } });
-    await expect(tool.execute("after", { action: "list", target: "main" })).rejects.toThrow(
-      'denies tool "sessions"',
-    );
-    expect(source.execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("applies a newer Gateway ceiling when tools are built from an older captured config", async () => {
-    const captured: OpenClawConfig = {
-      tools: { gatewayPolicy: { allow: ["sessions"], actions: { sessions: ["list", "patch"] } } },
+    const buildRuntime = () => {
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({ catalogRef, tools: [source] });
+      return new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
     };
-    setRuntimeConfigSnapshot(captured);
     setRuntimeConfigSnapshot(config);
-    const source = actionTool();
-    const tool = wrapToolWithBeforeToolCallHook(source, { config: captured });
-    await tool.execute("allowed", { action: "list", target: "main" });
-    await expect(tool.execute("denied", { action: "patch", target: "main" })).rejects.toThrow(
-      "Gateway tool policy denies",
-    );
-    const catalogRef = createToolSearchCatalogRef();
-    applyToolSearchCatalog({
-      config: { ...captured, tools: { ...captured.tools, toolSearch: true } },
-      catalogRef,
-      tools: [...createToolSearchTools({ catalogRef }), source],
-      toolHookContext: { config: captured },
+    const original = buildRuntime();
+    setRuntimeConfigSnapshot({
+      tools: { gatewayPolicy: { allow: ["sessions"], actions: { sessions: ["patch"] } } },
     });
-    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(captured));
-    expect((await runtime.describe("sessions")).parameters).toMatchObject({
+    const replacement = buildRuntime();
+
+    expect((await original.describe("sessions")).parameters).toMatchObject({
       properties: { action: { enum: ["list"] } },
     });
-    expect(source.execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("checks a policy published while hooks are running before invoking the source", async () => {
-    setRuntimeConfigSnapshot(config);
-    const registry = createEmptyPluginRegistry();
-    addTestHook({
-      registry,
-      pluginId: "fixture",
-      hookName: "before_tool_call",
-      handler: async () => {
-        setRuntimeConfigSnapshot({ tools: { gatewayPolicy: { allow: [] } } });
-      },
+    expect((await replacement.describe("sessions")).parameters).toMatchObject({
+      properties: { action: { enum: ["patch"] } },
     });
-    setActivePluginRegistry(registry);
-    initializeGlobalHookRunner(registry);
-    const source = actionTool();
-    const tool = wrapToolWithBeforeToolCallHook(source, { config });
-    await expect(tool.execute("tightened", { action: "list", target: "main" })).rejects.toThrow(
+    await original.call("sessions", { action: "list", target: "main" });
+    await replacement.call("sessions", { action: "patch", target: "main" });
+    await expect(original.call("sessions", { action: "patch", target: "main" })).rejects.toThrow(
       "Gateway tool policy denies",
     );
-    expect(source.execute).not.toHaveBeenCalled();
+    await expect(replacement.call("sessions", { action: "list", target: "main" })).rejects.toThrow(
+      "Gateway tool policy denies",
+    );
+    expect(source.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves ordinary tool execution when deployment policy is absent", async () => {
+    const source = actionTool();
+    const [projected] = applyGatewayToolPolicy([source], {});
+    expect(projected).toBe(source);
+    const tool = wrapToolWithBeforeToolCallHook(source, { config: {} });
+    await tool.execute("ordinary", { action: "patch", target: "main" });
+    expect(source.execute).toHaveBeenCalledOnce();
   });
 });

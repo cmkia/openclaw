@@ -248,11 +248,29 @@ describe("Codex Gateway tool policy", () => {
     expect(await call(resumed, "task", { action: "write" })).toMatchObject({ success: false });
     expect(task.execute).not.toHaveBeenCalled();
     expect(await call(resumed, "task", { action: "read" })).toMatchObject({ success: true });
-    setRuntimeConfigSnapshot(policy([]));
-    expect(await call(resumed, "task", { action: "read" })).toMatchObject({
-      success: false,
-      contentItems: [{ type: "inputText", text: expect.stringContaining("Gateway tool policy") }],
+    expect(task.execute).toHaveBeenCalledOnce();
+  });
+
+  it("captures deployment policy without a hook context when constructing each bridge", async () => {
+    const task = taskTool();
+    setRuntimeConfigSnapshot(policy(["task"]));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [task],
+      signal: new AbortController().signal,
     });
+    expect(await call(bridge, "task", { action: "write" })).toMatchObject({ success: false });
+    expect(task.execute).not.toHaveBeenCalled();
+    expect(await call(bridge, "task", { action: "read" })).toMatchObject({ success: true });
+
+    setRuntimeConfigSnapshot(policy([]));
+    const replacement = createCodexDynamicToolBridge({
+      tools: [task],
+      registeredSpecs: bridge.specs,
+      registeredFallbackTools: [task],
+      signal: new AbortController().signal,
+    });
+    expect(replacement.availableTools).toEqual([]);
+    expect(await call(replacement, "task", { action: "read" })).toMatchObject({ success: false });
     expect(task.execute).toHaveBeenCalledOnce();
   });
 

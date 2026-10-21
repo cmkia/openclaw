@@ -17,7 +17,7 @@ import {
   createAgentDatabaseInspectionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -73,12 +73,22 @@ const remote = (path: string, authorization?: string) => ({
   host: "gateway.test",
   authorization,
 });
-const readyState = (failing: string[]) => ({ ready: failing.length === 0, failing });
-const unready = { ready: false, failing: ["discord", "telegram"], uptimeMs: 8_000 };
+const readyState = (failing: string[], coreReady = true) => ({
+  ready: failing.length === 0,
+  coreReady,
+  failing,
+});
+const unready = {
+  ready: false,
+  coreReady: true,
+  failing: ["discord", "telegram"],
+  uptimeMs: 8_000,
+};
 const startupDetails = (status: "starting" | "started" | "draining", pendingReason?: string) => ({
   ok: status === "started",
   status,
   version: resolveRuntimeServiceVersion(process.env),
+  buildId: resolveRuntimeServiceBuildId(),
   uptimeMs: expect.any(Number),
   ...(pendingReason ? { pendingReason } : {}),
 });
@@ -200,7 +210,12 @@ describe("gateway probe endpoints", () => {
   it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
     await withControlUi(
       {
-        getReadiness: () => ({ ready: false, failing: ["gateway-draining"], uptimeMs: 1_000 }),
+        getReadiness: () => ({
+          ready: false,
+          coreReady: false,
+          failing: ["gateway-draining"],
+          uptimeMs: 1_000,
+        }),
       },
       async (probe) => {
         await probe.json("/readyz", 503, { ready: false });
@@ -229,7 +244,6 @@ describe("gateway probe endpoints", () => {
       channelManager,
       startedAt: Date.now(),
       getGatewayDraining: isGatewayDraining,
-      cacheTtlMs: 0,
     });
     try {
       await withProbeServer({ getReadiness, openAiChatCompletionsEnabled: true }, async (probe) => {
@@ -246,7 +260,7 @@ describe("gateway probe endpoints", () => {
 
         await probe.json("/healthz", 200, { ok: true, status: "live" }, true);
 
-        await probe.json("/readyz", 503, readyState(["gateway-draining"]));
+        await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
 
         for (const [path, method] of [
           ["/v1/chat/completions", "POST"],
@@ -400,11 +414,18 @@ describe("gateway probe endpoints", () => {
         },
       },
       (probe) =>
-        probe.json("/ready", 503, { ready: false, failing: ["internal"], uptimeMs: 0 }, true),
+        probe.json(
+          "/ready",
+          503,
+          { ready: false, coreReady: false, failing: ["internal"], uptimeMs: 0 },
+          true,
+        ),
     );
   });
 
-  it("reports startup lifecycle independently of hard channel failures", async () => {
+  it("reports startup lifecycle independently of hard channel failures", async ({
+    onTestFinished,
+  }) => {
     let startupPending = true;
     let gatewayDraining = false;
     const pending = createAgentDatabaseInspectionRefusal({
@@ -444,7 +465,6 @@ describe("gateway probe endpoints", () => {
     const getReadiness = createReadinessChecker({
       channelManager,
       ...startupDeps,
-      cacheTtlMs: 0,
     });
     await withProbeServer({ getReadiness, getStartup }, async (probe) => {
       await probe.json("/startupz", 503, startupDetails("starting", "plugin-convergence"));
@@ -452,7 +472,7 @@ describe("gateway probe endpoints", () => {
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
 
-      await probe.json("/readyz", 503, readyState(["gateway-draining"]));
+      await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
       gatewayDraining = false;
 
       startupPending = false;
@@ -475,6 +495,8 @@ describe("gateway probe endpoints", () => {
       account.connected = false;
       account.linked = false;
       account.terminalDisconnect = true;
+      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
+      onTestFinished(() => now.mockRestore());
       await probe.json("/readyz", 503, readyState(["whatsapp"]));
 
       await probe.json("/startupz", 200, {
@@ -545,6 +567,7 @@ describe("gateway probe endpoints", () => {
     const shouldEnforcePluginGatewayAuth = vi.fn(() => true);
     const getReadiness = vi.fn(() => ({
       ready: true,
+      coreReady: true,
       failing: [],
       uptimeMs: 123,
     }));
@@ -561,7 +584,7 @@ describe("gateway probe endpoints", () => {
       async (probe) => {
         for (const [path, body, exact] of [
           ["/health", { ok: true, status: "live" }, true],
-          ["/ready", { ready: true, failing: [], uptimeMs: 123 }, true],
+          ["/ready", { ready: true, coreReady: true, failing: [], uptimeMs: 123 }, true],
           [
             "/startup",
             {

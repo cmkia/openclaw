@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 342000,
-  "reason": "Post-Lit startup measured 340081 B gzip on 9fa4e5618912; retain about 2 KB of headroom.",
-  "updatedAt": "2026-10-16"
+  "startupJsGzipBytes": 324900,
+  "reason": "Enterprise MCP auth config adds 338 B to measured startup JS; retain 100 B below the committed baseline cap.",
+  "updatedAt": "2026-10-20"
 }

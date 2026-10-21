@@ -31,6 +31,13 @@ Codex's own tool-search surface:
 available through the OpenClaw dynamic-tool bridge as the durable session status
 surface.
 
+When the native surface is disabled, OpenClaw publishes allowed dynamic tools
+directly instead of requiring unavailable native discovery. This includes managed
+GitHub identity and sandbox-backed execution. Native-enabled threads retain
+searchable, direct, and code-mode-only loading. In native JavaScript `exec`,
+`ALL_TOOLS` and `tools` are JavaScript globals, never shell environment variables.
+OpenClaw shell tools execute operating-system commands.
+
 When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
 empty execution-environment selection. In that direct, unsandboxed case,
 OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
@@ -42,12 +49,12 @@ both declarations and executable callbacks. It does not restrict Codex-native
 coding tools or subagents. Existing ordinary restrictions and
 `codexDynamicToolsExclude` can narrow access further.
 
-Callbacks check the captured policy and the current Gateway policy before
-execution, including calls from restored threads. Saved native declarations
-retain their fingerprint; a previously advertised tool can therefore return a
-policy denial after restrictions tighten. This does not cancel operations that
-have already been dispatched. Direct human Gateway administration keeps its
-existing permissions.
+Callbacks check the deployment policy captured when their tools are constructed,
+including calls from restored threads. Policy changes require a Gateway restart
+or replacement after affected old work ends. Reconstructed callbacks use the new
+policy; saved native declarations retain their fingerprint, so a previously
+advertised tool can return a policy denial. Direct human Gateway administration
+keeps its existing permissions.
 
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
@@ -56,8 +63,12 @@ context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or
 resolve a connector-only universe: `agents_list`, `sessions_spawn`, and
 `sessions_yield`. Developer instructions still steer normal Codex subagents
-toward native `spawn_agent` for Codex-native subagent work, while
-`sessions_spawn` remains available for explicit OpenClaw or ACP delegation.
+toward native `spawn_agent` for work using only Codex-native tools. New delegated
+work that needs OpenClaw tools uses the available `sessions_spawn` route with
+`runtime="subagent"` when its schema exposes that selector. Native children can
+inherit dynamic tool schemas without an OpenClaw executor. Existing native
+children keep their native follow-up path; tool failures do not migrate them
+to managed workers. Explicit ACP delegation still uses `sessions_spawn`.
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 

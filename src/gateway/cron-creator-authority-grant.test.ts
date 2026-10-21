@@ -2,21 +2,19 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
+import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
 } from "../plugin-sdk/agent-harness-runtime.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
+  attachCronStreamExecPolicy,
   consumeCronCreatorAuthorityGrant as consume,
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
@@ -28,7 +26,6 @@ import {
 } from "./cron-creator-authority-grant.js";
 
 afterEach(() => {
-  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetAgentRunRegistryForTest();
 });
@@ -87,29 +84,6 @@ function createManagementFixture(controlUiAdmin = true) {
 }
 
 describe("cron creator authority grants", () => {
-  it("revokes bound, issued and redeemed model management authority when caller policy activates", async () => {
-    const fixture = createManagementFixture();
-    const issued = fixture.mint();
-    const redeemed = fixture.mint("cron.update");
-    await fixture.run(
-      redeemed,
-      async () => {
-        const retained = getCronManagementAuthority(fixture.identity)!;
-        setRuntimeConfigSnapshot({
-          tools: { gatewayPolicy: { allow: ["automations"], automations: { scope: "caller" } } },
-        });
-        expect(retained).toThrow("restricts model automation calls to caller scope");
-        expect(() => fixture.mint()).toThrow("restricts model automation calls to caller scope");
-        await expect(
-          fixture.run(issued, async () => {
-            throw new Error("unreachable management handler");
-          }),
-        ).rejects.toThrow("restricts model automation calls to caller scope");
-      },
-      "cron.update",
-    );
-  });
-
   it("preserves the Control UI admin SDK projection without granting creator authority", () => {
     const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
     const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {
@@ -235,6 +209,38 @@ describe("cron management authority grants", () => {
     await fixture.deny(grant);
   });
 
+  it("retains only the stream mutation through one bounded approval wait", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const fixture = createManagementFixture();
+    const ordinaryGrant = fixture.mint("cron.update");
+    const streamGrant = fixture.mint("cron.update");
+    const policy = { kind: "resolved" as const, assertCurrent: () => {} };
+    attachCronStreamExecPolicy(streamGrant, policy);
+    clock.mockReturnValue(51_000);
+    attachCronStreamExecPolicy(streamGrant, policy);
+    clock.mockReturnValue(61_000);
+    const deniedEffect = vi.fn();
+    await expect(
+      withGrant(ordinaryGrant, fixture.identity, "cron.update", deniedEffect),
+    ).rejects.toThrow(denied);
+    expect(deniedEffect).not.toHaveBeenCalled();
+
+    const effect = vi.fn();
+    await withGrant(streamGrant, fixture.identity, "cron.update", async () => {
+      const assertActive = getCronManagementAuthority(fixture.identity)!;
+      await Promise.resolve();
+      assertActive();
+      effect();
+      clock.mockReturnValue(1_000 + DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000);
+      expect(assertActive).toThrow(denied);
+    });
+    expect(effect).toHaveBeenCalledOnce();
+    await expect(
+      withGrant(streamGrant, fixture.identity, "cron.update", deniedEffect),
+    ).rejects.toThrow(denied);
+    expect(deniedEffect).not.toHaveBeenCalled();
+  });
+
   it.each(["method", "run", "instance", "lifecycle", "claim"] as const)(
     "rejects %s substitution without spending the original grant",
     async (substitution) => {
@@ -285,16 +291,31 @@ describe("cron management authority grants", () => {
         ),
     ],
     ["lifecycle rotation", () => rotateAgentRunRegistryLifecycleGeneration()],
-    ["scope revocation", (fixture: Fixture) => revokeScope(fixture.scope)],
-    ["scope abort", (fixture: Fixture) => fixture.scope.abort()],
-    ["operation abort", (fixture: Fixture) => fixture.operation.abort()],
-    ["expiry", () => vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000)],
-  ] as const)("denies a suspended operation after %s", async (_label, invalidate) => {
+    [
+      "scope revocation",
+      (fixture: ReturnType<typeof createManagementFixture>) => revokeScope(fixture.scope),
+    ],
+    ["scope abort", (fixture: ReturnType<typeof createManagementFixture>) => fixture.scope.abort()],
+    [
+      "operation abort",
+      (fixture: ReturnType<typeof createManagementFixture>) => fixture.operation.abort(),
+    ],
+    [
+      "expiry",
+      () =>
+        vi
+          .spyOn(Date, "now")
+          .mockReturnValue(Date.now() + DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000),
+    ],
+  ] as const)("denies a suspended stream approval after %s", async (_label, invalidate) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const fixture = createManagementFixture();
+    const grant = fixture.mint("cron.update");
+    attachCronStreamExecPolicy(grant, { kind: "resolved", assertCurrent: () => {} });
     const started = createDeferred();
     const resume = createDeferred();
     const effect = vi.fn();
-    const operation = fixture.run(fixture.mint(), async () => {
+    const operation = withGrant(grant, fixture.identity, "cron.update", async () => {
       const assertActive = getCronManagementAuthority(fixture.identity)!;
       assertActive();
       started.resolve();
@@ -304,6 +325,7 @@ describe("cron management authority grants", () => {
     });
     const rejected = expect(operation).rejects.toThrow(denied);
     await started.promise;
+    clock.mockReturnValue(61_000);
     invalidate(fixture);
     resume.resolve();
     await rejected;

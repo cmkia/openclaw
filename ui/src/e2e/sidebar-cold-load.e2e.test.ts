@@ -25,7 +25,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 const baselineMode = process.env.OPENCLAW_SIDEBAR_BASELINE === "1";
 const selectedKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000006";
-const railPins = ["route:agents-home", `session:${selectedKey}`, "plugin:reports/overview"];
+const railPins = ["route:sessions", `session:${selectedKey}`, "plugin:reports/overview"];
 const pluginPath = "/__openclaw__/plugins/control-ui/reports/one/index.js";
 const avatarUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
@@ -349,7 +349,13 @@ suite.define(() => {
               .locator(`.sidebar-pages [data-session-key="${sessions[9]!.key}"]`)
               .waitFor();
           } else {
-            await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
+            await expect
+              .poll(() =>
+                sidebar
+                  .locator("[data-agent-group]")
+                  .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-group"))),
+              )
+              .toEqual(["main", "forge", "scout"]);
           }
           if (!baselineMode) {
             await waitForSavedSidebar(page, view);
@@ -380,9 +386,7 @@ suite.define(() => {
           expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
             view === "pages" ? 12 : 1,
           );
-          expect(settled.sessions).toEqual(
-            view === "pages" ? [] : sessions.slice(0, 10).map((row) => row.key),
-          );
+          expect(settled.sessions).toEqual([]);
           expect(settled.rail).toEqual(railPins);
           expect(settled.view).toBe(view);
           expect(settled.agents).toEqual(view === "pages" ? [] : ["main", "forge", "scout"]);
@@ -402,7 +406,7 @@ suite.define(() => {
             await capture(page, sidebar, "sidebar-old-before-hello.png");
             await gateway.resolveDeferred("connect");
             await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
-            await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
+            await sidebar.locator('[data-agent-group="scout"]').waitFor();
             await expect
               .poll(() =>
                 sidebar.locator("[data-agent-group] .sidebar-agent-roster__copy").allTextContents(),

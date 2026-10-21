@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
@@ -15,6 +15,7 @@ import { createWizardLogin, WizardLogin } from "../../components/wizard-login-co
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -54,13 +55,33 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const gatewayState = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
   const overlays = projectOwner(context.overlays, (source) => source.snapshot);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   let installed: InstalledAgent[] | null = null;
-  let listRequest: AbortController | null = null;
   let listClient: GatewayBrowserClient | null | undefined;
   let listEpoch = -1;
-  let loadError: string | null = null;
+  let listRead: Promise<{ error: unknown } | null> | null = null;
+  let finishListRead: ((outcome: { error: unknown } | null) => void) | undefined;
+  const currentList = () =>
+    listClient !== null &&
+    listClient !== undefined &&
+    options.gateway.isCurrent({ client: listClient, epoch: listEpoch });
+  const listRequest = createPageRequest(notify, {
+    task: (client: GatewayBrowserClient, { signal }) =>
+      client.request<{ agents: InstalledAgent[] }>(INSTALLED_AGENTS_METHOD, {}, { signal }),
+    onComplete: (result) => {
+      if (currentList()) {
+        installed = result.agents;
+      }
+      finishListRead?.(null);
+      finishListRead = undefined;
+    },
+    onError: (error) => {
+      finishListRead?.(currentList() ? { error } : null);
+      finishListRead = undefined;
+    },
+  });
+  onCleanup(listRequest.cancel);
   /** Requested enabled state per agent while its config write is unsettled. */
   const pending = new Map<string, boolean>();
   const messages = new Map<string, ModelProviderRowMessage>();
@@ -95,15 +116,15 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const projection = projectSource(null, {
     read: () => ({
       agents: installed,
-      error: loadError,
-      loading: listRequest !== null,
+      read: listRead,
+      loading: listRequest.pending,
       pending,
       messages,
       enablement,
     }),
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -120,10 +141,11 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function cancel(): void {
-    const request = listRequest;
-    listRequest = null;
-    request?.abort();
-    loadError = null;
+    listRequest.cancel();
+    // Retire the display even when the canceled transport never settles.
+    finishListRead?.(null);
+    finishListRead = undefined;
+    listRead = null;
   }
 
   async function load(
@@ -137,28 +159,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       notify();
       return;
     }
-    const request = new AbortController();
-    listRequest = request;
-    notify();
-    try {
-      const result = await client.request<{ agents: InstalledAgent[] }>(
-        INSTALLED_AGENTS_METHOD,
-        {},
-        { signal: request.signal },
-      );
-      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
-        installed = result.agents;
-      }
-    } catch (error) {
-      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
-        loadError = modelProviderErrorMessage(error);
-      }
-    } finally {
-      if (listRequest === request) {
-        listRequest = null;
-        notify();
-      }
-    }
+    const completion = Promise.withResolvers<{ error: unknown } | null>();
+    listRead = completion.promise;
+    finishListRead = completion.resolve;
+    await listRequest.run(client);
   }
 
   function subscribe(gateway: ApplicationContext["gateway"]): () => void {
@@ -190,6 +194,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function available(): boolean {
+    if (!options.gateway.connected && installed !== null) {
+      return true;
+    }
     return canCallGatewayMethod(
       gatewayState.read().snapshot,
       INSTALLED_AGENTS_METHOD,
@@ -435,6 +442,17 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         available: available(),
         blockedReason: blockedReason(),
       }));
+      const read = createMemo(() => ({ promise: view().read }), {
+        equals: (previous, next) => previous.promise === next.promise,
+      });
+      const outcome = createMemo(() =>
+        read().promise?.then((value) => {
+          if (value) {
+            throw value.error;
+          }
+          return null;
+        }),
+      );
       const checkLabel = () =>
         t(
           view().loading
@@ -472,24 +490,30 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 </openclaw-tooltip>
               }
             >
-              <Show when={view().error}>
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="settings-row__desc provider-usage-error" role="alert">
-                      {view().error}
-                    </span>
-                  </div>
-                  <div class="settings-row__control">
-                    <button
-                      class="btn btn--sm"
-                      disabled={view().loading}
-                      onClick={() => void load()}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                </div>
-              </Show>
+              <Errored
+                fallback={(error) => (
+                  <Show when={!view().loading}>
+                    <div class="settings-row">
+                      <div class="settings-row__text">
+                        <span class="settings-row__desc provider-usage-error" role="alert">
+                          {modelProviderErrorMessage(error())}
+                        </span>
+                      </div>
+                      <div class="settings-row__control">
+                        <button
+                          class="btn btn--sm"
+                          disabled={view().loading}
+                          onClick={() => void load()}
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    </div>
+                  </Show>
+                )}
+              >
+                <Loading on={read()}>{outcome()}</Loading>
+              </Errored>
               <Show when={view().agents !== null}>
                 <For
                   each={view().agents ?? []}
@@ -518,15 +542,14 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     return <InstalledAgents />;
   }
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     enablement = null;
-    cancel();
     listClient = undefined;
   });
   return {
     get initialized() {
       const snapshot = projection.read();
-      return !available() || snapshot.agents !== null || snapshot.error !== null;
+      return !available() || snapshot.agents !== null || (currentList() && !listRequest.pending);
     },
     synchronize,
     subscribe,

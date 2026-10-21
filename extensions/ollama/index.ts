@@ -1,6 +1,6 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -16,7 +16,7 @@ import {
   type ProviderPlugin,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
@@ -25,7 +25,8 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
+import { ollamaProviderDiscovery } from "./provider-discovery.js";
 import {
   normalizeResolvedModel,
   resolveThinkingProfile as resolveOllamaThinkingProfile,
@@ -46,6 +47,7 @@ import {
   OLLAMA_PROVIDER_ID,
   getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
+  isOllamaApiKeyMarker,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
   resolveOllamaRuntimeBaseUrl,
@@ -88,6 +90,11 @@ import { createOllamaUsageHooks } from "./src/usage-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
+// Registration needs SecretRef syntax, not the asynchronous credential resolution runtime.
+const resolveConfiguredSecretInputString = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("openclaw/plugin-sdk/secret-input-runtime")),
+  (runtime) => runtime.resolveConfiguredSecretInputString,
+);
 const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
     (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,
@@ -333,10 +340,6 @@ function readEnvBackedOllamaApiKey(value: unknown, env: NodeJS.ProcessEnv): stri
   return undefined;
 }
 
-function isAmbientOllamaApiKeyMarker(value: string | undefined): boolean {
-  return value === OLLAMA_DEFAULT_API_KEY || value === "OLLAMA_API_KEY";
-}
-
 function readUsableOllamaShowApiKey(params: {
   env: NodeJS.ProcessEnv;
   allowAmbientEnvFallback: boolean;
@@ -353,7 +356,7 @@ function readUsableOllamaShowApiKey(params: {
   }
   const resolvedApiKey = readOllamaStringValue(params.resolved?.apiKey);
   const canUseResolvedDiscovery =
-    params.allowAmbientEnvFallback || !isAmbientOllamaApiKeyMarker(resolvedApiKey);
+    params.allowAmbientEnvFallback || !isOllamaApiKeyMarker(resolvedApiKey);
   const discoveryApiKey = readConcreteOllamaApiKey(params.resolved?.discoveryApiKey);
   if (discoveryApiKey && canUseResolvedDiscovery) {
     return discoveryApiKey;
@@ -861,16 +864,7 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
           capContextTokens: true,
         }),
-      resolveSyntheticAuth: ({ provider, providerConfig }) => {
-        if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
-          return undefined;
-        }
-        return {
-          apiKey: OLLAMA_DEFAULT_API_KEY,
-          source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
-          mode: "api-key",
-        };
-      },
+      resolveSyntheticAuth: ollamaProviderDiscovery.resolveSyntheticAuth,
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
         resolvedApiKey?.trim() === OLLAMA_DEFAULT_API_KEY,
       prepareDynamicModel: async (ctx) => {

@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -15,10 +16,9 @@ import {
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraft } from "./draft-controller.ts";
+import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
-import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
@@ -40,17 +40,14 @@ export class PaletteSessionDraft {
     };
   };
   private rejectedOpen: (() => void) | undefined;
-  private coldSubmit: { readSignal?: AbortSignal } | undefined;
+  private coldSubmit: { readSignal?: AbortSignal; failureCount: number } | undefined;
   private owner: { gateway: ApplicationContext["gateway"]; url: string; scope: string } | undefined;
   private readonly connectMachine: ConnectMachineSetupState;
   private static nextId = 0;
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly element: Pick<
-      HTMLElement,
-      "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll"
-    >,
+    private readonly element: Pick<HTMLElement, "isConnected" | "ownerDocument" | "contains">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
       changed: () => void;
@@ -176,11 +173,12 @@ export class PaletteSessionDraft {
     if (!this.read().open || this.messageLocked || !props) {
       return;
     }
+    const failureCount = props.attachmentReads?.failureCount ?? 0;
     const admitted = appendChatAttachmentFiles(files, props);
     if (submitRequested && admitted === files.length) {
       // The loader accepted Send before the readers existed. Carry that one
       // intent across preparation, but never across dismissal or invalidation.
-      this.submitCold(props.readSignal);
+      this.submitCold(props.readSignal, failureCount);
     }
   }
 
@@ -217,16 +215,13 @@ export class PaletteSessionDraft {
           changed: this.callbacks.changed,
           updateComplete: this.callbacks.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
-          querySelector: (selector) => this.element.querySelector(selector),
           activeElement: () => this.element.ownerDocument.activeElement,
-          body: () => this.element.ownerDocument.body,
-          pickerIdPrefix: this.idPrefix,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
           closeTransientUi: () => {
             this.draft?.browser.close();
             this.closeSettings?.();
-            closeSessionMenus(this.element);
+            closeMenusWithin(this.element);
           },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
@@ -265,7 +260,7 @@ export class PaletteSessionDraft {
     this.closeSettings?.();
     this.draft?.browser.close();
     this.connectMachine.close();
-    closeSessionMenus(this.element);
+    closeMenusWithin(this.element);
   }
 
   async submit(): Promise<void> {
@@ -276,8 +271,11 @@ export class PaletteSessionDraft {
     await this.draft.submission.submit(undefined, true);
   }
 
-  submitCold(readSignal?: AbortSignal) {
-    this.coldSubmit = { readSignal };
+  submitCold(
+    readSignal?: AbortSignal,
+    failureCount = this.draft?.submission.attachmentDraft.reads.failureCount ?? 0,
+  ) {
+    this.coldSubmit = { readSignal, failureCount };
     this.callbacks.changed();
   }
 
@@ -331,10 +329,7 @@ export class PaletteSessionDraft {
     ) {
       const failed =
         pending.readSignal &&
-        (pending.readSignal.aborted ||
-          attachmentDraft.reads
-            .project(attachmentDraft.attachments)
-            .some((entry) => entry.state === "error"));
+        (pending.readSignal.aborted || attachmentDraft.reads.failureCount !== pending.failureCount);
       if (failed || draft.gateway.placementPolicyReady) {
         this.coldSubmit = undefined;
         this.callbacks.changed();

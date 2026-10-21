@@ -10,7 +10,6 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -35,6 +34,7 @@ import {
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
+  describeToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
   readToolSearchCatalogTelemetry,
   resolveCatalog,
@@ -72,14 +72,6 @@ type ToolSearchExactCallOptions = Pick<
   ToolSearchCallOptions,
   "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
 >;
-
-function describeEntry(entry: ToolSearchCatalogEntry) {
-  return {
-    ...compactToolSearchCatalogEntry(entry),
-    parameters: entry.parameters ?? {},
-    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
-  };
-}
 
 function findEntry(
   catalog: ToolSearchCatalogSession,
@@ -190,6 +182,10 @@ async function assertCatalogOutputMatchesSchema(
         : "Tool call blocked by policy";
     throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
   }
+  // Failed operations carry an error result, not the tool's successful output.
+  if ("isError" in result && result.isError === true) {
+    return;
+  }
   const validation = await validateCatalogSchemaValue(
     entry,
     "outputSchema",
@@ -284,7 +280,9 @@ export class ToolSearchRuntime {
   };
 
   all = (options?: CatalogVisibilityOptions) =>
-    visibleCatalogEntries(resolveCatalog(this.ctx), options).map(compactToolSearchCatalogEntry);
+    visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
 
   namespaceEntries = () =>
     // Snapshot host metadata without rendering hints or retaining the executable tool.
@@ -305,57 +303,22 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw" && options?.parentToolCallId) {
       this.observeNetworkContent(options.parentToolCallId);
     }
-    return describeEntry(entry);
+    return describeToolSearchCatalogEntry(entry);
   };
 
-  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-      input,
-      options,
-    );
-  };
+  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
+    await this.callEntry(id, input, options);
 
-  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }, "exact-id"),
-      input,
-      options,
-    );
-  };
+  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
+    await this.callEntry(id, input, options, false, "exact-id");
 
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return projectToolResultValue(
-      (
-        await this.callEntry(
-          findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-          input,
-          options,
-          true,
-        )
-      ).result,
-    );
+    return projectToolResultValue((await this.callEntry(id, input, options, true)).result);
   };
 
   callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
     return projectToolResultValue(
-      (
-        await this.callEntry(
-          findEntry(
-            catalog,
-            id,
-            { ...options, codeModeSkills: this.ctx.codeModeSkills },
-            "exact-id",
-          ),
-          input,
-          options,
-          true,
-        )
-      ).result,
+      (await this.callEntry(id, input, options, true, "exact-id")).result,
     );
   };
 
@@ -404,14 +367,20 @@ export class ToolSearchRuntime {
   };
 
   private readonly callEntry = (
-    entry: ToolSearchCatalogEntry,
+    id: string,
     input?: unknown,
     options?: ToolSearchCallOptions,
     fullValue = false,
+    match: "id-or-name" | "exact-id" = "id-or-name",
   ) =>
     runScheduledToolSearchCall({
       ctx: this.ctx,
-      entry,
+      entry: findEntry(
+        resolveCatalog(this.ctx),
+        id,
+        { ...options, codeModeSkills: this.ctx.codeModeSkills },
+        match,
+      ),
       signal: options?.signal,
       execute: (currentEntry, signal) =>
         runWithToolResultDelivery(fullValue, () =>
@@ -447,9 +416,6 @@ export class ToolSearchRuntime {
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
-        if (entry.source !== "client") {
-          createGatewayToolPolicyAssertion(params.tool, this.ctx.config)(params.input);
-        }
         const result = await params.tool.execute(
           params.toolCallId,
           params.input,

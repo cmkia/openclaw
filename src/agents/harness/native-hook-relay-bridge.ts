@@ -6,6 +6,7 @@ import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -159,19 +160,11 @@ async function pruneNativeHookRelayBridges(stateDbPath: string): Promise<void> {
   // Liveness checks stay outside the transaction; deletion checks the token
   // owner and current expiry so renewal or replacement wins the race.
   try {
-    const pruned = await pruneNativeHookRelayBridgeRecords({
+    await pruneNativeHookRelayBridgeRecords({
       currentPid: process.pid,
       isPidDead: isPidDefinitelyDead,
       stateDbPath,
     });
-    for (const row of pruned) {
-      log.debug("pruned stale native hook relay bridge record", {
-        relayId: row.relayId,
-        stalePid: row.pid,
-        currentPid: process.pid,
-        reason: row.reason,
-      });
-    }
   } catch (error) {
     log.debug("native hook relay bridge record prune skipped", { error });
   }
@@ -317,9 +310,8 @@ export async function handleNativeHookRelayBridgeRequest(
       fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
     }
-    const result = await auth.invokeRelay(
-      { ...payload, requireGeneration: true },
-      requestAbort.signal,
+    const result = await runInDetachedAsyncContext(() =>
+      auth.invokeRelay({ ...payload, requireGeneration: true }, requestAbort.signal),
     );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {

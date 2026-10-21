@@ -1,5 +1,5 @@
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import type { NativeTypeScriptProject } from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
@@ -305,7 +305,13 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
-    [key(machineState, "updateConfigMachineState")],
+    [
+      key(machineState, "updateConfigMachineState"),
+      // Both receipt writers construct only automation-default: keys in their kernel.
+      ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
+        (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
+      ),
+    ],
   ],
   // These keys are built by bounded prefixes in the reviewed owners, never copied from a command.
   [
@@ -353,7 +359,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "extensions/codex/src/account-usage-runtime.ts:handleCodexAccountUsage/assertCurrent",
       "extensions/codex/src/app-server/auth-profile.ts:<module>",
       "extensions/codex/src/app-server/auth-profile-selection.ts:createCodexAuthProfileSelection/resolveCodexAppServerAuthProfileIdAtEffect",
-      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTargets",
+      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTarget",
       "src/agents/embedded-agent-runner/cli-backend-dispatch-eligibility.ts:resolveEmbeddedCliBackendDispatchEligibility",
       "src/agents/model-auth-label.ts:resolveModelAuthLabel",
       "src/agents/model-auth-provider.ts:resolveScopedAuthProfileStore",
@@ -505,7 +511,12 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
-    [key(sessionEntries, "writeSessionEntry")],
+    [
+      key(
+        "src/config/sessions/session-accessor.sqlite-entry-write.ts",
+        "prepareSessionEntryWrite/write",
+      ),
+    ],
   ],
   [
     key(sessionArtifacts, "deleteSessionNodeArtifacts"),

@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
@@ -36,6 +37,12 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { cronHandlers } from "./cron.js";
 import type { RespondFn } from "./types.js";
+
+const gatewayCall = vi.hoisted(() => vi.fn());
+vi.mock("../../agents/tools/gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools/gateway.js")>()),
+  callGatewayTool: gatewayCall,
+}));
 
 const managed: OpenClawConfig = {
   tools: {
@@ -184,28 +191,27 @@ async function withCron(
         readJobs: () => loadCronStore(storePath),
         commandRunner,
         invoke,
-        tool: (identity) =>
-          createCronTool(
-            {
-              config: getRuntimeConfigSnapshot() ?? {},
-              runId: identity.operationalRunInstance.runId,
-              agentSessionKey: identity.sessionKey,
+        tool: (identity) => {
+          gatewayCall.mockImplementation(
+            async (method: string, _options: unknown, params: unknown) => {
+              const caller = getGatewayToolCallerIdentity();
+              const response = await invoke(method, params as Record<string, unknown>, {
+                ...identity,
+                ...caller,
+              });
+              const [ok, value, error] = response.mock.calls[0]!;
+              if (!ok) {
+                throw new Error(error?.message ?? "cron request denied");
+              }
+              return value;
             },
-            {
-              callGatewayTool: async <T>(method: string, _options: unknown, params: unknown) => {
-                const caller = getGatewayToolCallerIdentity();
-                const response = await invoke(method, params as Record<string, unknown>, {
-                  ...identity,
-                  ...caller,
-                });
-                const [ok, value, error] = response.mock.calls[0]!;
-                if (!ok) {
-                  throw new Error(error?.message ?? "cron request denied");
-                }
-                return value as T;
-              },
-            },
-          ),
+          );
+          return createCronTool({
+            config: getRuntimeConfigSnapshot() ?? {},
+            runId: identity.operationalRunInstance.runId,
+            agentSessionKey: identity.sessionKey,
+          });
+        },
       });
     } finally {
       cron.stop();
@@ -429,54 +435,28 @@ describe("Gateway automation policy", () => {
     });
   });
 
-  it("rechecks tightened command policy before a manual run is reserved", async () => {
-    await withCron(async ({ cron, invoke, commandRunner }) => {
-      const job = await cron.add({
-        ...jobInput,
-        payload: { kind: "command", argv: ["fixture-command"] },
-      });
+  it.each([
+    ["explicit restricted deployment", managed, {}, false, false],
+    ["explicit unrestricted deployment", {}, managed, true, true],
+    ["startup fallback", undefined, managed, false, false],
+    ["startup command restriction", undefined, commandRestricted, false, true],
+  ] as const)(
+    "constructs tools using the %s",
+    async (_name, config, startup, commandAllowed, managementAllowed) => {
+      setRuntimeConfigSnapshot(startup);
       await withModelTurn("control-ui-admin", async (identity) => {
-        const grant = expectDefined(
-          bindCronManagementGrant(identity.operationalRunInstance.runId),
-          "management grant",
-        ).mint("cron.run");
-        const response = await invoke(
-          "cron.run",
-          { id: job.id, mode: "force" },
-          { ...identity, cronManagementGrant: grant },
-          () => setRuntimeConfigSnapshot(commandRestricted),
-        );
-        expect(response.mock.calls[0]?.[0]).toBe(false);
-        expect(response.mock.calls[0]?.[2]?.message).toContain("command automations");
+        const automation = createCronTool({ config, runId: identity.operationalRunInstance.runId });
+        expect(
+          Value.Check(automation.parameters, {
+            action: "update",
+            jobId: "command-job",
+            job: { payload: { kind: "command", argv: ["fixture-command"] } },
+          }),
+        ).toBe(commandAllowed);
+        expect(
+          bindCronManagementGrant(identity.operationalRunInstance.runId, config) !== undefined,
+        ).toBe(managementAllowed);
       });
-      expect(commandRunner).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rechecks tightened command policy at the real update commit boundary", async () => {
-    await withCron(async ({ cron, invoke, readJobs }) => {
-      const job = await cron.add(jobInput);
-      const before = await readJobs();
-      await withModelTurn("control-ui-admin", async (identity) => {
-        const response = await invoke(
-          "cron.update",
-          {
-            id: job.id,
-            patch: { payload: { kind: "command", argv: ["fixture-command"] } },
-          },
-          {
-            ...identity,
-            cronManagementGrant: expectDefined(
-              bindCronManagementGrant(identity.operationalRunInstance.runId),
-              "management grant",
-            ).mint("cron.update"),
-          },
-          () => setRuntimeConfigSnapshot(commandRestricted),
-        );
-        expect(response.mock.calls[0]?.[0]).toBe(false);
-        expect(response.mock.calls[0]?.[2]?.message).toContain("command automations");
-      });
-      expect(await readJobs()).toEqual(before);
-    });
-  });
+    },
+  );
 });

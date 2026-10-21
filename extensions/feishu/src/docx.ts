@@ -1,6 +1,10 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  filterStringEntries,
+  normalizeOptionalString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
@@ -66,13 +70,7 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
 }
 
 function normalizeChildIds(children: unknown): string[] {
-  if (Array.isArray(children)) {
-    return children.filter((child): child is string => typeof child === "string");
-  }
-  if (typeof children === "string") {
-    return [children];
-  }
-  return [];
+  return typeof children === "string" ? [children] : filterStringEntries(children);
 }
 
 type DocxChildrenCreatePayload = NonNullable<
@@ -441,7 +439,6 @@ async function uploadImageBlock(
   }: Extract<FeishuDocParams, { action: "upload_image" }>,
   upload: DocxUpload,
 ) {
-  // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
     path: { document_id: docToken, block_id: parentBlockId ?? docToken },

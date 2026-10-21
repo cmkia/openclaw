@@ -5,7 +5,7 @@ import {
   confirmAndStartUpdate,
   createUpdateProgressWatcher,
 } from "../../app/update-confirmation.ts";
-import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
+import { canReportUpdateFailure } from "../../app/update-failure-report-owner.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
@@ -31,6 +31,7 @@ export function UpdatesPage(props: UpdatesPageProps) {
   return (
     <Updates
       update={overlays().read()}
+      commandScope={snapshot().client ?? props.context.overlays}
       nativeDeviceSettings={props.context.nativeDeviceSettings}
       configObject={props.configObject}
       gatewayVersion={config().read().serverVersion ?? snapshot().hello?.server?.version ?? null}
@@ -59,7 +60,7 @@ export function UpdatesPage(props: UpdatesPageProps) {
       onUpdateNow={() => {
         const context = props.context;
         const update = overlays().read();
-        void confirmAndStartUpdate({
+        return confirmAndStartUpdate({
           isCurrentTarget: context.overlays.captureUpdateTarget(),
           startGatewayUpdate: () => void context.overlays.runUpdate(),
           // The dialog outlives this page, so read live snapshots after each change.

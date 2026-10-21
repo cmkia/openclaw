@@ -85,49 +85,40 @@ function toolAllowed(policy: GatewayToolPolicyConfig, name: string): boolean {
   return policy.allow.some((entry) => normalizeToolPolicyName(entry) === name);
 }
 
-function assertCall(
-  policy: GatewayToolPolicyConfig | undefined,
-  tool: GatewayToolPolicyTarget,
-  args: unknown,
-): void {
-  if (!policy || isGatewayToolPolicyControl(tool) || isCodeModeControlTool(tool)) {
-    return;
-  }
-  const name = normalizeToolPolicyName(tool.name);
-  if (!toolAllowed(policy, name)) {
-    throw new ToolAuthorizationError(`Gateway tool policy denies tool "${name}".`);
-  }
-  const actions = policyActions(policy, name);
-  if (!hasAction(tool.parameters) && actions === undefined) {
-    return;
-  }
-  const action = isRecord(args) && typeof args.action === "string" ? args.action.trim() : undefined;
-  if (!action || !actions?.includes(action)) {
-    throw new ToolAuthorizationError(
-      `Gateway tool policy denies ${name} action "${action ?? "<missing>"}".`,
-    );
-  }
-}
-
-/** The current Gateway ceiling narrows captured policy without replacing scoped run config. */
+/** Capture the deployment policy when constructing the tool executor. */
 export function createGatewayToolPolicyAssertion(
   tool: GatewayToolPolicyTarget,
-  config?: OpenClawConfig,
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
 ) {
-  const initial = config?.tools?.gatewayPolicy;
+  const policy = config?.tools?.gatewayPolicy;
   return (args: unknown): void => {
-    assertCall(initial, tool, args);
-    const current = getRuntimeConfigSnapshot()?.tools?.gatewayPolicy;
-    if (current !== initial) {
-      assertCall(current, tool, args);
+    if (!policy || isGatewayToolPolicyControl(tool) || isCodeModeControlTool(tool)) {
+      return;
+    }
+    const name = normalizeToolPolicyName(tool.name);
+    if (!toolAllowed(policy, name)) {
+      throw new ToolAuthorizationError(`Gateway tool policy denies tool "${name}".`);
+    }
+    const actions = policyActions(policy, name);
+    if (!hasAction(tool.parameters) && actions === undefined) {
+      return;
+    }
+    const action =
+      isRecord(args) && typeof args.action === "string" ? args.action.trim() : undefined;
+    if (!action || !actions?.includes(action)) {
+      throw new ToolAuthorizationError(
+        `Gateway tool policy denies ${name} action "${action ?? "<missing>"}".`,
+      );
     }
   };
 }
 
-function applyPolicy<T extends GatewayToolPolicyTarget>(
+/** Apply the deployment policy after ordinary tool and plugin grants. */
+export function applyGatewayToolPolicy<T extends GatewayToolPolicyTarget>(
   tools: T[],
-  policy: GatewayToolPolicyConfig | undefined,
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
 ): T[] {
+  const policy = config?.tools?.gatewayPolicy;
   if (!policy) {
     return tools;
   }
@@ -153,20 +144,10 @@ function applyPolicy<T extends GatewayToolPolicyTarget>(
     if (!parameters) {
       return [];
     }
-    const projected = { ...tool, parameters };
     return [
-      isExecutableTool(tool) ? copyAgentToolMetadata(tool, { ...tool, parameters }) : projected,
+      isExecutableTool(tool)
+        ? copyAgentToolMetadata(tool, { ...tool, parameters })
+        : { ...tool, parameters },
     ];
   });
-}
-
-/** Apply after ordinary grants; neither captured nor current Gateway policy can widen the other. */
-export function applyGatewayToolPolicy<T extends GatewayToolPolicyTarget>(
-  tools: T[],
-  config?: OpenClawConfig,
-): T[] {
-  const initial = config?.tools?.gatewayPolicy;
-  const current = getRuntimeConfigSnapshot()?.tools?.gatewayPolicy;
-  const projected = applyPolicy(tools, initial);
-  return current === initial ? projected : applyPolicy(projected, current);
 }

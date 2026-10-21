@@ -13,7 +13,7 @@ import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repa
 
 // Twice the slowest measured update Doctor (258 s: 60 agents, 1 CPU, 10 MB/s disk), rounded up.
 const DOCTOR_WORK_RESERVE_FLOOR_MS = 10 * 60_000;
-const DOCTOR_MAINTENANCE_WAIT_PROGRESS_INTERVAL_MS = 30_000;
+export const DOCTOR_MAINTENANCE_WAIT_PROGRESS_INTERVAL_MS = 30_000;
 
 /**
  * The time, on this process's `performance.now()` clock, when update Doctor stops
@@ -45,7 +45,7 @@ export async function resolveDoctorMaintenanceWaitDeadlineMs(
   return DEFAULT_UPDATE_STEP_TIMEOUT_MS - Math.max(DOCTOR_WORK_RESERVE_FLOOR_MS, 2 * rehearsalMs);
 }
 
-function formatDoctorWaitSeconds(ms: number) {
+export function formatDoctorWaitSeconds(ms: number) {
   return `${Math.max(0, Math.round(ms / 1000))} s`;
 }
 
@@ -74,13 +74,15 @@ export async function acquireDoctorGatewayMaintenanceOwner(
   env: NodeJS.ProcessEnv,
   params: {
     options: DoctorOptions;
+    waitForMaintenance?: boolean;
     runtime: RuntimeEnv;
     assertCurrent?: () => void;
     deadlineMs?: number;
     signal?: AbortSignal;
   },
 ) {
-  const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
+  const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options, env));
+  const waitForMaintenance = updateRepair || params.waitForMaintenance === true;
   const startedAt = performance.now();
   // Installation replacement is an unsupervised restart: detection, drain,
   // then server close and process exit each retain their owner's allowance.
@@ -122,7 +124,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
         error instanceof GatewayLockError &&
         error.cause instanceof GatewayStateOwnerContentionError
       ) {
-        if (updateRepair && isTransientHolder(error.cause)) {
+        if (waitForMaintenance && isTransientHolder(error.cause)) {
           transientDeadlineMs ??= await resolveDoctorMaintenanceWaitDeadlineMs(env);
         }
         throw error.cause;
@@ -134,7 +136,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
     const owner = await acquireWithWait({
       acquire,
       shouldRetry: (error) => {
-        if (!updateRepair || !(error instanceof GatewayStateOwnerContentionError)) {
+        if (!waitForMaintenance || !(error instanceof GatewayStateOwnerContentionError)) {
           return false;
         }
         params.signal?.throwIfAborted();
