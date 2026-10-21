@@ -156,8 +156,11 @@ suite.define(() => {
     "reconciles the cached shell, roster, and transcript with a %s profile",
     (profile) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const capture = (name: string) =>
-          page.screenshot({ path: path.join(suite.artifactDir, name) });
+        const capture = async (name: string) => {
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+          }
+        };
         const timestamp = Date.now();
         const imported = profile === "imported";
         const shortTail = profile === "short-tail";
