@@ -590,11 +590,14 @@ suite.define(() => {
   });
 
   it("keeps modified Enter queued in modifier-enter shortcut mode", async () => {
-    const { page, gateway } = await chatFixture(suite);
-
-    await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-    await page.locator("[data-settings-send-shortcut]").selectOption("modifier-enter");
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: {
+        "config.get": configResponse(
+          { ui: { prefs: { chatFollowUpMode: "queue", chatSendShortcut: "modifier-enter" } } },
+          "modifier-enter-followup-config",
+        ),
+      },
+    });
     await page.goto(`${suite.server.baseUrl}chat`);
 
     const composer = chatComposer(page);
@@ -612,11 +615,14 @@ suite.define(() => {
   });
 
   it("projects one disconnected state for an offline steer follow-up", async () => {
-    const { page, gateway } = await chatFixture(suite);
-
-    await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    await page.locator("[data-settings-follow-up-mode]").selectOption("steer");
-    await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: {
+        "config.get": configResponse(
+          { ui: { prefs: { chatFollowUpMode: "steer", chatSendShortcut: "enter" } } },
+          "offline-steer-followup-config",
+        ),
+      },
+    });
     await page.goto(`${suite.server.baseUrl}chat`);
 
     const composer = chatComposer(page);
@@ -665,6 +671,10 @@ suite.define(() => {
     const { page, gateway } = await chatFixture(suite, {
       sessionInfo: { hasActiveRun: false, status: "done" },
       methodResponses: {
+        "config.get": configResponse(
+          { ui: { prefs: { chatFollowUpMode: "queue" } } },
+          "terminal-session-followup-config",
+        ),
         "sessions.list": {
           cases: [
             { match: { spawnedBy: "agent:main:main" }, response: chatSessionListResponse([]) },
@@ -673,8 +683,6 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
     await page.goto(`${suite.server.baseUrl}chat`);
 
     const initialText = "keep this run active until session state settles it";
@@ -783,10 +791,14 @@ suite.define(() => {
   });
 
   it("steers a restored queued message when only the session row reports the active run", async () => {
-    const { page, gateway } = await chatFixture(suite);
-
-    await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: {
+        "config.get": configResponse(
+          { ui: { prefs: { chatFollowUpMode: "queue" } } },
+          "restored-queue-followup-config",
+        ),
+      },
+    });
     await page.goto(`${suite.server.baseUrl}chat?session=main`);
     await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/chat\/main$/);
 
