@@ -189,8 +189,13 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                             createGitHubPublishTool({
                               sessionId,
                               runId,
+                              // An ordinary local Docker conversation, as the visibility rule admits.
                               sandbox: createSandboxTestContext({
-                                overrides: { sessionKey, workspaceSource: undefined },
+                                overrides: {
+                                  sessionKey,
+                                  workspaceSource: undefined,
+                                  backend: { id: "docker" } as never,
+                                },
                               }),
                               onYield() {
                                 order.push("yield");

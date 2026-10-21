@@ -139,8 +139,16 @@ it.each<{
     evidence: true,
   },
   {
-    name: "unmanaged sandbox",
+    // An ordinary local Docker or Podman conversation adopts a managed workspace.
+    name: "unmanaged local sandbox",
     sandbox: { workspaceSource: undefined },
+    prepare: true,
+    refresh: false,
+    evidence: true,
+  },
+  {
+    name: "unmanaged remote sandbox",
+    sandbox: { workspaceSource: undefined, backendId: "ssh" },
     prepare: false,
     refresh: false,
     evidence: true,

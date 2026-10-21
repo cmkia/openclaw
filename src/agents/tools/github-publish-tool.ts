@@ -112,6 +112,8 @@ export function createGitHubPublishTool(
   const publicationAvailable = options.publicationAvailable !== false;
   const actionsAvailable = options.actionsAvailable === true;
   const prepareAvailable = canPrepareGitHubPullRequest(options.sandbox);
+  // An unbound sandboxed conversation prepares by yielding and adopting a managed workspace.
+  const adopting = prepareAvailable && options.sandbox?.workspaceSource !== "managed-worktree";
   const refreshBaseAvailable = canRefreshGitHubPublicationBase(options.sandbox);
   const evidenceAvailable = canUploadGitHubPublicationEvidence(options.sandbox);
   const workspaceActions = publicationWorkspaceActions.filter(
@@ -131,9 +133,7 @@ export function createGitHubPublishTool(
     name: githubPublishToolDefinition.name,
     // An unbound sandboxed preparation yields this turn. Like sessions_yield, it stays a direct
     // call: a Code Mode exec cannot carry a turn handoff.
-    ...(options.sandbox?.enabled && options.sandbox.workspaceSource !== "managed-worktree"
-      ? { async: false as const, catalogMode: "direct-only" as const }
-      : {}),
+    ...(adopting ? { async: false as const, catalogMode: "direct-only" as const } : {}),
     description: describeGitHubPublishTool(
       false,
       publicationAvailable,
@@ -216,7 +216,7 @@ export function createGitHubPublishTool(
             "prepare_pr accepts this PR's URL and its returned conflict acknowledgement for the current workspace.",
           );
         }
-        if (options.sandbox?.enabled && options.sandbox.workspaceSource !== "managed-worktree") {
+        if (adopting && options.sandbox) {
           const { handoffSessionTool } = await import("./session-tool-handoff.js");
           const sandbox = options.sandbox;
           return handoffSessionTool({
