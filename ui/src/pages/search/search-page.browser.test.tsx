@@ -7,6 +7,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   atPath,
   editInput,
@@ -30,6 +31,7 @@ async function mount(
   } = {},
 ) {
   let result = options.result ?? ready;
+  let statusResponse: Promise<WebSearchStatusResult> | undefined;
   const statusRequested = createDeferred();
   let testResponse: Promise<unknown> = Promise.resolve({
     provider: "searxng",
@@ -51,7 +53,7 @@ async function mount(
         statusRequested.resolve();
       }
       return method === "webSearch.status"
-        ? Promise.resolve(result)
+        ? (statusResponse ?? Promise.resolve(result))
         : method === "webSearch.test"
           ? testResponse
           : method === "models.list"
@@ -92,6 +94,9 @@ async function mount(
     setResult: (next: WebSearchStatusResult) => {
       result = next;
     },
+    setStatusResponse: (next: Promise<WebSearchStatusResult> | undefined) => {
+      statusResponse = next;
+    },
     setTestResponse: (next: Promise<unknown>) => {
       testResponse = next;
     },
@@ -99,6 +104,74 @@ async function mount(
 }
 
 describe("Search settings", () => {
+  it("retains controls and the query draft through a failed refresh and retry", async () => {
+    const fixture = await mount();
+    const query = fixture.edit("Search query", "Keep my search draft", false);
+    const refresh = createDeferred<WebSearchStatusResult>();
+    fixture.setStatusResponse(refresh.promise);
+    fixture.click("Refresh search status");
+    flush();
+    await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(2));
+
+    expect(fixture.button("Refresh search status").disabled).toBe(true);
+    expect(fixture.button("Test search").disabled).toBe(true);
+    expect(fixture.input("Search query")).toBe(query);
+
+    refresh.reject(new Error("Search status unavailable"));
+    await fixture.settle();
+    expect(fixture.element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Search status unavailable",
+    );
+    expect(fixture.input("Search query")).toBe(query);
+    expect(query.value).toBe("Keep my search draft");
+
+    const retry = createDeferred<WebSearchStatusResult>();
+    fixture.setStatusResponse(retry.promise);
+    fixture.click("Retry");
+    flush();
+    await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(3));
+    expect(fixture.element.querySelector('[role="alert"]')).toBeNull();
+    expect(fixture.input("Search query")).toBe(query);
+    retry.resolve(ready);
+    await fixture.settle();
+    expect(fixture.element.querySelector('[role="alert"]')).toBeNull();
+    expect(fixture.input("Search query")).toBe(query);
+    expect(query.value).toBe("Keep my search draft");
+    expect(fixture.calls("webSearch.test")).toHaveLength(0);
+  });
+
+  it.each(["connection", "agent"] as const)(
+    "retires controls and rejects a failed refresh after the %s changes",
+    async (change) => {
+      const fixture = await mount();
+      const originalQuery = fixture.input("Search query");
+      const refresh = createDeferred<WebSearchStatusResult>();
+      fixture.setStatusResponse(refresh.promise);
+      fixture.click("Refresh search status");
+      flush();
+      await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(2));
+      fixture.setStatusResponse(undefined);
+      if (change === "connection") {
+        fixture.replaceConnection();
+      } else {
+        fixture.setResult({ ...ready, agentId: "scout" });
+        fixture.setAgent("scout");
+      }
+      flush();
+      expect(originalQuery.isConnected).toBe(false);
+
+      refresh.reject(new Error("Retired search status failed"));
+      await fixture.settle();
+      expect(fixture.element.querySelector('[role="alert"]')).toBeNull();
+      expect(fixture.input("Search query")).not.toBe(originalQuery);
+      expect(fixture.calls("webSearch.status")).toHaveLength(3);
+      expect(fixture.calls("webSearch.status").at(-1)?.[1]).toEqual({
+        agentId: change === "agent" ? "scout" : "main",
+      });
+      expect(fixture.calls("webSearch.test")).toHaveLength(0);
+    },
+  );
+
   it("keeps the initial localized query and edited draft when the locale changes", async () => {
     const locale = i18n.getLocale();
     try {

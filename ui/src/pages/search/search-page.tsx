@@ -1,6 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { Errored, Loading, Show, createMemo, createSignal, isPending, onCleanup } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -44,9 +44,11 @@ export function SearchPage() {
   const context = useApplication();
   let disposed = false;
   const active = () => !disposed;
+  // Accepted data keeps the editable controls mounted through refreshes and failures.
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
-  const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
+  const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> } | null>(null);
+  const loadCompletion = createMemo(() => loadRequest()?.promise.then(() => null) ?? null);
+  const loading = () => isPending(loadCompletion);
   const [testing, setTesting] = createSignal(false);
   const [testResult, setTestResult] = createSignal<WebSearchTestResult | null>(null);
   const [testError, setTestError] = createSignal("");
@@ -114,7 +116,6 @@ export function SearchPage() {
   function invalidate() {
     invalidateTest();
     setResult(null);
-    setError("");
     setModels([]);
   }
 
@@ -153,15 +154,13 @@ export function SearchPage() {
     return configState.configLoading || configState.configSaving || configState.configApplying;
   }
 
-  async function load(modelValue = model()) {
+  function load(modelValue = model()): Promise<void> {
     const scope = gateway.capture();
     if (!scope || loadingActive) {
-      return;
+      return Promise.resolve();
     }
     invalidateTest();
     loadingActive = true;
-    setLoading(true);
-    setError("");
     const selected = selection(modelValue);
     const current = () =>
       active() &&
@@ -174,43 +173,46 @@ export function SearchPage() {
         .then(() => runtime.ensureSchemaLoaded())
         .catch(() => undefined);
     }
-    try {
-      const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
-        () => null,
-      );
-      if (!current()) {
-        return;
-      }
-      const status = await scope.client.request<WebSearchStatusResult>(
-        "webSearch.status",
-        selected,
-      );
-      if (current()) {
-        setModels(catalog?.models ?? []);
-        setResult(status);
-        if (!status.providers.some((provider) => provider.id === setupProvider())) {
-          const preferred = status.provider ?? status.route.provider;
-          setSetupProvider(
-            status.providers.find((provider) => provider.id === preferred)?.id ??
-              status.providers.find((provider) => provider.available && provider.configured)?.id ??
-              status.providers.toSorted((a, b) => a.label.localeCompare(b.label))[0]?.id ??
-              "",
-          );
+    const request = (async () => {
+      try {
+        const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
+          () => null,
+        );
+        if (!current()) {
+          return;
         }
-      }
-    } catch (cause) {
-      if (active()) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      loadingActive = false;
-      if (active()) {
-        setLoading(false);
-        if (!current() && gateway.connected) {
+        const status = await scope.client.request<WebSearchStatusResult>(
+          "webSearch.status",
+          selected,
+        );
+        if (current()) {
+          setModels(catalog?.models ?? []);
+          setResult(status);
+          if (!status.providers.some((provider) => provider.id === setupProvider())) {
+            const preferred = status.provider ?? status.route.provider;
+            setSetupProvider(
+              status.providers.find((provider) => provider.id === preferred)?.id ??
+                status.providers.find((provider) => provider.available && provider.configured)
+                  ?.id ??
+                status.providers.toSorted((a, b) => a.label.localeCompare(b.label))[0]?.id ??
+                "",
+            );
+          }
+        }
+      } catch (cause) {
+        if (current()) {
+          throw cause;
+        }
+      } finally {
+        loadingActive = false;
+        if (active() && !current() && gateway.connected) {
           void load();
         }
       }
-    }
+    })();
+    setLoadRequest({ promise: request });
+    // The native read owns error presentation; imperative callers only await settlement.
+    return request.catch(() => undefined);
   }
 
   async function patch(
@@ -366,14 +368,24 @@ export function SearchPage() {
       <SettingsWorkspace>
         <SettingsPage>
           {!gateway.connected ? <SettingsEmpty message={t("searchPage.offline")} /> : undefined}
-          {error() ? (
-            <div role="alert" class="callout danger">
-              {error()}
-              <button class="btn btn--sm" onClick={() => void load()}>
-                {t("common.retry")}
-              </button>
-            </div>
-          ) : undefined}
+          <Show when={loadRequest()} keyed>
+            {(request) => (
+              <Errored
+                fallback={(error) =>
+                  gateway.connected ? (
+                    <div role="alert" class="callout danger">
+                      {formatUiError(error())}
+                      <button class="btn btn--sm" onClick={() => void load()}>
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                  ) : undefined
+                }
+              >
+                <Loading on={request}>{loadCompletion()}</Loading>
+              </Errored>
+            )}
+          </Show>
           {configState().lastError ? (
             <div role="alert" class="callout danger">
               {configState().lastError}
