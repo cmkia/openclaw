@@ -1,7 +1,27 @@
-import { createMemo } from "solid-js";
+import { createMemo, Errored, Loading, type Element } from "solid-js";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { ChatModelControls } from "../chat/components/chat-model-controls.tsx";
 import type { NewSessionModelControl, NewSessionModelRenderOptions } from "./model-control.ts";
+
+function ModelCatalogStatus(props: {
+  read: () => ModelCatalogResult | undefined;
+  scope: object | undefined;
+  children: () => Element;
+}) {
+  const scope = createMemo(() => props.scope);
+  const ready = createMemo(() => {
+    props.read();
+    return true;
+  });
+  return (
+    <Errored fallback={() => props.children()}>
+      <Loading on={scope()} fallback={props.children()}>
+        {ready() ? props.children() : undefined}
+      </Loading>
+    </Errored>
+  );
+}
 
 export function NewSessionModelControlView(props: {
   control: NewSessionModelControl;
@@ -42,6 +62,18 @@ export function NewSessionModelControlView(props: {
       subscribe: (app, notify) => app?.sessions.subscribe(notify) ?? (() => {}),
     }),
   );
+  // Keep receipt identity stable across unrelated owner publications.
+  const read = createMemo(
+    () => {
+      updates().revision();
+      return { promise: control().metadataRead, scope: control().metadataReadScope };
+    },
+    {
+      equals: (previous, next) =>
+        previous.promise === next.promise && previous.scope === next.scope,
+    },
+  );
+  const metadata = createMemo(() => read().promise);
   const controls = createMemo(() => {
     updates().revision();
     defaults().revision();
@@ -52,5 +84,14 @@ export function NewSessionModelControlView(props: {
       sending: sending(),
     });
   });
-  return <ChatModelControls {...controls()} />;
+  return (
+    <ChatModelControls
+      {...controls()}
+      renderModelCatalogStatus={(render) => (
+        <ModelCatalogStatus read={metadata} scope={read().scope}>
+          {render}
+        </ModelCatalogStatus>
+      )}
+    />
+  );
 }
