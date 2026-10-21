@@ -137,14 +137,6 @@ const OpenShellPluginConfigSchema = z.strictObject({
     .optional(),
 });
 
-function normalizeOpenShellRemotePath(value: string): string {
-  const normalized = path.posix.normalize(value);
-  if (!OPEN_SHELL_MANAGED_REMOTE_PATH.test(normalized)) {
-    throw new Error(`OpenShell remote path must stay under /sandbox or /agent: ${value}`);
-  }
-  return normalized;
-}
-
 export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema {
   return buildPluginConfigSchema(OpenShellPluginConfigSchema, {
     safeParse(value) {
@@ -184,10 +176,10 @@ export function resolveOpenShellPluginConfig(value: unknown) {
     providers: [...new Set(cfg.providers ?? [])],
     gpu: cfg.gpu ?? false,
     autoProviders: cfg.autoProviders ?? true,
-    remoteWorkspaceDir: normalizeOpenShellRemotePath(
+    remoteWorkspaceDir: path.posix.normalize(
       cfg.remoteWorkspaceDir ?? DEFAULT_REMOTE_WORKSPACE_DIR,
     ),
-    remoteAgentWorkspaceDir: normalizeOpenShellRemotePath(
+    remoteAgentWorkspaceDir: path.posix.normalize(
       cfg.remoteAgentWorkspaceDir ?? DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
     ),
     timeoutMs:
