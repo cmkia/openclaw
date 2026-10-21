@@ -70,7 +70,9 @@ export function createAgentMemory(
   let active = false;
   let publish = () => {};
   let dreaming = createDreamingState();
-  let toggleConfirmLoading = false;
+  let toggleRequest:
+    | (ReturnType<typeof Promise.withResolvers<void>> & { pending: boolean })
+    | undefined;
   let pendingEnabled: boolean | null = null;
   let wikiPreview: WikiPreviewRequest | null = null;
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
@@ -120,7 +122,7 @@ export function createAgentMemory(
       }
       dreaming.dreamDiaryActionLoading = false;
       dreaming.dreamingModeSaving = false;
-      toggleConfirmLoading = false;
+      retireToggle();
     },
     onSnapshot: applyGatewaySnapshot,
     ensureInitialData: ({ snapshot }) => {
@@ -154,7 +156,7 @@ export function createAgentMemory(
   function resetTransientState() {
     wikiPreview = null;
     pendingWikiRead = null;
-    toggleConfirmLoading = false;
+    retireToggle();
     pendingEnabled = null;
   }
 
@@ -291,7 +293,7 @@ export function createAgentMemory(
     if (
       !canCallDreamingMethod(dreaming, "config.patch", "operator.admin") ||
       dreaming.dreamingModeSaving ||
-      toggleConfirmLoading ||
+      toggleRequest?.pending ||
       pendingEnabled !== null
     ) {
       return;
@@ -302,63 +304,75 @@ export function createAgentMemory(
   }
 
   function cancelToggle() {
-    if (toggleConfirmLoading) {
+    if (toggleRequest?.pending) {
       return;
     }
     pendingEnabled = null;
+    retireToggle();
     dreaming.dreamingStatusError = null;
     notify();
   }
 
-  async function confirmToggle() {
+  function retireToggle() {
+    // A retired transport may never settle; release its pending presentation now.
+    toggleRequest?.resolve();
+    toggleRequest = undefined;
+  }
+
+  function confirmToggle(): Promise<void> | undefined {
     const enabled = pendingEnabled;
     if (
       enabled == null ||
-      toggleConfirmLoading ||
+      toggleRequest?.pending ||
       !canCallDreamingMethod(dreaming, "config.patch", "operator.admin")
     ) {
-      return;
+      return undefined;
     }
-    toggleConfirmLoading = true;
-    dreaming.dreamingStatusError = null;
     const scope = captureTaskScope();
-    const runtimeConfig = context.runtimeConfig;
     if (!scope) {
-      toggleConfirmLoading = false;
+      return undefined;
+    }
+    const request = { ...Promise.withResolvers<void>(), pending: true };
+    toggleRequest = request;
+    dreaming.dreamingStatusError = null;
+    // The dialog can disappear before it consumes a terminal rejection.
+    void request.promise.catch(() => undefined);
+    void updateToggle(scope, enabled)
+      .then(request.resolve, request.reject)
+      .finally(() => {
+        if (toggleRequest === request) {
+          request.pending = false;
+          notify();
+        }
+      });
+    return request.promise;
+  }
+
+  async function updateToggle(scope: DreamingTaskScope, enabled: boolean) {
+    const runtimeConfig = context.runtimeConfig;
+    const canDispatch = () =>
+      isTaskScopeCurrent(scope) &&
+      context.runtimeConfig === runtimeConfig &&
+      canCallDreamingMethod(scope.state, "config.patch", "operator.admin");
+    const updated = await runDreamingTask(
+      (dreamingState) => updateDreamingEnabled(dreamingState, runtimeConfig, enabled, canDispatch),
+      scope,
+    );
+    if (!isTaskScopeCurrent(scope) || context.runtimeConfig !== runtimeConfig) {
       return;
     }
-    try {
-      const canDispatch = () =>
-        isTaskScopeCurrent(scope) &&
-        context.runtimeConfig === runtimeConfig &&
-        canCallDreamingMethod(scope.state, "config.patch", "operator.admin");
-      const updated = await runDreamingTask(
-        (dreamingState) =>
-          updateDreamingEnabled(dreamingState, runtimeConfig, enabled, canDispatch),
-        scope,
-      );
-      if (!isTaskScopeCurrent(scope) || context.runtimeConfig !== runtimeConfig) {
-        return;
-      }
-      if (!updated) {
-        dreaming.dreamingStatusError ??= t("dreaming.toggleConfirmation.failed");
-        return;
-      }
-      await runtimeConfig.refresh();
-      if (!isTaskScopeCurrent(scope) || context.runtimeConfig !== runtimeConfig) {
-        return;
-      }
-      await runDreamingTask((current) => loadDreamingResource(current, "dreamingStatus"), scope);
-      if (!isTaskScopeCurrent(scope)) {
-        return;
-      }
-      pendingEnabled = null;
-    } finally {
-      if (isTaskScopeCurrent(scope)) {
-        toggleConfirmLoading = false;
-        notify();
-      }
+    if (!updated) {
+      throw new Error(dreaming.dreamingStatusError ?? t("dreaming.toggleConfirmation.failed"));
     }
+    await runtimeConfig.refresh();
+    if (!isTaskScopeCurrent(scope) || context.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    await runDreamingTask((current) => loadDreamingResource(current, "dreamingStatus"), scope);
+    if (!isTaskScopeCurrent(scope)) {
+      return;
+    }
+    pendingEnabled = null;
   }
 
   async function openWikiPage(lookup: string): Promise<WikiPagePreview | null> {
@@ -490,11 +504,10 @@ export function createAgentMemory(
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,
-        loading: toggleConfirmLoading,
         disabled: !canUpdateConfig,
-        onConfirm: () => void confirmToggle(),
-        onCancel: () => cancelToggle(),
-        hasError: Boolean(dreaming.dreamingStatusError),
+        onConfirm: confirmToggle,
+        onCancel: cancelToggle,
+        completion: toggleRequest?.pending ? undefined : toggleRequest?.promise,
       } satisfies DreamingToggleConfirmationProps,
     };
   }
