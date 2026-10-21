@@ -6,6 +6,7 @@ import type {
   AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsListResult,
+  GatewayAgentRow,
   ToolsCatalogResult,
 } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -17,6 +18,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
+import { createAgentCreationRecovery, type AgentCreationResult } from "./creation-recovery.ts";
 import type { AgentsPanel } from "./panels.ts";
 import {
   buildToolsEffectiveRequestKey,
@@ -88,6 +90,8 @@ type AgentCapabilityState = {
   agentsLoading: boolean;
   agentsError: string | null;
   agentsList: AgentsListResult | null;
+  pendingAgent?: GatewayAgentRow;
+  recentlyCreatedAgentId?: string;
 };
 
 export type AgentCapability = ReturnType<typeof createAgentCapability>;
@@ -221,6 +225,7 @@ export function createAgentCapability(gateway: AgentGateway) {
   const files = new Map<string, AgentFilesRequestStatus>();
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
+  const creations = createAgentCreationRecovery();
 
   const retireAgentsRequest = () => {
     // A closed connection can leave its transport pending; release native readers immediately.
@@ -264,6 +269,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     if (state.agentsList && !state.agentsError && !force) {
       return Promise.resolve(state.agentsList);
     }
+    const createdWhenRequested = state.recentlyCreatedAgentId;
     retireAgentsRequest();
     const request = createAgentRead<AgentsListResult>();
     agentsRequest = request;
@@ -282,6 +288,16 @@ export function createAgentCapability(gateway: AgentGateway) {
       .then(
         (result) => {
           if (current()) {
+            if (
+              state.recentlyCreatedAgentId &&
+              state.recentlyCreatedAgentId !== createdWhenRequested &&
+              !result.agents.some((agent) => agent.id === state.recentlyCreatedAgentId)
+            ) {
+              // Keep the original caller awaiting the roster that includes the confirmed creation.
+              agentsRequest = null;
+              void loadList(true).then((refreshed) => request.resolve({ result: refreshed }));
+              return;
+            }
             state.agentsList = result;
             complete({ result });
           }
@@ -358,6 +374,8 @@ export function createAgentCapability(gateway: AgentGateway) {
     state.client = snapshot.client;
     state.connected = connected;
     if ((connectionChanged && (identityChanged || !connected)) || accessLost) {
+      state.pendingAgent = undefined;
+      state.recentlyCreatedAgentId = undefined;
       retireAgentsRequest();
       retireFileRequests();
       if (identityChanged || accessLost) {
@@ -397,6 +415,38 @@ export function createAgentCapability(gateway: AgentGateway) {
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
+    async create(
+      name: string,
+      onStarted?: (agentId: string) => void,
+      identity?: { avatar?: string },
+    ): Promise<AgentCreationResult | null> {
+      const client = state.client;
+      if (!client || !state.connected || disposed || state.pendingAgent) {
+        return null;
+      }
+      const attempt = creations.prepare(client, name, identity?.avatar);
+      const { agentId } = attempt;
+      const pendingAgent = { id: agentId, name: attempt.name };
+      const isCurrent = () =>
+        !disposed &&
+        state.client === client &&
+        state.connected &&
+        state.pendingAgent === pendingAgent;
+      state.pendingAgent = pendingAgent;
+      publish();
+      try {
+        // The UI can open a display-only chat immediately. Persistence still waits
+        // for the new agent's own inference route to pass verification.
+        onStarted?.(agentId);
+        const { createAgentInRoster } = await import("./creation-recovery.runtime.ts");
+        return await createAgentInRoster(state, () => loadList(false), attempt, isCurrent);
+      } finally {
+        if (state.pendingAgent === pendingAgent) {
+          state.pendingAgent = undefined;
+          publish();
+        }
+      }
+    },
     files(agentId: string | null | undefined): AgentFilesStatus {
       const normalized = normalizeOptionalString(agentId);
       return normalized
@@ -453,6 +503,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       listeners.clear();
       retireFileRequests();
       files.clear();
+      creations.dispose();
       retireAgentsRequest();
     },
   };
