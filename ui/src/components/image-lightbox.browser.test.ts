@@ -50,7 +50,12 @@ async function mountImage(item: Partial<ImageLightboxItem> = {}, deferredClose =
   await modal.updateComplete;
   const dialog = modal.querySelector("dialog")!;
   await expect.poll(() => dialog.open).toBe(true);
-  await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+  // These cases start at the open state; their close and zoom animations remain real.
+  const openingAnimations = dialog.getAnimations();
+  for (const animation of openingAnimations) {
+    animation.finish();
+  }
+  await Promise.all(openingAnimations.map((animation) => animation.finished));
   const image = viewer.querySelector<HTMLImageElement>("img")!;
   await image.decode();
   await nextFrame();
