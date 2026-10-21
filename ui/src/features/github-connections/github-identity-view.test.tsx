@@ -7,6 +7,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
+  authorizationCode,
   availableStatus,
   setupRequest,
   sharedTarget,
@@ -51,6 +52,33 @@ afterEach(() => {
 });
 
 describe("GitHub identity view", () => {
+  it("shows device request and cancellation progress before the server settles", async () => {
+    const start = createDeferred<typeof authorizationCode>();
+    const cancel = createDeferred<{ cancelled: boolean }>();
+    const { identity } = setupRequest({
+      "tools.github.authorize.start": () => start.promise,
+      "tools.github.authorize.cancel": () => cancel.promise,
+    });
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    flush();
+    view.getByRole("button", { name: "Continue with GitHub" }).click();
+    flush();
+    expect(view.getByText("Requesting code…")).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Continue with GitHub" })).toBeNull();
+    start.resolve(authorizationCode);
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByText("ABCD-1234")).toBeTruthy();
+    view.getByRole("button", { name: "Cancel", exact: true }).click();
+    flush();
+    expect(view.getByText("Requesting cancellation…")).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Cancel", exact: true })).toBeNull();
+    cancel.resolve({ cancelled: true });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
+  });
+
   it("retires the owned status request when its view unmounts", async () => {
     const pending = createDeferred<ReturnType<typeof availableStatus>>();
     const client = createTestGatewayClient(vi.fn().mockReturnValue(pending.promise));

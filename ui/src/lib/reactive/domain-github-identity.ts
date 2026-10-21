@@ -28,13 +28,7 @@ export function createGitHubIdentityView(deps: Parameters<typeof createGitHubIde
       owner.dispose();
     };
   });
-  const startAuthorization = action(function* () {
-    yield owner.startAuthorization();
-  });
-  const cancelAuthorization = action(function* () {
-    yield owner.cancelAuthorization();
-  });
-  return { ...owner, read: projection.read, saving, startAuthorization, cancelAuthorization };
+  return { ...owner, read: projection.read, saving };
 }
 
 export type GitHubIdentityView = ReturnType<typeof createGitHubIdentityView>;
