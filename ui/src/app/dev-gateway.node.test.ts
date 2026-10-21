@@ -10,6 +10,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createControlUiDevGateway } from "../../config/control-ui-dev-gateway.ts";
 import controlUiViteConfig from "../../vite.config.ts";
+import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import {
   gatewayWebSocketTransportUrl,
   hasSameOriginGatewayTransport,
@@ -22,6 +23,18 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
+
+function fixtureConfig(command: "build" | "serve") {
+  return controlUiViteConfig({
+    command,
+    buildInfo: normalizeControlUiBuildInfo({
+      version: "1.0.0",
+      commit: "a".repeat(40),
+      dirty: false,
+      release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
+    }),
+  });
+}
 
 describe("configured UI development Gateway", () => {
   it("proxies HTTP and WebSocket resources without replacing auth, Origin, or Vite", async () => {
@@ -116,7 +129,7 @@ describe("configured UI development Gateway", () => {
         await once(upstream, "listening");
         const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
         vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", upstreamUrl);
-        const config = controlUiViteConfig({ command: "serve" });
+        const config = fixtureConfig("serve");
         for (const options of Object.values(config.server?.proxy ?? {})) {
           if (typeof options === "string") {
             throw new Error("Expected configured development proxy options");
@@ -359,12 +372,12 @@ describe("configured UI development Gateway", () => {
   it("does not enable the transport in bundled builds or unconfigured development", () => {
     vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", "http://localhost:18789");
     vi.stubEnv("NODE_ENV", "development");
-    const bundled = controlUiViteConfig({ command: "build" });
+    const bundled = fixtureConfig("build");
     expect(bundled.server?.proxy).toBeUndefined();
     expect(bundled.define?.["globalThis.OPENCLAW_UI_DEV_SERVER"]).toBe("false");
     vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", "");
     vi.stubEnv("NODE_ENV", "production");
-    const development = controlUiViteConfig({ command: "serve" });
+    const development = fixtureConfig("serve");
     expect(development.server?.proxy).toBeUndefined();
     expect(development.define?.["globalThis.OPENCLAW_UI_DEV_SERVER"]).toBe("true");
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", undefined);
