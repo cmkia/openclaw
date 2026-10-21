@@ -22,8 +22,6 @@ import { finished } from "node:stream/promises";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { startQaBusServer, createQaBusState } from "../extensions/qa-lab/bus-api.ts";
-import type { AnyAgentTool } from "../src/agents/agent-tools.types.js";
-import type { ToolHandlerContext } from "../src/agents/embedded-agent-subscribe.handlers.types.js";
 import type { ToolsInvokeResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type {
   ExecApprovalsNativeCommitParams,
@@ -31,6 +29,8 @@ import type {
 } from "../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
+import type { AnyAgentTool } from "../src/agents/agent-tools.types.js";
+import type { ToolHandlerContext } from "../src/agents/embedded-agent-subscribe.handlers.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { ExecApprovalUsageAuthorization } from "../src/infra/exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "../src/infra/exec-approvals-core.js";
@@ -759,7 +759,12 @@ try {
   applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
   cfg.agents = {
     ...cfg.agents,
-    defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
+    defaults: {
+      ...cfg.agents?.defaults,
+      skipBootstrap: true,
+      // Recaps must not consume the scripted exec exchange when conversations rotate.
+      ...(ruleCount ? { utilityModel: "" } : {}),
+    },
   };
   cfg.agents.entries = { main: { workspace: path.join(fixture, "workspace") } };
   cfg.plugins = {
@@ -1107,9 +1112,7 @@ async function measureToolInvocations() {
   }
   // Source imports and fixture construction are deliberately outside all sampling windows.
   const [
-    { Session },
     { Type },
-    { isRecord },
     { wrapToolWithBeforeToolCallHook },
     { finalizeToolTerminalPresentation },
     { peekAdjustedParamsForToolCall },
@@ -1120,11 +1123,9 @@ async function measureToolInvocations() {
     { createToolTerminalObserver },
     { setToolTerminalPresentation },
     { startGatewayBenchDiagnostics },
-    { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace },
+    { GATEWAY_GC_TRACE_MARKER },
   ] = await Promise.all([
-    import("node:inspector/promises"),
     import("typebox"),
-    import("@openclaw/normalization-core/record-coerce"),
     import("../src/agents/agent-tools.before-tool-call.wrapper.js"),
     import("../src/agents/agent-tools.before-tool-call.diagnostics.js"),
     import("../src/agents/agent-tools.before-tool-call.state.js"),

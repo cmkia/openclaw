@@ -413,7 +413,10 @@ semantic publication; native commit records real allowlist usage; tools.invoke
 reads `session_status` and verifies the same QA conversation's canonical session key.
 RPC timings are reported separately from
 the QA turn. Allocation and GC cover the complete turn-plus-RPC bundle, not the
-QA dispatch alone. Attached-environment and Board approval flows are not exercised.
+QA dispatch alone. Exec-policy fixtures disable utility-model routing so Activity
+recaps cannot consume scripted exec replies when conversations rotate; utility
+model costs are outside this workload. Attached-environment and Board approval
+flows are not exercised.
 `evidence.json` includes sampled allocated
 MB per completed turn, main-isolate promoted MB per turn, minor/major GC seconds
 per minute, Gateway event-loop p99, and first-outbound/settled-turn distributions.
