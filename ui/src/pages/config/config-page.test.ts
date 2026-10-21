@@ -645,6 +645,45 @@ it("retires an update status receipt when the page leaves and re-enters", async 
   await waitForSolid(() => expect(status()).toContain("Current update status"));
 });
 
+it("retries a rejected update status read without hiding policy controls", async () => {
+  const failed = deferred<boolean>();
+  const retried = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(failed.promise)
+    .mockReturnValueOnce(retried.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
+    },
+  });
+  const { container } = mountConfigPage(context, { pageId: "updates" });
+  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
+  failed.reject(new Error("Synthetic status read failed"));
+  await waitForSolid(() =>
+    expect(container.querySelector(".updates-status-check-failed")?.textContent).toContain(
+      "Synthetic status read failed",
+    ),
+  );
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!.click();
+  await waitForSolid(() => {
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Checking for updates…",
+    );
+  });
+  retried.resolve(true);
+  await waitForSolid(() => {
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Current update status",
+    );
+    expect(container.querySelector(".updates-status-check-failed")).toBeNull();
+  });
+});
+
 it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
   const patchForm = vi.fn();
   const updateActions = {
