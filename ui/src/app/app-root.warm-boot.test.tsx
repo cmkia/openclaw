@@ -139,7 +139,9 @@ async function createOfflineSurface(warm = false) {
 describe("warm boot app root", () => {
   it("loads a focused dashboard after startup and reports its committed result to automation", async () => {
     window.history.replaceState({}, "", "/focus/dashboard/main/12345678");
-    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockResolvedValue();
+    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockRejectedValue(
+      new Error("Dashboard implementation isolated from root input test"),
+    );
     const starting = Promise.withResolvers<void>();
     const loading = Promise.withResolvers<ChatRouteData>();
     vi.mocked(loadChatRoute).mockReturnValue(loading.promise);
@@ -176,7 +178,9 @@ describe("warm boot app root", () => {
 
   it("retires a pending focus dashboard read before it can render or canonicalize", async () => {
     window.history.replaceState({}, "", "/focus/dashboard/main/12345678");
-    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockResolvedValue();
+    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockRejectedValue(
+      new Error("Dashboard implementation isolated from root input test"),
+    );
     const loading = Promise.withResolvers<ChatRouteData>();
     vi.mocked(loadChatRoute).mockClear().mockReturnValue(loading.promise);
     const { container } = await createWarmSurface(false);
