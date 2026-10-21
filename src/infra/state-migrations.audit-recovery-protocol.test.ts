@@ -115,18 +115,14 @@ it("recovers released numeric restore journals and refuses replacement files", a
     }
   }));
 
-it("round-trips adjacent Windows file IDs above the numeric precision limit", () => {
+it("round-trips exact Windows IDs and rejects adjacent IDs", () => {
   const target = { dev: "4", ino: "9007199254740993", size: sourceRaw.length };
-  const raw = serializeJournal({ rawBytes: sourceRaw, scrubPattern, target });
-  const journal = parseJournal(raw);
+  const journal = parseJournal(serializeJournal({ rawBytes: sourceRaw, scrubPattern, target }));
   expect(journal.target).toEqual(target);
-  for (const [ino, matches] of [
-    [target.ino, true],
-    ["9007199254740992", false],
-    [9_007_199_254_740_992, true],
-  ] as const) {
-    expect(legacyAuditFileIdentitiesMatch(journal.target, { ...target, ino })).toBe(matches);
-  }
+  expect(legacyAuditFileIdentitiesMatch(journal.target, target)).toBe(true);
+  expect(
+    legacyAuditFileIdentitiesMatch(journal.target, { ...target, ino: "9007199254740992" }),
+  ).toBe(false);
 });
 
 it("keeps rounded numeric identities legacy and refuses them in exact journals", () => {

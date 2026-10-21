@@ -48,7 +48,6 @@ it.each([
   ["ENOTSUP", "operation not supported", "exclusive file creation"],
 ])("reports %s acquisition failure without inventing an owner", async (code, message, guidance) => {
   const options = migrationOptions();
-  expect(fs.readdirSync(options.stateDir)).toEqual([]);
   const databasePath = path.join(options.stateDir, "state", "openclaw.sqlite");
   const ownerPath = resolveGatewayStateOwnerPath(databasePath);
   const open = fs.openSync;

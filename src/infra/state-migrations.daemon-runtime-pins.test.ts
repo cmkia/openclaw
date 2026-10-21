@@ -327,14 +327,10 @@ describe("daemon runtime pin owner migration", () => {
         },
       });
       expect(result.signal, result.stderr).toBe("SIGKILL");
-      expect(sourceRows()).toEqual([pin]);
-      expect(targetRows()).toEqual([pin]);
-      expect(receipt()).toMatchObject({ phase: "copied" });
+      expectCustody([pin], [pin], "copied");
 
       expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
-      expect(sourceRows()).toEqual([]);
-      expect(targetRows()).toEqual([pin]);
-      expect(receipt()).toMatchObject({ phase: "complete" });
+      expectCustody([], [pin], "complete");
     },
   );
 

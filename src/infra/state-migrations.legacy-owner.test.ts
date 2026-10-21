@@ -13,6 +13,7 @@ import {
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
 import { captureLegacyStateSnapshotIdentity } from "./state-migrations.plan.js";
+import { writeFixtureFile } from "./state-migrations.shard-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -44,9 +45,8 @@ it.each([false, true])(
   async (duplicate) => {
     const { root, stateDir, env, detection } = fixture();
     const sourcePath = path.join(stateDir, "agent", "settings.json");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
     const bytes = '{"legacy":true}\n';
-    fs.writeFileSync(sourcePath, bytes);
+    writeFixtureFile(sourcePath, bytes);
     const source: OpenClawConfigWithLegacyRoster = {
       plugins: { enabled: false },
       agents: {

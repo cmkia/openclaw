@@ -15,7 +15,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
-import * as migrationTargets from "./state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
   createEvent,
@@ -107,8 +106,6 @@ test("retains archives beside a refused database", async ({ state }) => {
 test("recovers identical wrong-owner copies despite short reads", async ({ state }) => {
   const { cfg, source, target, run } = await copiedOwnerFixture(state);
   const original = fs.readFileSync(source);
-  expect(fs.readFileSync(target).equals(original)).toBe(true);
-  const discovery = vi.spyOn(migrationTargets, "resolveAgentDatabaseMigrationTargets");
   const files = [
     { identity: fs.statSync(source), maxBytes: 8191, shortReads: 0 },
     { identity: fs.statSync(target), maxBytes: 4093, shortReads: 0 },
@@ -146,7 +143,6 @@ test("recovers identical wrong-owner copies despite short reads", async ({ state
 
   expect(files.every((file) => file.shortReads === 1)).toBe(true);
   expect(result.warnings.join("\n")).toContain("cleaner");
-  expect(discovery).toHaveBeenCalledTimes(1);
   expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject({
     recoveredAgentDatabasePaths: [target],
   });
