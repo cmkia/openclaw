@@ -13,6 +13,8 @@ import {
   pluginResponses,
 } from "./plugins-settings-admin.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Plugin Ask OpenClaw integration" });
 const featureMethods = [
   "config.get",
@@ -153,9 +155,11 @@ suite.define(() => {
         const composer = panel.locator("textarea");
         await expect.poll(() => composer.inputValue()).toContain("Explain Base URL");
         const draft = await composer.inputValue();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `url-help-draft-${width}.png`),
-        });
+        if (captureUiProof) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `url-help-draft-${width}.png`),
+          });
+        }
         const userRequests = async () =>
           (await gateway.getRequests("openclaw.chat")).filter(
             (request) => asRecord(request.params).message,
@@ -233,7 +237,9 @@ suite.define(() => {
             bottom: rect.bottom,
           };
         });
-        await page.screenshot({ path: path.join(suite.artifactDir, `transcript-${phase}.png`) });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, `transcript-${phase}.png`) });
+        }
         expect(bounds.messages, phase).toBeGreaterThan(bounds.height * 0.4);
         expect(bounds.composerBottom, phase).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(await surface.locator(".custodian__plugin-reference").count()).toBe(0);
@@ -373,7 +379,9 @@ suite.define(() => {
         .poll(() => composer.evaluate((element) => element.clientHeight))
         .toBeGreaterThan(80);
       await expectDockedEditor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "setting-unsent-draft.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "setting-unsent-draft.png") });
+      }
       await composer.press("Enter");
       await expect.poll(async () => (await userRequests()).length).toBe(1);
       const [settingRequest] = await userRequests();
@@ -422,7 +430,9 @@ suite.define(() => {
       await expect.poll(() => composer.inputValue()).toContain("Current value: <redacted>");
       expect(await composer.inputValue()).not.toContain("synthetic-should-never-enter-chat");
       await expectDockedEditor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "setting-redacted-draft.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "setting-redacted-draft.png") });
+      }
       expect(await userRequests()).toHaveLength(0);
       await composer.press("Enter");
       await expect.poll(async () => (await userRequests()).length).toBe(1);
