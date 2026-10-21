@@ -32,7 +32,7 @@ function catalog(agentId: string, label: string): ToolsCatalogResult {
         id: "test",
         label: "Test tools",
         source: "core",
-        tools: [{ id: label, label, description: label, source: "core" }],
+        tools: [{ id: label, label, description: label, source: "core", defaultProfiles: [] }],
       },
     ],
   };

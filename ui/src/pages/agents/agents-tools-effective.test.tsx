@@ -59,9 +59,10 @@ function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: Agents
   const currentGateway = gateway(snapshot(client));
   const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
   const listeners = new Set<() => void>();
+  const modelOverrides: Record<string, string | null> = {};
   // SAFETY: This fixture supplies the session state and subscription consumed by the Agents page.
   const sessions = {
-    state: { result: null, modelOverrides: {} },
+    state: { result: null, modelOverrides },
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
@@ -96,7 +97,7 @@ function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: Agents
     ...mounted,
     page,
     context,
-    sessions,
+    modelOverrides,
     request,
     save,
     client,
@@ -295,7 +296,7 @@ describe("Agents effective-tools read", () => {
       .mockReturnValue(next.promise);
     const view = mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Initial model preview"));
-    view.sessions.state.modelOverrides.main = "openai/gpt-5-mini";
+    view.modelOverrides.main = "openai/gpt-5-mini";
     view.publishSessions();
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     await waitForSolid(() => expect(preview(view.container)).toBeUndefined());
