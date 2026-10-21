@@ -94,31 +94,10 @@ async function fixture(state: NodePermissionRequest["state"], ids = ["screenReco
         });
         expect(button.hasAttribute("disabled")).toBe(false);
       });
+      expect(view.queryByRole("button", { name: "Try again" })).toBeNull();
     },
   };
 }
-
-it.each([
-  ["not-determined", "Grant Screen Recording"],
-  ["denied", "Open System Settings"],
-  ["restart-required", "Relaunch OpenClaw"],
-  ["stale-grant", "Open System Settings"],
-  ["disabled-in-openclaw", "Enable Computer Control"],
-] satisfies [NodePermissionRequest["state"], string][])(
-  "routes %s through the native owner and waits for observed access",
-  async (state, label) => {
-    const toggle = state === "disabled-in-openclaw";
-    const name = toggle ? "Computer Control" : "Screen Recording";
-    const f = await fixture(state, toggle ? ["computerControl"] : ["screenRecording"]);
-    await f.resolve(label);
-    expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
-    f.snapshot.permissions.entries = [{ id: "screenRecording", status: "granted" }];
-    f.snapshot.capabilities.computerControlEnabled = true;
-    f.publish();
-    f.view.getByRole("button", { name: "Try again" }).click();
-    expect(f.retry).toHaveBeenCalledExactlyOnceWith(`I granted ${name}, try again.`);
-  },
-);
 
 it("keeps a multi-permission request blocked until both the toggle and OS grants are effective", async () => {
   const f = await fixture("disabled-in-openclaw", [
@@ -158,7 +137,10 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
     { id: "screenRecording", status: "granted" },
   ];
   f.publish();
-  expect(f.view.getByRole("button", { name: "Try again" })).toBeTruthy();
+  f.view.getByRole("button", { name: "Try again" }).click();
+  expect(f.retry).toHaveBeenCalledExactlyOnceWith(
+    "I granted Computer Control, Accessibility, Screen Recording, try again.",
+  );
 });
 
 it("does not treat camera and location OS grants as enabling their OpenClaw toggles", async () => {
