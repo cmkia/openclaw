@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -556,13 +557,9 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
-      await page.locator(".sidebar-identity-card").click();
-      const retryConnection = page.locator(
-        '.sidebar-identity-menu [data-value="command:retry-connect"]',
-      );
-      await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
-      await gateway.closeLatest(1006, "synthetic failed attempt");
-      await retryConnection.click();
+      // Replace the client through its owner; automatic recovery has no manual Retry action.
+      await evaluateControlUiContext(page, ({ gateway: connection }) => connection.connect());
+      await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 2);
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");
 

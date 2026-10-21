@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -58,15 +59,21 @@ export function defineGatewayModuleBoundaryTests(
               .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
               .waitFor({ state: "visible" });
-            const retry = connectionStatus.getByRole("button", { name: /Retry now/ });
-            expect(await retry.isDisabled()).toBe(true);
-            // Offline mock sockets stay pending until explicitly settled. Keep
-            // backoff paused so this click exercises Retry after a failed attempt.
+            expect(await connectionStatus.getByRole("button", { name: /Retry now/ }).count()).toBe(
+              0,
+            );
+            // Settle the pending mock attempt, then let the owner's scheduled retry run.
             await gateway.closeLatest(1006, "synthetic failed attempt");
-            await expect.poll(() => retry.isDisabled()).toBe(false);
+            const retryDelay = await evaluateControlUiContext(page, ({ gateway: connection }) => {
+              const deadline = connection.snapshot.reconnectAt;
+              if (deadline === undefined) {
+                throw new Error("Expected a scheduled Gateway reconnect");
+              }
+              return Math.max(0, deadline - Date.now());
+            });
             const socketCount = await gateway.getSocketCount();
-            await retry.click();
-            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+            await page.clock.runFor(retryDelay + 1);
+            await expect.poll(() => gateway.getSocketCount()).toBe(socketCount + 1);
             await gateway.setOnline(true);
             await page.clock.resume();
             await waitForControlUiGatewayReady(page);

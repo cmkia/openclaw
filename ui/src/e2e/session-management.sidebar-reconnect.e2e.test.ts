@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -48,14 +49,17 @@ suite.define(() => {
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       const connectionStatus = footer.locator(".gateway-status");
       await connectionStatus
-        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
+        .locator(".gateway-status__label")
+        .getByText("Reconnecting… · 1 queued", { exact: true })
         .waitFor();
-      await gateway.closeLatest(1006, "synthetic failed attempt");
-      await connectionStatus.getByRole("button").click();
+      const socketCount = await gateway.getSocketCount();
+      await evaluateControlUiContext(page, ({ gateway: connection }) => connection.connect());
+      await expect.poll(() => gateway.getSocketCount()).toBe(socketCount + 1);
       await waitForControlUiGatewayReconnecting(page);
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       await connectionStatus
-        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
+        .locator(".gateway-status__label")
+        .getByText("Reconnecting… · 1 queued", { exact: true })
         .waitFor();
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       const queued = await takeControlUiScreenshotFrame(page, footer, [row, connectionStatus], {
@@ -129,9 +133,9 @@ suite.define(() => {
       for (const key of ownKeys) {
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor({ state: "visible" });
       }
-      await page.locator(".sidebar-identity-card").click();
-      await gateway.closeLatest(1006, "synthetic failed attempt");
-      await page.locator('.sidebar-identity-menu [data-value="command:retry-connect"]').click();
+      const socketCount = await gateway.getSocketCount();
+      await evaluateControlUiContext(page, ({ gateway: connection }) => connection.connect());
+      await expect.poll(() => gateway.getSocketCount()).toBe(socketCount + 1);
       await expect.poll(() => rows.count()).toBe(2);
       expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       expect(await sidebar.locator('[data-session-key="agent:main:foreign"]').count()).toBe(0);

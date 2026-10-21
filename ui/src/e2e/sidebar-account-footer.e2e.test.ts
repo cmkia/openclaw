@@ -230,7 +230,7 @@ suite.define(() => {
     });
   });
 
-  it("labels the lifecycle status on the account icon and retries through its menu", async () => {
+  it("labels the lifecycle status on the account icon and reconnects after automatic recovery stops", async () => {
     await withFooter(
       async ({ gateway, page, sidebar }) => {
         const footer = sidebar.locator(".sidebar-footer-bar");
@@ -291,30 +291,37 @@ suite.define(() => {
         await pauseVirtualClock(page);
         await gateway.setOnline(false);
         await page.clock.runFor(2_001);
-        // Offline mock sockets stay connecting until their attempt explicitly fails.
-        await gateway.closeLatest(1006, "synthetic failed attempt");
+
         await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
         await connectionStatus
-          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
+          .locator(".gateway-status__label")
+          .getByText("Reconnecting…", { exact: true })
           .waitFor();
-        expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
+        expect(await connectionStatus.getByRole("button").count()).toBe(0);
+        await identity.click();
+        expect(await sidebar.locator('[data-value="command:retry-connect"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
 
+        // A terminal rejection returns the standalone UI to its connection form.
+        const connectCount = await gateway.deferNext("connect");
+        await gateway.setOnline(true);
+        await page.clock.resume();
+        await gateway.waitForRequest("connect", { after: connectCount });
+        await gateway.rejectDeferred("connect", {
+          code: "INVALID_REQUEST",
+          message: "Synthetic protocol mismatch",
+          details: { code: "PROTOCOL_MISMATCH" },
+        });
+        const login = page.locator("openclaw-login-gate");
+        await login.locator('.login-gate__failure[data-kind="protocol-mismatch"]').waitFor();
+        expect(await sidebar.count()).toBe(0);
         const socketCount = await gateway.getSocketCount();
-        await footer
-          .getByRole("button", {
-            name: "Identity and app menu for Riley: Reconnecting…",
-            exact: true,
-          })
-          .click();
-        const retry = sidebar.locator('[data-value="command:retry-connect"]');
-        await retry.waitFor();
-        await retry.click();
+        await login.getByRole("button", { name: "Connect", exact: true }).click();
+
         await expect
           .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
           .toBeGreaterThan(socketCount);
 
-        await gateway.setOnline(true);
-        await page.clock.resume();
         await expectRailConnectionStatus(footer, "suspended", "Suspended");
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
         await expect
