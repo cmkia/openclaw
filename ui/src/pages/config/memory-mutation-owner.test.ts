@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
@@ -204,6 +205,8 @@ describe("Memory plugin mutation ownership", () => {
     try {
       await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
+      // Browser input events occupy separate turns, even while the first request is pending.
+      await nextTurn();
       toggleAddon(element, "Memory wiki", true);
       await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
       await waitForSolid(() => {
@@ -220,6 +223,59 @@ describe("Memory plugin mutation ownership", () => {
       first.resolve(committed("active-memory", false));
       second.resolve(committed("memory-wiki", true));
       await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
+  it("leaves the settings tab while an add-on mutation is pending", async () => {
+    const pending = createMemoryTestDeferred<unknown>();
+    const { element, context, runExternalMutation } = createMemoryPage({
+      configObject: {},
+      catalog: [createMemoryTestAddon("active-memory", true)],
+      setEnabled: () => pending.promise,
+    });
+    const router = createRouter({
+      routes: [definePage({ id: "memory", path: "/settings/memory/:tab?", component: () => null })],
+    });
+    Object.assign(context, { router });
+    await router.navigate(
+      "memory",
+      context,
+      {},
+      {
+        pathname: "/settings/memory/settings",
+        search: "",
+        hash: "",
+      },
+    );
+    const stop = router.subscribe(({ location }) => {
+      element.routeData = memoryTabRoute(
+        location.pathname.endsWith("/settings") ? "settings" : "overview",
+      );
+    });
+    mountMemoryPage(element);
+    try {
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
+      await router.navigate(
+        "memory",
+        context,
+        {},
+        {
+          pathname: "/settings/memory",
+          search: "",
+          hash: "",
+        },
+      );
+      await waitForSolid(() =>
+        expect(element.querySelector('[data-settings-view="memory/overview"]')).not.toBeNull(),
+      );
+    } finally {
+      pending.resolve(committed("active-memory", false));
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      stop();
       element.remove();
     }
   });
