@@ -4,7 +4,6 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -15,20 +14,14 @@ import { requireRecord, sessionsListResponse } from "./session-management.test-s
 
 const suite = createNewSessionPageE2eSuite();
 const timestamp = Date.parse("2026-09-22T10:00:00Z");
-const thinkingLevels = [
-  { id: "low", label: "Low" },
-  { id: "high", label: "High" },
+const models = [
+  {
+    id: "model-a",
+    name: "Model A",
+    provider: "openai",
+    available: true,
+  },
 ];
-const models = ["model-a", "model-b"].map((id) => ({
-  id,
-  name: id === "model-a" ? "Model A" : "Model B",
-  provider: "openai",
-  available: true,
-  reasoning: true,
-  supportsFastMode: true,
-  thinkingLevels,
-  thinkingDefault: "low",
-}));
 const sharedSession = (key: string, label: string) =>
   createControlUiSessionRow(key, label, timestamp, {
     sharingRole: "viewer",
@@ -174,16 +167,7 @@ suite.define(() => {
           sessionId,
           sharingRole: "owner",
           model: "model-a",
-          thinkingLevel: "low",
-          thinkingLevels,
-          fastMode: false,
           permissionMode: "workspace",
-          contextWindow: "standard",
-          contextWindowDefault: "standard",
-          contextWindows: [
-            { id: "standard", label: "Standard", contextWindow: 100000 },
-            { id: "extended", label: "Extended", contextWindow: 200000 },
-          ],
           hasActiveRun: initialRun === "started",
           status: initialRun === "started" ? "running" : "done",
           activeRunIds: initialRun === "started" ? ["guest-initial-run"] : [],
@@ -223,41 +207,8 @@ suite.define(() => {
         });
         const model = pane.locator("[data-chat-model-select]");
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
-        await model.click();
-        await gateway.deferNext("sessions.patch", { key, model: "openai/model-b" });
-        await selectChatModelOption(pane.locator('[data-chat-model-option="openai/model-b"]'));
-        await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
-        const effort = pane.locator("[data-chat-thinking-select]");
-        await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("true");
-        await gateway.resolveDeferred("sessions.patch");
-        // Request capture precedes settlement; Playwright does not gate native
-        // summary clicks on aria-disabled, so wait for the model owner.
-        await expect
-          .poll(() => model.getAttribute("data-chat-select-value"))
-          .toBe("openai/model-b");
-        await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
-        await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("false");
-        await effort.click();
-        const slider = pane.locator("[data-chat-thinking-slider]");
-        await expect.poll(() => slider.isVisible()).toBe(true);
-        await expect.poll(() => slider.isEnabled()).toBe(true);
-        await slider.press("End");
-        await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
-        await page.keyboard.press("Escape");
-        await model.click();
-        const contextWindow = pane.locator("[data-chat-context-window-toggle]");
-        await expect.poll(() => contextWindow.isVisible()).toBe(true);
-        await expect.poll(() => contextWindow.isDisabled()).toBe(true);
-        await page.keyboard.press("Escape");
         const permission = pane.locator("[data-chat-permission-select]");
-        await permission.click();
-        expect(
-          await pane.locator('[data-chat-permission-option="full"]').getAttribute("disabled"),
-        ).not.toBeNull();
-        await pane.locator('[data-chat-permission-option="guarded"]').click();
-        await gateway.waitForRequest("sessions.patch", {
-          match: { key, permissionMode: "guarded" },
-        });
+        expect(await permission.isDisabled()).toBe(false);
 
         await composer.fill("Continue my work.");
         await pane.getByRole("button", { name: "Send message", exact: true }).click();

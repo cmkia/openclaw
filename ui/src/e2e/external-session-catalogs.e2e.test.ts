@@ -187,6 +187,12 @@ suite.define(() => {
           sourceHomeId: `${agentId}-home`,
         });
         const owners = ["main", "other"];
+        const ownerCases = (response: (agentId: string) => unknown, withSource = false) => ({
+          cases: owners.map((agentId) => ({
+            match: withSource ? ownerSource(agentId) : { agentId },
+            response: response(agentId),
+          })),
+        });
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.6-luna",
           featureMethods: [...featureMethods, "sessions.catalog.continue"],
@@ -197,44 +203,36 @@ suite.define(() => {
               scope: "agent",
               agents: owners.map((id) => ({ id, name: id === "main" ? "Main" : "Other" })),
             },
-            "agent.identity.get": {
-              cases: owners.map((agentId) => ({
-                match: { agentId },
-                response: { agentId, name: agentId === "main" ? "Main" : "Other", avatar: "" },
-              })),
-            },
-            "sessions.catalog.list": {
-              cases: owners.map((agentId) => ({
-                match: { agentId },
-                response: {
-                  catalogs: [
-                    makeCatalog(
-                      source.catalogId,
-                      "Native fixture",
-                      source.threadId,
-                      `${agentId} native thread`,
-                      { hostId: source.hostId, label: "Dev Box", kind: "node" },
-                      { canContinue: true, sourceHomeId: `${agentId}-home` },
-                    ),
-                  ],
-                },
-              })),
-            },
-            "sessions.catalog.read": {
-              cases: owners.map((agentId) => ({
-                match: ownerSource(agentId),
-                response: {
-                  ...source,
-                  items: [{ type: "agentMessage", text: `${agentId} native transcript` }],
-                },
-              })),
-            },
-            "sessions.catalog.continue": {
-              cases: owners.map((agentId) => ({
-                match: ownerSource(agentId),
-                response: { sessionKey: `agent:${agentId}:adopted-native` },
-              })),
-            },
+            "agent.identity.get": ownerCases((agentId) => ({
+              agentId,
+              name: agentId === "main" ? "Main" : "Other",
+              avatar: "",
+            })),
+            "sessions.catalog.list": ownerCases((agentId) => ({
+              catalogs: [
+                makeCatalog(
+                  source.catalogId,
+                  "Native fixture",
+                  source.threadId,
+                  `${agentId} native thread`,
+                  { hostId: source.hostId, label: "Dev Box", kind: "node" },
+                  { canContinue: true, sourceHomeId: `${agentId}-home` },
+                ),
+              ],
+            })),
+            "sessions.catalog.read": ownerCases(
+              (agentId) => ({
+                ...source,
+                items: [{ type: "agentMessage", text: `${agentId} native transcript` }],
+              }),
+              true,
+            ),
+            "sessions.catalog.continue": ownerCases(
+              (agentId) => ({
+                sessionKey: `agent:${agentId}:adopted-native`,
+              }),
+              true,
+            ),
           },
         });
         const activePane = page.locator(

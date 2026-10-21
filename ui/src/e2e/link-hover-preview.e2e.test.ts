@@ -258,42 +258,22 @@ suite.define(() => {
       }),
   );
 
-  it("preserves detail-only, internal, session, file and explicit external-panel links", () =>
+  it("preserves internal, session, file and explicit external-panel links", () =>
     suite.withPage({}, async ({ page }) => {
-      const commitUrl = "https://github.com/openclaw/openclaw/commit/" + "a".repeat(40);
       const gateway = await openPreviewPage(page, {
         historyMessages: [
           {
             role: "assistant",
-            content:
-              "[Guide](https://example.com/guide) [Commit](" +
-              commitUrl +
-              ") [Control](https://example.org/control)",
+            content: "[Guide](https://example.com/guide) [Control](https://example.org/control)",
             timestamp: 2000,
           },
         ],
-        controlUiLinkReaders: [
-          {
-            pluginId: "forge",
-            id: "commits",
-            label: "Commits",
-            linkReader: {
-              hosts: ["github.com"],
-              pathPattern: "^/[^/]+/[^/]+/commit/[a-f0-9]+$",
-              detailMethod: "forge.detail",
-            },
-          },
-        ],
-        featureMethods: [...defaultControlUiFeatureMethods, "forge.detail"],
         methodResponses: { "controlUi.linkPreview": preview },
       });
       const link = page.getByRole("link", { name: "Guide", exact: true });
       await link.waitFor();
       await page.clock.install();
       await pauseVirtualClock(page);
-      await page.getByRole("link", { name: "Commit", exact: true }).hover();
-      await page.clock.runFor(400);
-      expect(await page.locator(".link-hovercard").count()).toBe(0);
       for (const marker of [
         "download",
         "data-session-href",

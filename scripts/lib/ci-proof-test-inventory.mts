@@ -4992,7 +4992,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/dashboard-fullscreen.e2e.test.ts",
   "ui/src/e2e/dashboard-website.e2e.test.ts",
   "ui/src/e2e/dashboards-list-demand.e2e.test.ts",
-  "ui/src/e2e/debug-overlay-position.e2e.test.ts",
   "ui/src/e2e/desktop-keyboard.e2e.test.ts",
   "ui/src/e2e/device-token-reconnect.e2e.test.ts",
   "ui/src/e2e/github-panel.e2e.test.ts",

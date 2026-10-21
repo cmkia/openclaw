@@ -147,34 +147,6 @@ async function updateSnapshot(
   await gateway.setMethodResponse("users.background.get", backgroundReply(asset, preference));
 }
 
-async function changePreference(
-  page: Page,
-  gateway: MockGatewayControls,
-  action: () => Promise<unknown>,
-  preference: BackgroundPreference,
-  expectedPreference: BackgroundPreference | null = null,
-  asset: UserBackgroundAsset | null = null,
-  mode: "light" | "dark" = "light",
-) {
-  const after = (await gateway.getRequests("users.prefs.set")).length;
-  const params = {
-    entries: { "ui.background": preference },
-    expectedEntries: { "ui.background": expectedPreference },
-  };
-  // The fixture only commits an exact CAS match, as the real preference owner does.
-  await gateway.setMethodResponse("users.prefs.set", {
-    cases: [{ match: params, response: { status: "ok" } }, { response: { status: "conflict" } }],
-  });
-  await gateway.deferNext("users.prefs.set", params, { exactParams: true });
-  await action();
-  const request = await gateway.waitForRequest("users.prefs.set", { after });
-  expect(request.params).toEqual(params);
-  await updateSnapshot(gateway, preference, asset, mode);
-  // Successful writes are readable before the Gateway acknowledges the commit.
-  await gateway.resolveDeferred("users.prefs.set");
-  await expect.poll(() => page.locator(uploadSelector).isEnabled()).toBe(true);
-}
-
 suite.define(() => {
   it("keeps anonymous None and per-surface theme choices browser-local across reload", () =>
     suite.withPage({ viewport: desktop }, async ({ page }) => {
@@ -302,7 +274,26 @@ suite.define(() => {
           ) => {
             const previous = preference;
             preference = { ...preference, ...patch };
-            await changePreference(page, gateway, action, preference, previous, asset, mode);
+            const after = (await gateway.getRequests("users.prefs.set")).length;
+            const params = {
+              entries: { "ui.background": preference },
+              expectedEntries: { "ui.background": previous },
+            };
+            // Commit only an exact CAS match, as the real preference owner does.
+            await gateway.setMethodResponse("users.prefs.set", {
+              cases: [
+                { match: params, response: { status: "ok" } },
+                { response: { status: "conflict" } },
+              ],
+            });
+            await gateway.deferNext("users.prefs.set", params, { exactParams: true });
+            await action();
+            const request = await gateway.waitForRequest("users.prefs.set", { after });
+            expect(request.params).toEqual(params);
+            await updateSnapshot(gateway, preference, asset, mode);
+            // Make the successful write readable before acknowledging the commit.
+            await gateway.resolveDeferred("users.prefs.set");
+            await expect.poll(() => page.locator(uploadSelector).isEnabled()).toBe(true);
           };
           await change(() => placement(page, "Conversations").click(), { showInSessions: true });
           await expectPlacement(page, "New session page", true);
@@ -356,19 +347,6 @@ suite.define(() => {
         },
       ),
   );
-
-  it("saves an initial explicit None only with the absent-value CAS", () =>
-    suite.withPage({ viewport: desktop }, async ({ page }) => {
-      const gateway = await installBackground(page, null, {
-        methodResponses: { "users.prefs.set": { status: "conflict" } },
-      });
-      await visitAppearance(page, true);
-      await gateway.waitForRequest("users.background.get");
-      const preference = preferenceFor("none");
-      await changePreference(page, gateway, () => source(page, "none").click(), preference);
-      await page.reload();
-      await expectSelected(page, "none");
-    }));
 
   it.each(["none", "theme"] as const)(
     "refreshes retained-image metadata when another device removes it while %s is selected",

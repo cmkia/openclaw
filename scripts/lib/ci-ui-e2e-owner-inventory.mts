@@ -1122,11 +1122,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/devices/view.types.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/debug-overlay-position.e2e.test.ts",
-    ["debug"],
-    ["ui/src/pages/devices/view.types.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/debug-tray-polling.e2e.test.ts",
     ["debug"],
     ["ui/src/pages/devices/view.types.ts"],

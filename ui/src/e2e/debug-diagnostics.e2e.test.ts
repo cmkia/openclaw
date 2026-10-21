@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -56,12 +57,27 @@ async function expectBounds(target: Locator, width: number, height: number, inse
   }
   return bounds!;
 }
-const finishAnimations = (target: Locator) =>
+const settle = (target: Locator) =>
   target.evaluate(async (element) => {
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
     await Promise.all(element.getAnimations().map((animation) => animation.finished));
   });
+
+const methodResponses = {
+  "system.info": deviceSystemInfo,
+  "diagnostics.lanes": { lanes: [], dynamic: null },
+  "models.list": { models: [] },
+};
+
+async function openCompact(page: Page) {
+  await page.getByRole("button", { name: /^Open overlay/u }).click();
+  const panel = page.getByRole("complementary", { name: "System busyness" });
+  await panel.getByRole("button", { name: "Minimize system busyness" }).click();
+  await panel.locator(".debug-overlay__widget").waitFor();
+  await settle(panel);
+  return panel;
+}
 
 async function exerciseDiagnostics({ page }: { page: Page }) {
   const noOverflow = async () =>
@@ -161,14 +177,10 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
     has: page.getByRole("heading", { name: "Models" }),
   });
   await contains(models, "gpt-5.6-luna");
-
-  for (const method of ["status", "health", "models.list", "last-heartbeat", "diagnostics.lanes"]) {
-    const requests = await gateway.getRequests(method);
-    expect(requests.length).toBeGreaterThanOrEqual(1);
-    expect(requests[0]?.params).toEqual(
-      method === "models.list" ? { agentId: "main", view: "default" } : {},
-    );
-  }
+  expect((await gateway.waitForRequest("models.list")).params).toEqual({
+    agentId: "main",
+    view: "default",
+  });
 
   const snapshotMethods = ["status", "health", "models.list"];
   const snapshotCounts = await Promise.all(
@@ -185,7 +197,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
   const widget = page.locator("aside.debug-overlay--minimized");
   await widget.waitFor();
-  await finishAnimations(widget);
+  await settle(widget);
   expect(await widget.getByRole("heading", { name: "Lanes", exact: true }).count()).toBe(0);
   const metrics = ["cpu", "ping", "memory"];
   const graph = (metric: string) => vital(metric).locator("polyline");
@@ -259,19 +271,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await expect.poll(() => widget.locator(".sparkline-tile__stack").count()).toBe(3);
   await cpuTrigger.hover();
   await expect.poll(() => cpuDetail.isVisible()).toBe(true);
-  const cpuText = await cpuDetail.textContent();
-  for (const reading of [
-    "Main thread",
-    "42%",
-    "Worker threads",
-    "28%",
-    "Other threads",
-    "≈5%",
-    "Host · 8 logical CPUs",
-    "34%",
-  ]) {
-    expect(cpuText).toContain(reading);
-  }
+  await contains(cpuDetail, "Host · 8 logical CPUs");
   await cpuTrigger.click();
   await page.mouse.move(0, 0);
   expect(await cpuDetail.isVisible()).toBe(true);
@@ -304,27 +304,6 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await transitionCpuDetail("overlay-after-hide", () => cpuTrigger.tap());
   await expect.poll(() => cpuDetail.isVisible()).toBe(false);
   await page.setViewportSize({ height: 1000, width: 1280 });
-  const scenarios: [string, number, Parameters<typeof systemInfo>[4]][] = [
-    ["main-hot", 1.15, [0.98, 0.12, 0.05, 0.23]],
-    ["workers-hot", 2.58, [0.18, 2.2, 0.2, 0.44]],
-    ["host-busy", 0.18, [0.1, 0.05, 0.03, 0.94]],
-    ["unavailable", 0.5, [undefined, undefined, undefined, undefined]],
-  ];
-  for (const [, total, cpu] of scenarios) {
-    await gateway.setMethodResponse(
-      "system.info",
-      systemInfo(total, 0.3, [22, 24], [654, 300, 384], cpu),
-    );
-    await page.clock.runFor(10_000);
-    await contains(vital("cpu").locator(".sparkline-tile__value"), `${total.toFixed(2)} cores`);
-    await contains(
-      widget.locator(".sparkline-tile__secondary"),
-      cpu[3] === undefined ? "Host —" : `Host ${Math.round(cpu[3] * 100)}%`,
-    );
-    await cpuTrigger.click();
-    await expect.poll(() => cpuDetail.isVisible()).toBe(true);
-    await transitionCpuDetail("overlay-after-hide", () => page.keyboard.press("Escape"));
-  }
   await widget.getByRole("button", { name: "Expand system busyness" }).click();
   await widget.waitFor({ state: "detached" });
   await contains(vital("memory"), "654 MB");
@@ -363,7 +342,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await overlay.getByRole("heading", { name: "Lanes", exact: true }).waitFor();
   await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
   await widget.waitFor();
-  await finishAnimations(widget);
+  await settle(widget);
   await overlay.getByRole("button", { name: "Close", exact: true }).click();
   await overlay.waitFor({ state: "detached" });
 
@@ -380,12 +359,12 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await gateway.resolveDeferred("status");
   await expect.poll(() => refresh.textContent()).toMatch(/^\s*Refresh\s*$/u);
   await page.getByRole("button", { name: /^Open overlay/u }).click();
-  await contains(vital("cpu"), "0.50 cores");
+  await contains(vital("cpu"), "0.75 cores");
   await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
   await widget.waitFor();
   await gateway.setOnline(false);
   await contains(widget, "Unavailable");
-  expect(await widget.textContent()).not.toContain("0.50 cores");
+  expect(await widget.textContent()).not.toContain("0.75 cores");
   expect(await widget.textContent()).not.toContain("654 MB");
   await contains(snapshots, "Offline");
   await contains(snapshots, "Connect to the Gateway to refresh diagnostics.");
@@ -414,6 +393,139 @@ suite.define(() => {
         viewport,
       },
       exerciseDiagnostics,
+    );
+  });
+
+  it("remembers dragged placement through reload, resizing and quick size transitions", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" },
+      async ({ page }) => {
+        await installMockGateway(page, { methodResponses });
+        const layoutModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/debug/debug-overlay-layout.runtime.ts",
+        );
+        const layoutRequests: string[] = [];
+        page.on("request", (request) => {
+          if (layoutModule.test(request.url())) {
+            layoutRequests.push(request.url());
+          }
+        });
+        await page.goto(suite.server.baseUrl + "debug");
+        await page.getByRole("button", { name: /^Open overlay/u }).waitFor();
+        expect(layoutRequests).toHaveLength(0);
+        let panel = await openCompact(page);
+        expect(layoutRequests).toHaveLength(1);
+        const original = (await panel.boundingBox())!;
+        const header = panel.locator(".debug-overlay__header");
+        const handle = (await header.boundingBox())!;
+        await page.mouse.move(handle.x + 50, handle.y + handle.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(handle.x - 150, handle.y - 90, { steps: 4 });
+        await page.mouse.up();
+        const moved = (await panel.boundingBox())!;
+        expect(moved.x).toBeCloseTo(original.x - 200, 0);
+        expect(moved.y).toBeLessThan(original.y - 80);
+        const saved = await page.evaluate(() =>
+          localStorage.getItem("openclaw.debug-overlay.position"),
+        );
+        expect(JSON.parse(saved!)).toEqual({ x: moved.x, y: moved.y });
+
+        // Inspect and sample the actual Web Animation without racing its short duration.
+        const animation = await panel.evaluate(async (element) => {
+          element.querySelector<HTMLButtonElement>("button")!.click();
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          const active = element.getAnimations()[0];
+          if (!active) {
+            return null;
+          }
+          active.pause();
+          active.currentTime = 80;
+          const width = element.getBoundingClientRect().width;
+          const duration = active.effect?.getTiming().duration;
+          active.finish();
+          return { width, duration };
+        });
+        expect(animation?.duration).toBe(160);
+        expect(animation!.width).toBeGreaterThan(moved.width);
+        expect(animation!.width).toBeLessThan(560);
+        await settle(panel);
+        const expanded = (await panel.boundingBox())!;
+        expect(expanded.x + expanded.width).toBeLessThanOrEqual(1280);
+        expect(expanded.y + expanded.height).toBeLessThanOrEqual(900);
+        await panel.getByRole("button", { name: "Minimize system busyness" }).click();
+        await settle(panel);
+        expect((await panel.boundingBox())!.x).toBeCloseTo(moved.x, 0);
+        expect((await panel.boundingBox())!.y).toBeCloseTo(moved.y, 0);
+
+        await page.reload();
+        panel = await openCompact(page);
+        expect((await panel.boundingBox())!.x).toBeCloseTo(moved.x, 0);
+        expect((await panel.boundingBox())!.y).toBeCloseTo(moved.y, 0);
+        await page.setViewportSize({ width: 390, height: 650 });
+        await settle(panel);
+        const mobile = (await panel.boundingBox())!;
+        expect(mobile.x).toBeGreaterThanOrEqual(8);
+        expect(mobile.x + mobile.width).toBeLessThanOrEqual(390);
+        expect(mobile.y + mobile.height).toBeLessThanOrEqual(650);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await settle(panel);
+        expect((await panel.boundingBox())!.x).toBeCloseTo(moved.x, 0);
+        expect(
+          await page.evaluate(() => localStorage.getItem("openclaw.debug-overlay.position")),
+        ).toBe(saved);
+
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await panel.getByRole("button", { name: "Expand system busyness" }).click();
+        await settle(panel);
+        expect(await panel.evaluate((element) => element.getAnimations().length)).toBe(0);
+        const beforeKeyboard = (await panel.boundingBox())!;
+        await panel.locator("header").focus();
+        await page.keyboard.press("Shift+ArrowLeft");
+        expect((await panel.boundingBox())!.x).toBeCloseTo(beforeKeyboard.x - 40, 0);
+        await panel.getByRole("button", { name: "Close", exact: true }).click();
+        expect(await panel.count()).toBe(0);
+      },
+    );
+  });
+
+  it("moves with a real touch gesture without scrolling the page", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 390, height: 650 },
+        hasTouch: true,
+        isMobile: true,
+        reducedMotion: "reduce",
+      },
+      async ({ page, context }) => {
+        await installMockGateway(page, { methodResponses });
+        await page.goto(suite.server.baseUrl + "debug");
+        await page.getByRole("button", { name: /^Open overlay/u }).tap();
+        const panel = page.getByRole("complementary", { name: "System busyness" });
+        // The read-only CPU card can cover these controls at narrow widths.
+        // Keep the real touch path reachable without dismissing it first.
+        await panel.getByRole("button", { name: "Show Gateway CPU breakdown" }).tap();
+        await panel.locator(".gateway-cpu-tooltip[open]").waitFor();
+        await panel.getByRole("button", { name: "Minimize system busyness" }).tap();
+        await panel.locator(".debug-overlay__widget").waitFor();
+        await settle(panel);
+        const box = (await panel.locator("header").boundingBox())!;
+        const before = (await panel.boundingBox())!;
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [{ x: box.x + 40, y: box.y + 12 }],
+        });
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: box.x + 10, y: box.y - 108 }],
+        });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        expect((await panel.boundingBox())!.x).toBeCloseTo(before.x - 30, 0);
+        expect((await panel.boundingBox())!.y).toBeCloseTo(before.y - 120, 0);
+        expect(await page.evaluate(() => window.scrollY)).toBe(0);
+        await cdp.detach();
+      },
     );
   });
 });

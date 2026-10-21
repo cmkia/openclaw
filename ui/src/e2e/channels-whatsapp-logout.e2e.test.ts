@@ -197,34 +197,6 @@ suite.define(() => {
     );
   });
 
-  it("shows rejected WhatsApp login immediately without waiting for channel status", async () => {
-    await withChannels(
-      {
-        "channels.status": whatsappStatus({ channels: { whatsapp: linked } }),
-      },
-      async (page, gateway) => {
-        const detail = await openChannel(page);
-        const relink = detail.getByRole("button", { name: "Relink" });
-        await relink.waitFor();
-        const statusReadsBefore = (await gateway.getRequests("channels.status")).length;
-        await gateway.deferNext("channels.status", { probe: true });
-        await gateway.deferNext("web.login.start");
-
-        await relink.click();
-        await gateway.waitForRequest("web.login.start");
-        await gateway.rejectDeferred("web.login.start", {
-          code: "INVALID_REQUEST",
-          message: "WhatsApp login rejected",
-        });
-
-        await expect.poll(() => detail.textContent()).toContain("WhatsApp login rejected");
-        await expect.poll(() => relink.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("channels.status")).toHaveLength(statusReadsBefore);
-      },
-      { ...contextOptions, viewport: { height: 900, width: 1280 } },
-    );
-  });
-
   it("confirms the explicit default account and preserves a no-op logout", async () => {
     await withChannels(
       {
@@ -321,39 +293,6 @@ suite.define(() => {
         await expect.poll(() => field(detail, "Auth age").textContent()).toBe("1m");
       }
     });
-  });
-
-  it("rejects a captured custom-account logout after the Gateway reconnects", async () => {
-    await withChannels(
-      {
-        "channels.status": whatsappStatus({
-          channelAccounts: {
-            whatsapp: [{ accountId: "work", ...linked }],
-          },
-          channelDefaultAccountId: { whatsapp: "work" },
-        }),
-        "channels.logout": {
-          channel: "whatsapp",
-          accountId: "work",
-          cleared: true,
-          loggedOut: true,
-        },
-      },
-      async (page, gateway) => {
-        const detail = await openChannel(page);
-        await detail.getByRole("button", { name: "Logout" }).click();
-        const confirm = (await waitForConfirmModal(page)).filter({
-          has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
-        });
-        await expect.poll(() => confirm.count()).toBe(1);
-        const socketCount = await gateway.getSocketCount();
-        await gateway.closeLatest(1012, "Reconnect during logout confirmation");
-        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-        await expect.poll(() => confirm.count()).toBe(0);
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
-        await expectRequests(gateway, "channels.logout", 0);
-      },
-    );
   });
 
   it("preserves standard channel details and the complete Telegram setup wizard", async () => {

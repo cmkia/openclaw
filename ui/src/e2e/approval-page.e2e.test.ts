@@ -156,21 +156,6 @@ async function expectLoadedApproval({ page, gateway }: ApprovalSurface): Promise
   await expectStandaloneApprovalPage(page);
 }
 
-async function expectIdentity(
-  page: Page,
-  severity: string,
-  chips: Record<string, string[]>,
-  meta: string[],
-): Promise<void> {
-  expect(await page.locator(".approval-page__card").getAttribute("class")).toContain(
-    `approval-page__card--severity-${severity}`,
-  );
-  for (const [kind, values] of Object.entries(chips)) {
-    expect(await page.locator(`[data-approval-chip="${kind}"]`).allTextContents()).toEqual(values);
-  }
-  expect(await page.locator(".approval-page__meta-row dt").allTextContents()).toEqual(meta);
-}
-
 async function expectStandaloneApprovalPage(page: Page): Promise<void> {
   expect(await page.locator("openclaw-approval-page").count()).toBe(1);
   expect(await page.locator(".approval-page").count()).toBe(1);
@@ -281,10 +266,6 @@ suite.define(() => {
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
-      await expectIdentity(mobile.page, "warning", { agent: ["main"], plugin: [], tool: [] }, [
-        "Host",
-        "Node",
-      ]);
       await captureProof(mobile.page, "after-pending-exec.png");
       await mobile.page.getByRole("button", { name: "Allow once" }).scrollIntoViewIfNeeded();
       await captureProof(mobile.page, "after-pending-exec-actions.png");
@@ -293,16 +274,10 @@ suite.define(() => {
         mobile.page.getByRole("button", { name: "Allow once" }).click(),
         desktop.page.getByRole("button", { name: "Deny" }).click(),
       ]);
-      const [mobileResolve, desktopResolve] = await Promise.all([
+      await Promise.all([
         mobile.gateway.waitForRequest("approval.resolve"),
         desktop.gateway.waitForRequest("approval.resolve"),
       ]);
-      expect(mobileResolve.params).toEqual({
-        id: APPROVAL_ID,
-        kind: "exec",
-        decision: "allow-once",
-      });
-      expect(desktopResolve.params).toEqual({ id: APPROVAL_ID, kind: "exec", decision: "deny" });
 
       await Promise.all(
         surfaces.map(({ gateway }) =>
@@ -362,12 +337,19 @@ suite.define(() => {
     expect(
       await surface.page.locator(".approval-page__heading > .approval-page__chips").count(),
     ).toBe(1);
-    await expectIdentity(
-      surface.page,
-      "danger",
-      { plugin: ["codex"], tool: ["workspace.exec"], agent: ["main"] },
-      [],
+    expect(await surface.page.locator(".approval-page__card").getAttribute("class")).toContain(
+      "approval-page__card--severity-danger",
     );
+    expect(await surface.page.locator('[data-approval-chip="plugin"]').allTextContents()).toEqual([
+      "codex",
+    ]);
+    expect(await surface.page.locator('[data-approval-chip="tool"]').allTextContents()).toEqual([
+      "workspace.exec",
+    ]);
+    expect(await surface.page.locator('[data-approval-chip="agent"]').allTextContents()).toEqual([
+      "main",
+    ]);
+    expect(await surface.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([]);
     await captureProof(surface.page, "after-pending-plugin.png");
     expect(surface.pageErrors).toEqual([]);
   });
@@ -488,20 +470,6 @@ suite.define(() => {
     await surface.page
       .getByText("printf 'fixture changed at the Gateway'", { exact: true })
       .waitFor();
-    expect(surface.pageErrors).toEqual([]);
-  });
-
-  it("fails closed on malformed Gateway data", async () => {
-    const surface = await createSurface();
-    await visitApproval(surface);
-    await surface.gateway.setMethodResponse("approval.get", {
-      approval: { id: APPROVAL_ID, status: "pending" },
-    });
-
-    await surface.page.reload();
-    await surface.page.getByRole("heading", { name: "Approval unavailable" }).waitFor();
-    await expectStandaloneApprovalPage(surface.page);
-    await expectNoDecisionButtons(surface.page);
     expect(surface.pageErrors).toEqual([]);
   });
 

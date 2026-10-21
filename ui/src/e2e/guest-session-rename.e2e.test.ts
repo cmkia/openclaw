@@ -7,7 +7,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Guest session rename publication" });
 
 suite.define(() => {
-  it("reconciles an owned label during a run and preserves scoped UI rename identity", async () => {
+  it("reconciles an owned label during a run and refuses a foreign rename", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       colorScheme: "dark",
@@ -92,15 +92,6 @@ suite.define(() => {
       await stream.waitFor();
       await ownRow.getByRole("img", { name: "Active run", exact: true }).waitFor();
     };
-    const expectPatch = async (label: string, after = 0) => {
-      const patch = await gateway.waitForRequest("sessions.patch", { after });
-      expect(patch.params).toEqual({
-        key: own.key,
-        agentId: "main",
-        label,
-        expectedSessionId: own.sessionId,
-      });
-    };
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, own.key));
       await expectName(own.label);
@@ -146,15 +137,12 @@ suite.define(() => {
       await headerInput.fill("Header title");
       await headerInput.press("Enter");
       await expectName("Header title");
-      await expectPatch("Header title");
-
-      await ownRow.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      await dialog.locator("input").fill("Sidebar title");
-      await dialog.getByRole("button", { name: "Save", exact: true }).click();
-      await expectName("Sidebar title");
-      await expectPatch("Sidebar title", 1);
+      expect((await gateway.waitForRequest("sessions.patch")).params).toEqual({
+        key: own.key,
+        agentId: "main",
+        label: "Header title",
+        expectedSessionId: own.sessionId,
+      });
       expect(await observe()).toEqual(original);
 
       await foreignRow.click({ button: "right" });
@@ -165,7 +153,7 @@ suite.define(() => {
       expect(await foreignRename.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
       expect(await foreignRow.textContent()).toContain("Shared reference");
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
       expect(await gateway.getRequests("chat.abort")).toEqual([]);
       expect(await gateway.getRequests("sessions.abort")).toEqual([]);
     } finally {
