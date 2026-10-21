@@ -521,8 +521,8 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
         async (execution, source) => {
           const receipt = await execution.runExisting(source, async (scope) => ({
             value: await preparation.handoff(
-              // SAFETY: The paired module owns the captured command/result contract.
               () =>
+                // SAFETY: The paired module owns the captured command/result contract.
                 executePreparedSqliteWorkerCommand(scope, captured, commandOptions) as Promise<
                   Operations[Key]["output"]
                 >,

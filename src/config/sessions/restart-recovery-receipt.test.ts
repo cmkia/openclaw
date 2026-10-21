@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import {
   beginRestartRecoveryTerminalDelivery as begin,
@@ -131,8 +132,24 @@ describe("restart recovery terminal delivery receipt", () => {
       await seed(claim);
       const initial = read()!;
       const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+      const executePrepared = workerStore.executePreparedSqliteWorkerCommand;
       const commands: string[] = [];
       let changed = false;
+      const preparedObserver = vi
+        .spyOn(workerStore, "executePreparedSqliteWorkerCommand")
+        .mockImplementation((worker, command, options) => {
+          commands.push(String(command.type));
+          if (command.type === "session.actor.deliveryPending" && !changed) {
+            changed = true;
+            replaceSessionEntrySync(scope(), {
+              ...initial,
+              ...(change === "metadata"
+                ? { label: "new metadata" }
+                : { restartRecoveryDeliverySourceRunId: "new-source" }),
+            });
+          }
+          return executePrepared(worker, command, options);
+        });
       const observer = vi
         .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
         .mockImplementation((...args) => {
@@ -145,22 +162,14 @@ describe("restart recovery terminal delivery receipt", () => {
             runExisting: (source, run, options) =>
               owner.runExisting(
                 source,
-                (worker) =>
-                  run({
-                    execute(command, commandOptions) {
-                      commands.push(command.type);
-                      if (command.type === "session.actor.deliveryPending" && !changed) {
-                        changed = true;
-                        replaceSessionEntrySync(scope(), {
-                          ...initial,
-                          ...(change === "metadata"
-                            ? { label: "new metadata" }
-                            : { restartRecoveryDeliverySourceRunId: "new-source" }),
-                        });
-                      }
-                      return worker.execute(command, commandOptions);
-                    },
-                  }),
+                (worker) => {
+                  const execute = worker.execute;
+                  vi.spyOn(worker, "execute").mockImplementation((command, commandOptions) => {
+                    commands.push(command.type);
+                    return execute(command, commandOptions);
+                  });
+                  return run(worker);
+                },
                 options,
               ),
           };
@@ -179,6 +188,7 @@ describe("restart recovery terminal delivery receipt", () => {
         }
       } finally {
         observer.mockRestore();
+        preparedObserver.mockRestore();
       }
     },
   );

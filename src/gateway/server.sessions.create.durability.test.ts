@@ -1,5 +1,7 @@
 import { once } from "node:events";
+import { deserialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
@@ -43,49 +45,33 @@ const turnBoundary = vi.hoisted(() => ({
   afterPrepare: undefined as (() => void) | undefined,
   afterCommit: undefined as (() => void) | undefined,
 }));
-vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
+vi.mock("../infra/sqlite-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-worker-store.js")>();
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const committing =
-                    (command.type === "session.actor.acceptInput" ||
-                      command.type === "session.actor.adoptRun") &&
-                    typeof command.input === "object" &&
-                    command.input !== null &&
-                    "turn" in command.input &&
-                    command.input.turn !== undefined;
-                  if (!committing) {
-                    return worker.execute(command, commandOptions);
-                  }
-                  turnBoundary.committing = true;
-                  try {
-                    turnBoundary.afterPrepare?.();
-                    const result = await worker.execute(command, commandOptions);
-                    turnBoundary.afterCommit?.();
-                    return result;
-                  } finally {
-                    turnBoundary.committing = false;
-                  }
-                },
-              }),
-            options,
-          ),
-      };
+    executePreparedSqliteWorkerCommand: async (
+      ...args: Parameters<typeof actual.executePreparedSqliteWorkerCommand>
+    ) => {
+      const [, command] = args;
+      const decoded: unknown = deserialize(command.payload);
+      const committing =
+        (command.type === "session.actor.acceptInput" ||
+          command.type === "session.actor.adoptRun") &&
+        isRecord(decoded) &&
+        isRecord(decoded.input) &&
+        decoded.input.turn !== undefined;
+      if (!committing) {
+        return actual.executePreparedSqliteWorkerCommand(...args);
+      }
+      turnBoundary.committing = true;
+      try {
+        turnBoundary.afterPrepare?.();
+        const result = await actual.executePreparedSqliteWorkerCommand(...args);
+        turnBoundary.afterCommit?.();
+        return result;
+      } finally {
+        turnBoundary.committing = false;
+      }
     },
   };
 });

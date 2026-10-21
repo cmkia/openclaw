@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { deserialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type MockResult } from "vitest";
@@ -46,9 +47,31 @@ function observeInputAdmission(
 ) {
   const actor = kind !== "legacy";
   const original = workerStore.runSqliteWorkerStoreOperation;
+  const executePrepared = workerStore.executePreparedSqliteWorkerCommand;
+  type CommandHook = <Value>(
+    command: { type: PropertyKey; input: unknown },
+    execute: () => Promise<Value>,
+  ) => Promise<Value>;
+  const commandHooks = new WeakMap<object, CommandHook>();
   const counts = { attempts: 0, committed: 0, faults: 0 };
   let capturingInput = false;
   const observers: { mockRestore(): unknown }[] = [];
+  observers.push(
+    vi
+      .spyOn(workerStore, "executePreparedSqliteWorkerCommand")
+      .mockImplementation((scope, command, options) => {
+        const hook = commandHooks.get(scope);
+        if (!hook) {
+          return executePrepared(scope, command, options);
+        }
+        const decoded: unknown = deserialize(command.payload);
+        expect(isRecord(decoded)).toBe(true);
+        return hook(
+          { type: command.type, input: isRecord(decoded) ? decoded.input : undefined },
+          () => executePrepared(scope, command, options),
+        );
+      }),
+  );
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const refusalObserver = vi
     .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
@@ -87,73 +110,78 @@ function observeInputAdmission(
         let admission: SqliteWorkerOperationAdmission | undefined;
         return original(
           target,
-          (worker) =>
-            operation({
-              execute: async (command, options) => {
-                const input = command.input;
-                staging =
-                  isRecord(input) &&
-                  (actor
-                    ? command.type === "session.actor.acceptInput" &&
-                      (kind === "pending"
-                        ? isRecord(input.pending) && input.pending.kind === "stage"
-                        : input.pending === undefined && isRecord(input.turn)) &&
-                      isRecord(input.target) &&
-                      input.target.sessionKey === sessionKey
-                    : command.type === "session.pendingInputs.mutate" && input.kind === "stage");
-                if (staging) {
-                  counts.attempts++;
-                  if (!actor && outcome === "refused") {
-                    counts.faults++;
-                    throw new Error(REFUSAL);
-                  }
-                }
-                const result = await worker.execute(command, options);
-                if (!staging) {
-                  return result;
-                }
-                if (actor && outcome === "refused") {
-                  expect(result).toMatchObject({ kind: "rolled-back" });
-                  return result;
-                }
-                counts.committed++;
-                const owned = expectDefined(admission, "real staging admission");
-                const committedInput = expectDefined(
-                  isRecord(input) ? input : undefined,
-                  "committed input",
-                );
-                expect(owned.committed?.facts).toMatchObject(
-                  actor
-                    ? {
-                        kind: "committed",
-                        receipt: {
-                          phase: "acceptInput",
-                          commandId: committedInput.commandId,
-                          phaseId: committedInput.phaseId,
-                          postimage: { target: { sessionKey } },
-                        },
-                      }
-                    : { kind: "pending-input-settlement", operation: "stage" },
-                );
-                expect(owned.settlement?.kind).toBe("completed");
-                if (outcome === "unknown") {
-                  observers.push(
-                    vi
-                      .spyOn(owned, "settlement", "get")
-                      .mockReturnValue({ ...owned.settlement, kind: "unknown" }),
-                  );
-                  if (actor) {
-                    // Hide the recovery witness before the committed observer runs.
-                    observers.push(vi.spyOn(owned, "committed", "get").mockReturnValue(undefined));
-                  }
-                }
-                if (outcome === "unknown" || outcome === "reply lost") {
+          (worker) => {
+            const observe: CommandHook = async (command, execute) => {
+              const input = command.input;
+              staging =
+                isRecord(input) &&
+                (actor
+                  ? command.type === "session.actor.acceptInput" &&
+                    (kind === "pending"
+                      ? isRecord(input.pending) && input.pending.kind === "stage"
+                      : input.pending === undefined && isRecord(input.turn)) &&
+                    isRecord(input.target) &&
+                    input.target.sessionKey === sessionKey
+                  : command.type === "session.pendingInputs.mutate" && input.kind === "stage");
+              if (staging) {
+                counts.attempts++;
+                if (!actor && outcome === "refused") {
                   counts.faults++;
-                  throw new Error(LOST_REPLY);
+                  throw new Error(REFUSAL);
                 }
+              }
+              const result = await execute();
+              if (!staging) {
                 return result;
-              },
-            }),
+              }
+              if (actor && outcome === "refused") {
+                expect(result).toMatchObject({ kind: "rolled-back" });
+                return result;
+              }
+              counts.committed++;
+              const owned = expectDefined(admission, "real staging admission");
+              const committedInput = expectDefined(
+                isRecord(input) ? input : undefined,
+                "committed input",
+              );
+              expect(owned.committed?.facts).toMatchObject(
+                actor
+                  ? {
+                      kind: "committed",
+                      receipt: {
+                        phase: "acceptInput",
+                        commandId: committedInput.commandId,
+                        phaseId: committedInput.phaseId,
+                        postimage: { target: { sessionKey } },
+                      },
+                    }
+                  : { kind: "pending-input-settlement", operation: "stage" },
+              );
+              expect(owned.settlement?.kind).toBe("completed");
+              if (outcome === "unknown") {
+                observers.push(
+                  vi
+                    .spyOn(owned, "settlement", "get")
+                    .mockReturnValue({ ...owned.settlement, kind: "unknown" }),
+                );
+                if (actor) {
+                  // Hide the recovery witness before the committed observer runs.
+                  observers.push(vi.spyOn(owned, "committed", "get").mockReturnValue(undefined));
+                }
+              }
+              if (outcome === "unknown" || outcome === "reply lost") {
+                counts.faults++;
+                throw new Error(LOST_REPLY);
+              }
+              return result;
+            };
+            commandHooks.set(worker, observe);
+            const execute = worker.execute;
+            vi.spyOn(worker, "execute").mockImplementation((command, options) =>
+              observe(command, () => execute(command, options)),
+            );
+            return operation(worker);
+          },
           stateContext,
           assertCurrent,
           createRetainedAdmission &&

@@ -7,6 +7,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
@@ -366,6 +367,20 @@ export function observeCompletionCommands(
 ) {
   const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
   const commands: string[] = [];
+  const executePrepared = workerStore.executePreparedSqliteWorkerCommand;
+  const prepared = vi
+    .spyOn(workerStore, "executePreparedSqliteWorkerCommand")
+    .mockImplementation((scope, command, commandOptions) => {
+      commands.push(String(command.type));
+      const result = executePrepared(scope, command, commandOptions);
+      const lostReplyError = options.lostReplyError;
+      // Lose only the response after the real worker has completed its write.
+      return lostReplyError
+        ? result.then(() => {
+            throw lostReplyError;
+          })
+        : result;
+    });
   const execution = vi
     .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
@@ -378,26 +393,20 @@ export function observeCompletionCommands(
         runExisting: (source, run, runOptions) =>
           owner.runExisting(
             source,
-            (worker) =>
-              run({
-                execute(command, commandOptions) {
-                  commands.push(command.type);
-                  const result = worker.execute(command, commandOptions);
-                  const lostReplyError = options.lostReplyError;
-                  if (lostReplyError && command.type !== "session.actor.read") {
-                    // Lose only the response after the real worker has completed its write.
-                    return result.then(() => {
-                      throw lostReplyError;
-                    });
-                  }
-                  return command.type === "session.actor.read" && options.afterRead
-                    ? result.then(async (value) => {
-                        await options.afterRead?.();
-                        return value;
-                      })
-                    : result;
-                },
-              }),
+            (worker) => {
+              const execute = worker.execute;
+              vi.spyOn(worker, "execute").mockImplementation((command, commandOptions) => {
+                commands.push(command.type);
+                const result = execute(command, commandOptions);
+                return command.type === "session.actor.read" && options.afterRead
+                  ? result.then(async (value) => {
+                      await options.afterRead?.();
+                      return value;
+                    })
+                  : result;
+              });
+              return run(worker);
+            },
             runOptions,
           ),
       };
@@ -436,6 +445,7 @@ export function observeCompletionCommands(
     restore() {
       admission.mockRestore();
       execution.mockRestore();
+      prepared.mockRestore();
     },
   };
 }

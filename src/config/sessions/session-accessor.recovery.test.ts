@@ -302,57 +302,58 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
           let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
           return runOperation(
             store,
-            (worker) =>
-              operation({
-                execute: async (command, options) => {
-                  recovering = command.type === "session.restart.recover";
-                  const result = await worker.execute(command, options);
-                  if (!recovering) {
-                    return result;
-                  }
-                  if (!nativeAdmission) {
-                    throw new Error("Recovery did not retain native admission");
-                  }
-                  // Observe the actual commit before simulating lost receipt/result delivery.
-                  expect(nativeAdmission.committed).toMatchObject({
-                    facts: {
-                      kind:
-                        verifiedCommands === 0
-                          ? "session-entry-replacements"
-                          : "session-restart-recovery-unchanged",
-                    },
-                  });
-                  expect(nativeAdmission.settlement?.kind).toBe("completed");
-                  verifiedCommands++;
-                  if (retireOwner && verifiedCommands === 1) {
-                    // Retirement belongs to an independent caller after the native commit.
-                    closing = runInDetachedAsyncContext(() =>
-                      closeOpenClawAgentDatabaseByPathAsync(
-                        resolveOpenClawAgentSqlitePath(databaseOptions),
-                        "main",
-                      ),
-                    );
-                    void closing.catch(() => undefined);
-                    captures.forEach((capture) => capture.mockClear());
-                  }
-                  if (dropReceipt) {
-                    const receipt = vi
-                      .spyOn(nativeAdmission, "committed", "get")
-                      .mockReturnValue(undefined);
-                    const settlement = vi
-                      .spyOn(nativeAdmission, "settlement", "get")
-                      .mockReturnValue({ kind: storageSettlement ? "unknown" : "completed" });
-                    restoreFaults.push(
-                      () => receipt.mockRestore(),
-                      () => settlement.mockRestore(),
-                    );
-                  }
-                  if (loseResult) {
-                    throw deliveryFailure;
-                  }
+            (worker) => {
+              const execute = worker.execute;
+              vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {
+                recovering = command.type === "session.restart.recover";
+                const result = await execute(command, options);
+                if (!recovering) {
                   return result;
-                },
-              }),
+                }
+                if (!nativeAdmission) {
+                  throw new Error("Recovery did not retain native admission");
+                }
+                // Observe the actual commit before simulating lost receipt/result delivery.
+                expect(nativeAdmission.committed).toMatchObject({
+                  facts: {
+                    kind:
+                      verifiedCommands === 0
+                        ? "session-entry-replacements"
+                        : "session-restart-recovery-unchanged",
+                  },
+                });
+                expect(nativeAdmission.settlement?.kind).toBe("completed");
+                verifiedCommands++;
+                if (retireOwner && verifiedCommands === 1) {
+                  // Retirement belongs to an independent caller after the native commit.
+                  closing = runInDetachedAsyncContext(() =>
+                    closeOpenClawAgentDatabaseByPathAsync(
+                      resolveOpenClawAgentSqlitePath(databaseOptions),
+                      "main",
+                    ),
+                  );
+                  void closing.catch(() => undefined);
+                  captures.forEach((capture) => capture.mockClear());
+                }
+                if (dropReceipt) {
+                  const receipt = vi
+                    .spyOn(nativeAdmission, "committed", "get")
+                    .mockReturnValue(undefined);
+                  const settlement = vi
+                    .spyOn(nativeAdmission, "settlement", "get")
+                    .mockReturnValue({ kind: storageSettlement ? "unknown" : "completed" });
+                  restoreFaults.push(
+                    () => receipt.mockRestore(),
+                    () => settlement.mockRestore(),
+                  );
+                }
+                if (loseResult) {
+                  throw deliveryFailure;
+                }
+                return result;
+              });
+              return operation(worker);
+            },
             stateContext,
             assertCurrent,
             createAdmission &&

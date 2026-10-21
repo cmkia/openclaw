@@ -22,6 +22,7 @@ import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js
 import { classifyGatewayStorageFailure } from "../sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import * as workerAdmission from "../sqlite-worker-operation-admission.js";
+import * as workerStore from "../sqlite-worker-store.js";
 import { settleDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 import { createPendingFinalFixture } from "./delivery-queue.test-helpers.js";
 
@@ -51,7 +52,17 @@ function observeActorCommands(
 ) {
   const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const executePrepared = workerStore.executePreparedSqliteWorkerCommand;
   const commands: string[] = [];
+  vi.spyOn(workerStore, "executePreparedSqliteWorkerCommand").mockImplementation(
+    (worker, command, options) => {
+      commands.push(String(command.type));
+      if (command.type === "session.actor.deliverySettled") {
+        hooks.beforeCommand?.();
+      }
+      return executePrepared(worker, command, options);
+    },
+  );
   vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
     (...args) => {
       const owner = capture(...args);
@@ -59,16 +70,14 @@ function observeActorCommands(
       owner.runExisting = (source, run, options) =>
         runExisting(
           source,
-          (worker) =>
-            run({
-              execute: (command, commandOptions) => {
-                commands.push(command.type);
-                if (command.type === "session.actor.deliverySettled") {
-                  hooks.beforeCommand?.();
-                }
-                return worker.execute(command, commandOptions);
-              },
-            }),
+          (worker) => {
+            const execute = worker.execute;
+            vi.spyOn(worker, "execute").mockImplementation((command, commandOptions) => {
+              commands.push(command.type);
+              return execute(command, commandOptions);
+            });
+            return run(worker);
+          },
           options,
         );
       return owner;
