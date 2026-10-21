@@ -1400,6 +1400,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-session-store.test.ts",
   "src/auto-reply/reply/reply-state.test.ts",
   "src/auto-reply/reply/session-entry-persistence.test.ts",
+  "src/infra/database-engine/reserved-incognito.conformance.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
