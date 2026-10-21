@@ -78,6 +78,7 @@ export function createAgentMemory(
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
   const [diaryRequest, setDiaryRequest] = createOptimistic<DreamingState>();
   const [diarySaving, setDiarySaving] = createOptimistic(false);
+  let diaryPresentationLifetime = Promise.withResolvers<void>();
   const [viewState, setViewState] = createStore(createDreamingViewState());
   function updateViewState(update: (draft: DreamingViewState) => void) {
     const now = Date.now();
@@ -99,6 +100,7 @@ export function createAgentMemory(
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
     invalidateRequests: ({ identityChanged }) => {
+      retireDiaryPresentation();
       // Retain published data in a new owner; retired reads can only mutate the old state.
       dreaming = {
         ...dreaming,
@@ -154,10 +156,16 @@ export function createAgentMemory(
   }
 
   function resetTransientState() {
+    retireDiaryPresentation();
     wikiPreview = null;
     pendingWikiRead = null;
     retireToggle();
     pendingEnabled = null;
+  }
+
+  function retireDiaryPresentation() {
+    diaryPresentationLifetime.resolve();
+    diaryPresentationLifetime = Promise.withResolvers<void>();
   }
 
   function createGatewayState(snapshot = context.gateway.snapshot): DreamingState {
@@ -236,30 +244,33 @@ export function createAgentMemory(
     if (!scope || !(await showConfirmDialog(confirmation)) || !isTaskScopeCurrent(scope)) {
       return;
     }
-    await mutateDiary(method, scope);
+    await runDiaryAction(method, scope);
   }
 
-  function runDiaryAction(method: DreamDiaryActionMethod) {
-    const scope = captureTaskScope();
-    return scope ? mutateDiary(method, scope) : undefined;
-  }
-
-  const mutateDiary = action(function* (method: DreamDiaryActionMethod, scope: DreamingTaskScope) {
-    if (!isTaskScopeCurrent(scope) || scope.state.dreamDiaryActionLoading) {
+  async function runDiaryAction(method: DreamDiaryActionMethod, scope = captureTaskScope()) {
+    if (!scope || !isTaskScopeCurrent(scope) || scope.state.dreamDiaryActionLoading) {
       return;
     }
-    setDiaryRequest(scope.state);
-    setDiarySaving(true);
-    try {
-      yield runDreamingTask(
-        (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
-        scope,
-      );
-    } finally {
-      if (isTaskScopeCurrent(scope)) {
-        setDiarySaving(false);
-      }
+    const retired = diaryPresentationLifetime.promise;
+    const pending = runDreamingTask(
+      (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
+      scope,
+    );
+    // Publish owner admission before joining its operation to the presentation action.
+    await Promise.resolve();
+    await presentDiaryAction(scope, pending, retired);
+  }
+
+  const presentDiaryAction = action(function* (
+    scope: DreamingTaskScope,
+    pending: Promise<unknown>,
+    retired: Promise<void>,
+  ) {
+    if (isTaskScopeCurrent(scope)) {
+      setDiaryRequest(scope.state);
+      setDiarySaving(true);
     }
+    yield Promise.race([pending, retired]);
   });
 
   async function loadResources(

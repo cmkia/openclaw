@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createRouter, definePage } from "@openclaw/uirouter";
+import { createComponent, createSignal, flush, Show } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerListener } from "../../../../../src/shared/listeners.ts";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
@@ -40,7 +41,14 @@ function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[
     sessionKey: "main",
   });
   const configListeners = new Set<() => void>();
+  const router = createRouter({
+    routes: [
+      definePage({ id: "agents", path: "/settings/agents/:agentId/:panel", component: () => null }),
+      definePage({ id: "systems", path: "/systems", component: () => null }),
+    ],
+  });
   const context = {
+    router,
     gateway,
     agents: { state: { agentsList: null }, subscribe: () => () => {} },
     runtimeConfig: {
@@ -58,6 +66,7 @@ function contextWithRequest(request: Parameters<typeof createTestGatewayClient>[
     },
   } as unknown as ApplicationContext;
   return Object.assign(context, {
+    router,
     emit(patch: Partial<ApplicationGatewaySnapshot>) {
       publish({ ...gateway.snapshot, ...patch });
     },
@@ -424,6 +433,111 @@ it.each([false, true])(
       dreamDiaryActionMessage: null,
       dreamDiaryActionArchivePath: null,
     });
+  },
+);
+
+it("shows the replacement agent's diary while the retired action is pending", async () => {
+  const pending = deferred<unknown>();
+  const method = "doctor.memory.backfillDreamDiary";
+  const page = await createPage(
+    (name, params) =>
+      name === method
+        ? pending.promise
+        : name === DIARY
+          ? diary(`Sample ${String(asOptionalRecord(params)?.agentId)} diary`)
+          : emptyReply(name),
+    "main",
+    gatewayHelloForMethods([STATUS, DIARY, method], ["operator.read", "operator.write"]),
+  );
+  try {
+    click(page.container, "#dreams-tab-diary");
+    await waitForSolid(() =>
+      expect(page.text(".dreams-diary__prose")).toContain("Sample main diary"),
+    );
+    page.dreaming.onBackfillDiary();
+    await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
+    page.setAgentId("support");
+    await waitForSolid(() =>
+      expect(page.text(".dreams-diary__prose")).toContain("Sample support diary"),
+    );
+    expect(page.state.diaryActionBusy()).toBe(false);
+  } finally {
+    pending.resolve({ written: 1 });
+    await pending.promise;
+  }
+});
+
+it.each([
+  ["panel", "/settings/agents/main/overview", "maintenance"],
+  ["route", "/systems", "confirmation"],
+] as const)(
+  "leaves Dreaming on a %s switch to %s while %s is pending",
+  async (_, pathname, operation) => {
+    const pending = deferred<unknown>();
+    const method = "doctor.memory.backfillDreamDiary";
+    const context = contextWithRequest((name) =>
+      name === method
+        ? pending.promise
+        : name === DIARY
+          ? diary("Sample main diary")
+          : emptyReply(name),
+    );
+    context.emit({
+      hello: gatewayHelloForMethods(
+        [STATUS, DIARY, method, "config.patch"],
+        ["operator.read", "operator.write", "operator.admin"],
+      ),
+    });
+    context.setConfig({});
+    vi.mocked(context.runtimeConfig.patch).mockImplementation(async () => {
+      await pending.promise;
+      return true;
+    });
+    const location = { pathname: "/settings/agents/main/memory", search: "", hash: "" };
+    await context.router.navigate("agents", context, {}, location);
+    const [presented, setPresented] = createSignal(true);
+    const stop = context.router.subscribe(() => setPresented(false));
+    let state: AgentMemoryState;
+    const page = mountSolid(() =>
+      createComponent(Show, {
+        get when() {
+          return presented();
+        },
+        fallback: "Replacement page",
+        get children() {
+          state = createAgentMemory(context, () => createAgentTarget("main"));
+          return AgentMemoryView({ state });
+        },
+      }),
+    );
+    try {
+      await waitForSolid(() => expect(page.container.textContent).toContain("Dreaming"));
+      if (operation === "maintenance") {
+        state!.view().dreaming.onBackfillDiary();
+        await waitForSolid(() => expect(state!.diaryActionBusy()).toBe(true));
+      } else {
+        state!.setEnabled(false);
+        flush();
+        click(page.container, ".exec-approval-actions button");
+        await waitForSolid(() => expect(page.container.textContent).toContain("Saving…"));
+        await waitForSolid(() => expect(context.runtimeConfig.patch).toHaveBeenCalledOnce());
+      }
+      await context.router.navigate(
+        pathname === "/systems" ? "systems" : "agents",
+        context,
+        {},
+        {
+          ...location,
+          pathname,
+        },
+      );
+      await waitForSolid(() => expect(page.container.textContent).toBe("Replacement page"));
+    } finally {
+      pending.resolve({ written: 1 });
+      await pending.promise;
+      stop();
+      page.unmount();
+    }
   },
 );
 
