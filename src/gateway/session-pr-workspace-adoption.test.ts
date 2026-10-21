@@ -1,7 +1,7 @@
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
@@ -12,9 +12,11 @@ import {
 } from "../agents/bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
+import * as sandboxContext from "../agents/sandbox/context.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -33,12 +35,24 @@ import {
 } from "../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { preparePullRequestSession } from "./github-pr-workspace-preparation.js";
+import {
+  performSessionGitHubPreparation,
+  preparePullRequestSession,
+} from "./github-pr-workspace-preparation.js";
+import * as availability from "./github-publication-availability.js";
+import * as baseRefresh from "./github-publication-base-refresh.js";
+import * as inspect from "./github-publication-inspect.js";
+import * as preflight from "./github-publication-pr-preflight.js";
+import * as requester from "./github-publication-requester.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import { adoptUnboundPullRequestWorkspace } from "./session-pr-workspace-adoption.js";
 import * as allocation from "./session-worktree-preparation.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const { getSessionEntryPatchDelivery } =
   await import("../config/sessions/session-entry-patch-delivery.test-support.js");
@@ -397,6 +411,162 @@ it("adopts one empty owner and keeps original message files separate from same-n
       );
       expect(loadSessionEntryReadOnly(sibling)).toEqual(siblingBefore);
     } finally {
+      if (worktree) {
+        await managedWorktrees.remove({
+          id: worktree.id,
+          reason: "test-cleanup",
+          allowSnapshotLoss: true,
+        });
+      }
+    }
+  });
+});
+
+it("prepares an own PR in an ordinary sandboxed chat through the registered handler", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    setRuntimeConfigSnapshot(cfg);
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:adopt-handler",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    // Any earlier turn records a skills snapshot before the PR link arrives.
+    await upsertSessionEntryCore(target, {
+      sessionId: "adopt-handler",
+      updatedAt: 1,
+      sessionRoot: state.workspaceDir,
+      skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+    });
+    const manager = await SessionManager.openAsync(
+      { ...target, sessionId: "adopt-handler" },
+      state.workspaceDir,
+    );
+    const earlier = await manager.appendMessageAsync(makeUserMessage("Open notes.md", 1));
+    assert(earlier, "The earlier message must be persisted");
+    await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
+    const pullRequest = {
+      url: "https://github.com/example/repo/pull/1",
+      host: "github.com",
+      number: 1,
+      base: { repository: "example/repo", repositoryId: 1, branch: "main", commit: "b".repeat(40) },
+      head: { repository: "guest/repo", repositoryId: 2, branch: "topic", commit: "a".repeat(40) },
+    };
+    // GitHub I/O and the container runtime stay synthetic; the handler, its session read,
+    // allocation, binding, file-source checks and the PR association write are real.
+    vi.spyOn(requester, "prepareGitHubPublicationRequesterV2").mockResolvedValue({
+      requester: { assertCurrent() {} },
+      release() {},
+    } as never);
+    vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockResolvedValue({
+      result: pullRequest,
+      assertCurrent() {},
+    } as never);
+    vi.spyOn(availability, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
+      account: { accountId: 9 },
+    } as never);
+    vi.spyOn(availability, "matchesCurrentGitHubPublicationIdentity").mockReturnValue(true);
+    vi.spyOn(preflight, "assertExistingPullRequestWriteAccess").mockResolvedValue(undefined);
+    vi.spyOn(sandboxContext, "resolveSandboxContext").mockImplementation(
+      async (params) =>
+        ({
+          ...createSandboxTestContext({
+            overrides: {
+              sessionKey: target.sessionKey,
+              workspaceDir: params.workspaceDir,
+              workspaceSource: "managed-worktree",
+            },
+          }),
+          [Symbol.dispose]() {},
+        }) as never,
+    );
+    vi.spyOn(baseRefresh, "integrateManagedWorkspaceSource").mockImplementation(async (params) => {
+      await params.source!.accept();
+      return {
+        status: "refreshed",
+        repository: "guest/repo",
+        baseBranch: "main",
+        baseCommit: "b".repeat(40),
+        changedPaths: ["pr.txt"],
+        conflictPaths: [],
+        review: { mode: "local", base: "b".repeat(40) },
+      };
+    });
+    const context = Object.assign(createDirectChatContext({ getRuntimeConfig: () => cfg }), {
+      workerSessionPlacementService: {
+        withWorkspaceExclusion: async () => {
+          throw new Error("An unbound conversation reserves a new local workspace");
+        },
+        withLocalWorkspaceReservation: async (
+          _session: unknown,
+          run: (assertOwned: () => void) => Promise<unknown>,
+        ) => await run(() => {}),
+      },
+    });
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        sessionKey: target.sessionKey,
+        workspaceDir: state.workspaceDir,
+        workspaceSource: undefined,
+        backend: { id: "docker" } as never,
+      },
+    });
+    const respond = vi.fn();
+    let worktree: Awaited<ReturnType<typeof managedWorktrees.findLiveByOwner>>;
+    try {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          workspaceBaseRefreshSandbox: sandbox,
+          workspacePrAdoptionSessionId: "adopt-handler",
+        },
+        () =>
+          performSessionGitHubPreparation({
+            req: { type: "req", id: "prepare", method: "sessions.github.action" },
+            params: {
+              sessionKey: target.sessionKey,
+              action: "prepare_pr",
+              pullRequestUrl: pullRequest.url,
+            },
+            context,
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+          } as never),
+      );
+      worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "prepared", headCommit: "a".repeat(40) }),
+      );
+      const bound = loadSessionEntryReadOnly(target);
+      expect(bound?.worktree?.id).toBe(worktree?.id);
+      expect(bound?.worktree?.githubPullRequest).toMatchObject({
+        number: 1,
+        preparedHeadCommit: "a".repeat(40),
+      });
+      expect(bound?.priorWorkspace?.fileRoot).toBe(state.workspaceDir);
+      const read = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "historical-read",
+          method: "sessions.files.get",
+          params: { sessionKey: target.sessionKey, path: "notes.md", messageEntryId: earlier },
+        },
+        client: null,
+        context,
+        respond: read,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionsFilesHandlers,
+      });
+      expect(read.mock.calls[0]?.[0]).toBe(true);
+      expect(read.mock.calls[0]?.[1].file.content).toBe("original notes\n");
+      expect(read.mock.calls[0]?.[1].file.hash).toBeUndefined();
+      expect(read.mock.calls[0]?.[1].source).toBeUndefined();
+    } finally {
+      worktree ??= await managedWorktrees.findLiveByOwner("session", target.sessionKey);
       if (worktree) {
         await managedWorktrees.remove({
           id: worktree.id,
