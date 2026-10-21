@@ -12,7 +12,7 @@ import {
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { normalizeTavilySearchResponse } from "openclaw/plugin-sdk/provider-web-search-tavily";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
+import { normalizeClawRouterRootUrl } from "./base-url.js";
 
 function supportsSearch(catalog: Record<string, unknown>): boolean {
   return (
