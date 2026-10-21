@@ -256,6 +256,52 @@ describe("sessions page lifecycle", () => {
     await waitForFast(() => expect(refreshList).toHaveBeenCalledTimes(requests + 1));
   });
 
+  it("retires command status and isolates later commands after the agent scope changes", async () => {
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const next = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const sessions = createSessions({
+      deleteMany: vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(next.promise),
+    });
+    const context = createContext(createGateway().gateway, sessions);
+    const listeners = new Set<() => void>();
+    context.agentSelection.subscribe = (listener) => {
+      const notify = () => listener(context.agentSelection.state);
+      listeners.add(notify);
+      return () => listeners.delete(notify);
+    };
+    const target = sessionRow("old-scope-command");
+    const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    try {
+      const menu = await openRowMenu(page, target);
+      await openSubmenu(menu, "Advanced");
+      await selectMenuValue(menu, "delete");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+      expect(page.textContent).toContain("Working…");
+      context.agentSelection.state.scopeId = "reviewer";
+      listeners.forEach((notify) => notify());
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Working…");
+      const nextTarget = sessionRow("new-scope-command", {
+        key: "agent:reviewer:new-scope-command",
+      });
+      page.result = sessionsResult([nextTarget], 2);
+      const nextMenu = await openRowMenu(page, nextTarget);
+      await openSubmenu(nextMenu, "Advanced");
+      await selectMenuValue(nextMenu, "delete");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
+      expect(page.textContent).toContain("Working…");
+      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      pending.reject(new Error("Old agent deletion failed"));
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Old agent deletion failed");
+    } finally {
+      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+    }
+  });
+
   it("pins from the page menu without changing shared pin metadata", async () => {
     const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
     const sessions = createSessions();

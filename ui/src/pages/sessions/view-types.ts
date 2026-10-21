@@ -13,7 +13,7 @@ type CommandProps = {
   [Key in Command]: (...args: Parameters<View[Key]>) => Promise<unknown> | void;
 };
 
-export type SessionsProps = Omit<View, OptionalFields | "sessionMenu" | Command> &
+export type SessionsProps = Omit<View, OptionalFields | "sessionMenu" | "commandEpoch" | Command> &
   CommandProps &
   Partial<Pick<View, OptionalFields>> & {
     sessionMenu: { key: string } | null;

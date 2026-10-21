@@ -38,7 +38,6 @@ import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   filterSessionRows,
-  scopedAgentParamsForSession,
   type SessionArchivedFilter,
   type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
@@ -60,7 +59,12 @@ import { requestSessionInvolvement } from "../../lib/sessions/session-requests.t
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
-import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
+import {
+  ensureSessionAgentIdentities,
+  sessionAgentId,
+  sessionAgentIdentityById,
+  sessionPathAgentId,
+} from "./agent-scope.ts";
 import { createSessionsArchive } from "./archive-actions.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
@@ -80,20 +84,13 @@ import {
   type SessionsPageMenuProps,
 } from "./session-menu.tsx";
 import type { SessionsAdvancedFiltersProps } from "./sessions-filters.tsx";
-import type { SessionsPageState } from "./sessions-page-state.types.ts";
+import type { SessionsPageListBinding, SessionsPageState } from "./sessions-page-state.types.ts";
 
 registerSessionOrganizationEnglish();
 
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
-
-type SessionsPageListBinding = {
-  sessions: ApplicationContext["sessions"];
-  query: ReturnType<typeof buildSessionsListQuery>;
-  key: string;
-  transcriptKey: string;
-};
 
 export type SessionsPageOwner = ReturnType<typeof createSessionsPage>;
 
@@ -148,6 +145,7 @@ export function createSessionsPage(
   // before releasing locks so stale finally blocks cannot clear newer work.
   let pageEpoch = 0;
   let pluginActionLifetime = new AbortController();
+  let commandRetirement = Promise.withResolvers<void>();
   let sessionMutationPending = false;
   let sessionMenuTrigger: HTMLElement | null = null;
   let listBinding: SessionsPageListBinding | undefined;
@@ -251,6 +249,8 @@ export function createSessionsPage(
     pluginActionLifetime.abort();
     pluginActionLifetime = new AbortController();
     pageEpoch += 1;
+    commandRetirement.resolve();
+    commandRetirement = Promise.withResolvers<void>();
     sessionMutationPending = false;
     closeSessionMenu();
   }
@@ -382,21 +382,6 @@ export function createSessionsPage(
     deepLinkSessionKey = data.expandedSessionKey;
   }
 
-  function sessionAgentId(key: string, context = application): string | undefined {
-    const { agentId } = scopedAgentParamsForSession(
-      {
-        assistantAgentId: context.agentSelection.state.selectedId,
-        hello: context.gateway.snapshot.hello,
-      },
-      key,
-    );
-    return agentId;
-  }
-
-  function sessionPathAgentId(key: string, context: ApplicationContext): string {
-    return sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
-  }
-
   function sessionListOptions(context: ApplicationContext, search = state.searchQuery) {
     return buildSessionsListQuery(context, {
       activeMinutes: parseStrictPositiveInteger(state.activeMinutes),
@@ -479,8 +464,11 @@ export function createSessionsPage(
         state.selectedSessions,
         state.result.sessions,
         (row) =>
-          binding.sessions.deletionState(row.key, sessionAgentId(row.key), row.sessionId) ===
-            "pending" || binding.sessions.archiveVisibility(row.key) === "pending",
+          binding.sessions.deletionState(
+            row.key,
+            sessionAgentId(row.key, application),
+            row.sessionId,
+          ) === "pending" || binding.sessions.archiveVisibility(row.key) === "pending",
       );
     }
     details.synchronize();
@@ -1315,6 +1303,7 @@ export function createSessionsPage(
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
       ...viewState,
+      commandEpoch: pageEpoch,
       loading: state.loading || details.loading(),
       refreshDisabled: application.gateway.snapshot.phase !== "connected",
       error: details.error() ?? state.error,
@@ -1499,6 +1488,7 @@ export function createSessionsPage(
     gatewayLifecycle.connect();
     return () => {
       active = false;
+      commandRetirement.resolve();
       observation.dispose();
       stopScope();
       unsubscribeList?.();
@@ -1512,6 +1502,9 @@ export function createSessionsPage(
   });
   return {
     actions,
+    // Retire presentation waits without changing an issued mutation's settlement.
+    observeCommandCompletion: (completion: Promise<unknown>) =>
+      Promise.race([completion, commandRetirement.promise]),
     setRouteData,
     revision,
     menu: () => {

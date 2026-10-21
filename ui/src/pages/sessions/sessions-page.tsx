@@ -36,10 +36,12 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
   });
   function presentCommand(completion: Promise<unknown> | void) {
     if (completion) {
+      const epoch = view().commandEpoch;
+      const observedCompletion = props.page.observeCommandCompletion(completion);
       // Commit synchronous admission and confirmation UI before observing its completion.
       onSettled(() => {
-        if (active) {
-          void observeCommand(completion);
+        if (active && view().commandEpoch === epoch) {
+          void observeCommand(observedCompletion);
         }
       });
     }
