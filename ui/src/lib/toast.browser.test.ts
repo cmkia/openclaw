@@ -48,7 +48,10 @@ async function renderToast(
     message = part("message"),
     action = part("action"),
     dismiss = part("dismiss");
-  await Promise.all(toast.getAnimations().map((animation) => animation.finished));
+  const animations = toast.getAnimations();
+  const settled = Promise.all(animations.map((animation) => animation.finished));
+  animations.forEach((animation) => animation.finish());
+  await settled;
   return { host, toast, message, action, dismiss };
 }
 type ToastFixture = Awaited<ReturnType<typeof renderToast>>;
