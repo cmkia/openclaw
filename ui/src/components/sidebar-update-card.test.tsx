@@ -370,6 +370,31 @@ describe("SidebarUpdateCard", () => {
     expect(element.props().onUpdate).not.toHaveBeenCalled();
   });
 
+  it("retains refresh progress and failure across unrelated prop updates", async () => {
+    const refresh = createDeferred<boolean>();
+    const onRefresh = vi.fn(() => refresh.promise);
+    const element = await mount(null, { refreshRequired: true, onRefresh });
+    element.action()?.click();
+    await settle();
+    expect(element.action()?.disabled).toBe(true);
+
+    await element.update({
+      statusBanner: { tone: "info", source: "read", text: "Gateway status changed" },
+    });
+    expect(element.action()?.disabled).toBe(true);
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    refresh.resolve(false);
+    await settle();
+    expect(element.action()?.disabled).toBe(false);
+    expect(element.text()).toContain(reconnectFailure);
+    expect(element.action()?.textContent).toContain("Retry now");
+
+    await element.update({ statusBanner: null });
+    expect(element.text()).toContain(reconnectFailure);
+    expect(element.action()?.textContent).toContain("Retry now");
+  });
+
   it("ignores an obsolete refresh result after recovery state is re-established", async () => {
     const element = await mount(null);
     const first = createDeferred<boolean>();
