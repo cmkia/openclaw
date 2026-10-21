@@ -70,7 +70,6 @@ describe.each(["sqlite", "postgres"] as const)("%s repeated memory chunks", (eng
           fallback: "none",
           sources: ["memory"],
           cache: { enabled: false },
-          sync: { watch: false, onSearch: false, onSessionStart: false },
           store: { vector: { enabled: true } },
           query: { minScore: 0 },
         },
@@ -107,11 +106,11 @@ describe.each(["sqlite", "postgres"] as const)("%s repeated memory chunks", (eng
           const result = await getMemorySearchManager({
             cfg: config,
             agentId: scenario,
-            purpose: "cli",
+            purpose: scenario === "incremental" ? "default" : "cli",
             runInBackgroundContext: run,
           });
           assert(result.manager, result.error ?? "Expected memory manager");
-          assert(result.manager.sync, "Expected memory indexing support");
+          assert(typeof result.manager.sync === "function", "Expected memory indexing support");
           await result.manager.sync({ reason: "cli", force });
           return result.manager;
         };
@@ -122,7 +121,7 @@ describe.each(["sqlite", "postgres"] as const)("%s repeated memory chunks", (eng
             files: 1,
             chunks: 1,
           });
-          // A later CLI invocation opens the same index and scans the changed file.
+          // Reopen the same index; serving managers schedule an incremental memory scan.
           await closeAllMemorySearchManagers();
         }
         await fs.writeFile(filename, "x".repeat(3200));
