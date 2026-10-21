@@ -275,7 +275,6 @@ export function createAgentCapability(gateway: AgentGateway) {
     agentsRequest = request;
     listRead = request.promise;
     state.agentsError = null;
-    const current = () => state.client === client && agentsRequest === request;
     const complete = (outcome: AgentReadOutcome<AgentsListResult>) => {
       agentsRequest = null;
       request.resolve(outcome);
@@ -287,7 +286,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       .request<AgentsListResult>("agents.list", { includeSessionPlacement: true })
       .then(
         (result) => {
-          if (current()) {
+          if (agentsRequest === request) {
             if (
               state.recentlyCreatedAgentId &&
               state.recentlyCreatedAgentId !== createdWhenRequested &&
@@ -303,7 +302,7 @@ export function createAgentCapability(gateway: AgentGateway) {
           }
         },
         (err: unknown) => {
-          if (current()) {
+          if (agentsRequest === request) {
             if (isMissingOperatorReadScopeError(err)) {
               state.agentsList = null;
               retireFileRequests();
@@ -334,7 +333,6 @@ export function createAgentCapability(gateway: AgentGateway) {
     const request = createAgentRead<AgentsFilesListResult>();
     status.request = request;
     status.read = request.promise;
-    const current = () => state.client === client && status.request === request;
     const complete = (outcome: AgentReadOutcome<AgentsFilesListResult>) => {
       status.request = null;
       request.resolve(outcome);
@@ -343,7 +341,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     publish();
     void client.request<AgentsFilesListResult | null>("agents.files.list", { agentId }).then(
       (result) => {
-        if (current()) {
+        if (status.request === request) {
           if (result) {
             status.list = result;
           }
@@ -351,7 +349,7 @@ export function createAgentCapability(gateway: AgentGateway) {
         }
       },
       (err: unknown) => {
-        if (current()) {
+        if (status.request === request) {
           complete({ error: formatUiError(err) });
         }
       },
