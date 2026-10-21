@@ -44,41 +44,28 @@ function authFor(
   return { cfg: { channels: { telegram } }, accountId: "default" };
 }
 
-function messageUpdate(params: {
+function messageUpdate({
+  updateId = 2,
+  text = "stop",
+  senderId = OWNER_ID,
+  ...message
+}: {
   updateId?: number;
   text?: string;
   senderId?: string;
-  chatId?: number;
-  chatType?: string;
-  messageThreadId?: number;
-  isTopicMessage?: boolean;
-  isForum?: boolean;
-  isDirectMessages?: boolean;
-  directMessagesTopicId?: number;
+  chat?: { id: number; type: string; is_forum?: boolean; is_direct_messages?: boolean };
+  message_thread_id?: number;
+  is_topic_message?: boolean;
+  direct_messages_topic?: { topic_id: number };
   entities?: Array<{ type: string; offset: number; length: number }>;
 }) {
-  const { updateId = 2, text = "stop", senderId = OWNER_ID } = params;
   return {
     update_id: updateId,
     message: {
       text,
       from: { id: Number(senderId) },
-      chat: {
-        id: params.chatId ?? Number(senderId),
-        type: params.chatType ?? "private",
-        ...(params.isForum !== undefined ? { is_forum: params.isForum } : {}),
-        ...(params.isDirectMessages !== undefined
-          ? { is_direct_messages: params.isDirectMessages }
-          : {}),
-      },
-      ...(params.messageThreadId !== undefined
-        ? { message_thread_id: params.messageThreadId }
-        : {}),
-      ...(params.isTopicMessage !== undefined ? { is_topic_message: params.isTopicMessage } : {}),
-      ...(params.directMessagesTopicId !== undefined
-        ? { direct_messages_topic: { topic_id: params.directMessagesTopicId } }
-        : {}),
-      ...(params.entities ? { entities: params.entities } : {}),
+      chat: { id: Number(senderId), type: "private" },
+      ...message,
     },
   };
 }
@@ -116,8 +103,12 @@ function candidate(text: string, senderId = OWNER_ID, options: MessageOptions = 
 function pending(senderId = OWNER_ID, options: MessageOptions = {}) {
   return claim("1", messageUpdate({ updateId: 1, text: "prior", senderId, ...options }));
 }
-const group = { chatId: -1001, chatType: "supergroup" };
-const topic = { ...group, messageThreadId: 10, isTopicMessage: true, isForum: true };
+const group = { chat: { id: -1001, type: "supergroup" } };
+const topic = {
+  chat: { ...group.chat, is_forum: true },
+  message_thread_id: 10,
+  is_topic_message: true,
+};
 
 describe("telegram ingress supersede policy", () => {
   const auth = authFor({ allowFrom: [OWNER_ID], dmPolicy: "allowlist" });
@@ -312,10 +303,9 @@ describe("telegram ingress supersede policy", () => {
       },
     });
     const update = messageUpdate({
-      ...group,
-      isDirectMessages: true,
-      directMessagesTopicId: 77,
-      messageThreadId: 999,
+      chat: { ...group.chat, is_direct_messages: true },
+      direct_messages_topic: { topic_id: 77 },
+      message_thread_id: 999,
     });
 
     expect(await supersedeFor(channelDmAuth)(record("2", update), pending())).toBe(false);

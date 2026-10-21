@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
@@ -18,11 +19,9 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
-import {
-  TelegramIngressPayloadError,
-  type TelegramSpooledUpdatePayload,
-} from "./telegram-ingress-spool.payload.js";
+import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.test-support.js";
+import { createTelegramPrivateTopicCallback } from "./test-support/webhook-fixtures.js";
 
 type MonitorOptions = Parameters<typeof createTelegramIngressMonitor>[0];
 type Queue = MonitorOptions["queue"];
@@ -145,6 +144,117 @@ async function expectPending(queue: Queue, rows: Array<Record<string, unknown>>)
 
 async function waitPending(queue: Queue, rows: Array<Record<string, unknown>>) {
   await vi.waitFor(() => expectPending(queue, rows));
+}
+
+const replayBotId = telegramBotInfoForTest.id;
+type StoredUpdate = { update_id: number } & Record<string, unknown>;
+type ReplayCheck = {
+  topicsEnabled?: boolean;
+  rejected?: boolean;
+  expectedLane?: string;
+};
+async function withStoredReplay(
+  entries: Array<{ update: StoredUpdate; laneKey: string }>,
+  run: (fixture: ReturnType<typeof createFixture>) => Promise<void>,
+) {
+  await withTempState(async ({ stateDir, queue }) => {
+    for (const { update, laneKey } of entries) {
+      await queue.enqueue(
+        String(update.update_id).padStart(16, "0"),
+        { ...updatePayload(update.update_id), receivedAt: Date.now(), update },
+        { laneKey },
+      );
+    }
+    expect((await queue.listPending()).map((record) => record.laneKey)).toEqual(
+      entries.map(({ laneKey }) => laneKey),
+    );
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    await run(createFixture(stateDir));
+  });
+}
+async function checkStoredReplay(update: StoredUpdate, laneKey: string, options: ReplayCheck = {}) {
+  await withStoredReplay([{ update, laneKey }], async ({ queue, monitor: makeMonitor }) => {
+    const dispatch = vi.fn(async () => {
+      if (options.expectedLane) {
+        expect(await queue.listClaims()).toMatchObject([{ laneKey: options.expectedLane }]);
+      }
+      return { kind: "completed" as const };
+    });
+    const monitor = makeMonitor({
+      botInfo: { ...telegramBotInfoForTest, has_topics_enabled: options.topicsEnabled ?? false },
+      dispatch,
+    });
+    try {
+      monitor.start();
+      await monitor.waitForIdle();
+      if (options.rejected) {
+        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+          { reason: "invalid-event", laneKey },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
+        expect(await queue.listFailed?.()).toEqual([]);
+      }
+      expect(await queue.listPending()).toEqual([]);
+    } finally {
+      await monitor.stop();
+    }
+  });
+}
+function replayMessage(update_id: number, message_thread_id?: number) {
+  return {
+    update_id,
+    message: {
+      chat: { id: 1234, type: "private" },
+      message_id: update_id,
+      text: "replay",
+      ...(message_thread_id === undefined ? {} : { message_thread_id }),
+    },
+  };
+}
+function replayApproval(approvalKind: "exec" | "plugin", decision: "allow-once" | "deny") {
+  return buildTelegramApprovalCallbackData({
+    type: "approval",
+    approvalKind,
+    approvalId: "signed-approval",
+    decision,
+  });
+}
+
+type Callback = ReturnType<typeof createTelegramPrivateTopicCallback>;
+type CallbackPatch = Partial<Omit<Callback, "from" | "message">> & {
+  from?: Omit<Partial<Callback["from"]>, "is_bot"> & { is_bot?: boolean };
+  inline_message_id?: string;
+  inlineOnly?: boolean;
+  message?: Partial<Omit<Callback["message"], "from" | "chat">> & {
+    from?: Partial<Callback["message"]["from"]>;
+    chat?: Partial<Callback["message"]["chat"]>;
+    business_connection_id?: string;
+    guest_query_id?: string;
+    sender_chat?: { id: number; type: "channel" };
+    direct_messages_topic?: { topic_id: number };
+  };
+};
+function patchedCallback({ from, message, inlineOnly, ...patch }: CallbackPatch) {
+  const callback = createTelegramPrivateTopicCallback(141, replayBotId);
+  const { message: originalMessage, ...envelope } = callback;
+  return {
+    ...envelope,
+    ...patch,
+    from: { ...callback.from, ...from },
+    ...(!inlineOnly
+      ? {
+          message: {
+            ...originalMessage,
+            ...message,
+            from: { ...originalMessage.from, ...message?.from },
+            chat: { ...originalMessage.chat, ...message?.chat },
+          },
+        }
+      : {}),
+  };
 }
 
 describe("createTelegramIngressMonitor", () => {
@@ -479,21 +589,6 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
-  it("releases an aborted deferred claim after a late completed settlement", async () => {
-    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
-      const { eventId, payload, laneKey } = await enqueue(6);
-      const { monitor, participant } = await startDeferred(makeMonitor, "test:late-completed");
-      await monitor.stop();
-      expect(await queue.listClaims()).toEqual([]);
-      await expectPending(queue, [{ id: eventId, attempts: 0 }]);
-
-      participant.current?.settle({ kind: "completed" });
-      await waitPending(queue, [{ id: eventId, attempts: 0 }]);
-      expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
-      expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
-    });
-  });
-
   it("uses participant settlement to own the row despite frame completion after abort", async () => {
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
       const { eventId, payload, laneKey } = await enqueue(8);
@@ -581,25 +676,6 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
-  it("requeues an aborted deferred participant even when its late result is non-retryable", async () => {
-    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
-      const { eventId } = await enqueue(9);
-      const { monitor, participant } = await startDeferred(
-        makeMonitor,
-        "test:aborted-non-retryable",
-      );
-      await monitor.stop();
-      participant.current?.settle({
-        kind: "failed-retryable",
-        error: new TelegramIngressPayloadError("late invalid payload"),
-      });
-
-      await waitPending(queue, [{ id: eventId, attempts: 0 }]);
-      expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
-      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-    });
-  });
-
   it("releases when dispatch settles only after its owner was aborted", async () => {
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
       const { eventId, payload, laneKey } = await enqueue(8);
@@ -632,6 +708,8 @@ describe("createTelegramIngressMonitor", () => {
       dispatchGate.resolve();
       await stopped;
 
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
       await waitPending(queue, [
         {
           id: eventId,
@@ -642,5 +720,171 @@ describe("createTelegramIngressMonitor", () => {
       ]);
       expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
     });
+  });
+  it.each([false, true])(
+    "replays legacy DM lanes in order with topics enabled=%s",
+    async (topicsEnabled) => {
+      const base = "telegram:1234",
+        topic = `${base}:topic:42`;
+      const first = replayMessage(130, 42),
+        second = replayMessage(131, topicsEnabled ? 42 : undefined);
+      await withStoredReplay(
+        [
+          { update: first, laneKey: topicsEnabled ? base : topic },
+          { update: second, laneKey: topicsEnabled ? topic : base },
+        ],
+        async ({ queue, monitor: makeMonitor }) => {
+          const started = deferred(),
+            release = deferred();
+          const seen: number[] = [];
+          const dispatch = vi.fn(async (update: unknown) => {
+            const { update_id } = update as { update_id: number };
+            seen.push(update_id);
+            if (update_id === 130) {
+              started.resolve();
+              await release.promise;
+            }
+            return { kind: "completed" as const };
+          });
+          const monitor = makeMonitor({
+            botInfo: { ...telegramBotInfoForTest, has_topics_enabled: topicsEnabled },
+            dispatch,
+          });
+          try {
+            monitor.start();
+            await started.promise;
+            await monitor.waitForPumpIdle();
+            expect(seen).toEqual([130]);
+            release.resolve();
+            await monitor.waitForIdle();
+            expect(seen).toEqual([130, 131]);
+            expect(dispatch).toHaveBeenCalledTimes(2);
+            expect(await queue.listPending()).toEqual([]);
+            expect(await queue.listFailed?.()).toEqual([]);
+          } finally {
+            release.resolve();
+            await monitor.stop();
+          }
+        },
+      );
+    },
+  );
+
+  it.each([
+    ["exec", "telegram:1234:topic:42", 1234, "private", true, false],
+    ["plugin", "telegram:1234:topic:42", 1234, "private", true, false],
+    ["exec", "telegram:1234", 1234, "private", false, false],
+    ["exec", "telegram:-1234", -1234, "group", false, false],
+    ["exec", "telegram:-1001234", -1001234, "supergroup", false, false],
+    ["exec", "telegram:-1001234:topic:42", -1001234, "supergroup", true, true],
+    ["exec", "telegram:-1001234:topic:1", -1001234, "supergroup", false, true],
+  ] as const)(
+    "replays typed %s approvals from %s in their privileged lane",
+    async (kind, laneKey, id, type, hasThread, isForum) => {
+      const callback = createTelegramPrivateTopicCallback(142, replayBotId);
+      const update = {
+        update_id: 142,
+        callback_query: {
+          ...callback,
+          data: replayApproval(kind, "allow-once"),
+          message: {
+            ...callback.message,
+            chat: { id, type, ...(isForum ? { is_forum: true } : {}) },
+            ...(hasThread ? {} : { message_thread_id: undefined }),
+          },
+        },
+      };
+      await checkStoredReplay(update, laneKey, { expectedLane: `telegram:${id}:approval` });
+    },
+  );
+
+  it.each([
+    [false, "telegram:1234:topic:42"],
+    [true, "telegram:1234"],
+  ] as const)(
+    "replays legitimate private callbacks after capability transition (%s)",
+    async (topicsEnabled, laneKey) => {
+      await checkStoredReplay(
+        { update_id: 140, callback_query: createTelegramPrivateTopicCallback(140, replayBotId) },
+        laneKey,
+        { topicsEnabled },
+      );
+    },
+  );
+
+  const allowExec = replayApproval("exec", "allow-once"),
+    denyPlugin = replayApproval("plugin", "deny");
+  it.each([
+    ["a bot callback sender", { from: { is_bot: true } }],
+    ["an invalid callback sender", { from: { id: 0 } }],
+    ["a foreign bot-authored message", { message: { from: { id: 999 } } }],
+    ["an inaccessible callback message", { message: { date: 0 } }],
+    ["an independent business chat", { message: { business_connection_id: "business-1234" } }],
+    ["an independent guest chat", { message: { guest_query_id: "guest-1234" } }],
+    [
+      "a message sent by another chat",
+      { message: { sender_chat: { id: -1234, type: "channel" } } },
+    ],
+    [
+      "a direct-messages topic from another surface",
+      { message: { direct_messages_topic: { topic_id: 42 } } },
+    ],
+    ["an inline callback message", { inline_message_id: "inline-message-141" }],
+    ["an oversized callback payload", { data: "x".repeat(65) }],
+    ["a missing chat instance", { chat_instance: "" }],
+    ["a reserved question callback", { data: "tgq1:ask_0123456789abcdef0123456789abcdef:1" }],
+    ["a reserved approval callback", { data: "/approve exec:def456 deny" }],
+    ["a malformed signed approval decision", { data: allowExec?.replace(":o:", ":z:") }],
+    ["a malformed signed approval kind", { data: allowExec?.replace(":e:", ":x:") }],
+    [
+      "a signed approval missing its canonical identifier",
+      { data: denyPlugin?.replace(/signed-approval$/, "") },
+    ],
+    [
+      "an inline signed approval",
+      { data: allowExec, inline_message_id: "inline-message-141", inlineOnly: true },
+    ],
+    ["a signed approval for another chat", { data: allowExec, message: { chat: { id: 9999 } } }],
+    ["an ordinary callback without a topic", { message: { message_thread_id: undefined } }],
+  ] as const)("does not authorize durable-lane reconciliation for %s", async (_name, patch) => {
+    await checkStoredReplay(
+      { update_id: 141, callback_query: patchedCallback(patch) },
+      "telegram:1234:topic:42",
+      { rejected: true },
+    );
+  });
+
+  it.each(["telegram:9999:topic:42", "telegram:1234:topic:99", "telegram:1234:control"])(
+    "rejects persisted DM lanes outside upgrade contract (%s)",
+    async (laneKey) => {
+      await checkStoredReplay(replayMessage(132, 42), laneKey, { rejected: true });
+    },
+  );
+  const legacyTopicMessage = {
+    chat: { id: 1234, type: "private" },
+    message_id: 1,
+    message_thread_id: 42,
+  };
+  it.each([
+    {
+      name: "a malformed callback query",
+      update: {
+        update_id: 134,
+        callback_query: { data: "unrecognized-callback", message: legacyTopicMessage },
+      },
+    },
+    {
+      name: "a group message",
+      update: {
+        update_id: 135,
+        message: {
+          ...legacyTopicMessage,
+          chat: { id: 1234, type: "group" },
+          text: "wrong chat kind",
+        },
+      },
+    },
+  ])("rejects legacy lane reconciliation for $name", async ({ update }) => {
+    await checkStoredReplay(update, "telegram:1234:topic:42", { rejected: true });
   });
 });

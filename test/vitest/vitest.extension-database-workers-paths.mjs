@@ -492,7 +492,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/miniapp/routes.test.ts",
   "extensions/telegram/src/monitor.webhook-identity.test.ts",
   "extensions/telegram/src/outbound-adapter.telegram-http.test.ts",
-  "extensions/telegram/src/outbound-message-context.test.ts",
   "extensions/telegram/src/reply-scaffolding.telegram-http.test.ts",
   "extensions/telegram/src/poll-registry.test.ts",
   "extensions/telegram/src/send.history.test.ts",
