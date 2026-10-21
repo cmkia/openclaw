@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { recordEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import { textStreamEvent } from "./embedded-agent-subscribe.delivery.test-support.js";
 import {
   createSubscribedSessionHarness,
   createStubSessionHarness,
@@ -44,6 +45,8 @@ function createBlockReplyHarness(
 ) {
   const { session, emit: rawEmit } = createStubSessionHarness();
   const sessionManager = session.sessionManager;
+  const recordDelivery = (id: string, messageDelivery: unknown) =>
+    recordEmbeddedToolReceipt(sessionManager, id, { messageDelivery }, true);
   const emit = (evt: unknown) => {
     const event = asOptionalRecord(evt);
     const details = asOptionalRecord(asOptionalRecord(event?.result)?.details);
@@ -53,12 +56,7 @@ function createBlockReplyHarness(
       typeof event.toolCallId === "string" &&
       details?.messageDelivery !== undefined
     ) {
-      recordEmbeddedToolReceipt(
-        sessionManager,
-        event.toolCallId,
-        { messageDelivery: details.messageDelivery },
-        true,
-      );
+      recordDelivery(event.toolCallId, details.messageDelivery);
     }
     rawEmit(evt);
   };
@@ -76,19 +74,12 @@ function createBlockReplyHarness(
     onBlockReply,
     subscription,
     receipt: (id: string, partialDelivery = false) =>
-      recordEmbeddedToolReceipt(
-        sessionManager,
-        id,
-        {
-          messageDelivery: {
-            status: "settled",
-            partialDelivery,
-            createdThreadIds: [],
-            sourceReplyDelivered: true,
-          },
-        },
-        true,
-      ),
+      recordDelivery(id, {
+        status: "settled",
+        partialDelivery,
+        createdThreadIds: [],
+        sourceReplyDelivered: true,
+      }),
   };
 }
 
@@ -500,12 +491,7 @@ it("preserves an empty authoritative final after a late block end", async () => 
   ]);
   expect(secondItemId).not.toBe(finalizedPayloads[0]?.itemId);
 
-  update(partial, {
-    type: "text_end",
-    contentIndex: 1,
-    content: lastBlock,
-    partial,
-  });
+  update(partial, textStreamEvent("text_end", lastBlock, { contentIndex: 1, partial }));
   await subscription.waitForPendingEvents();
   expect(assistantPayloads()).toEqual(finalizedPayloads);
   const latestByMessage = new Map(

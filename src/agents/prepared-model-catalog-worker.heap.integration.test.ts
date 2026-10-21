@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -26,8 +27,36 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 
-function createCatalogPool(env: NodeJS.ProcessEnv) {
-  return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+function createCatalogRunner(
+  fixture: Awaited<ReturnType<typeof createCatalogFixture>>,
+  config = fixture.config,
+  configure: (revision: number) => Partial<OpenClawConfig> = () => ({}),
+) {
+  const metadataByWorkspace = new Map<string, PluginMetadataSnapshot>();
+  const input = (revision: number, workspaceDir = fixture.workspaceDir) => {
+    let metadata = metadataByWorkspace.get(workspaceDir);
+    if (!metadata) {
+      metadata = loadPluginMetadataSnapshot({ config, env: fixture.env, workspaceDir });
+      metadataByWorkspace.set(workspaceDir, metadata);
+    }
+    return createPreparedModelCatalogWorkerInput({
+      agentFacts: makeCatalogAgentFacts(
+        catalogInput(fixture, {
+          workspaceDir,
+          config: {
+            ...config,
+            plugins: {
+              ...config.plugins,
+              entries: { [PLUGIN_ID]: { enabled: true, config: { revision } } },
+            },
+            ...configure(revision),
+          },
+        }),
+      ),
+      pluginMetadataSnapshot: metadata,
+    });
+  };
+  const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
     maxWorkers: 1,
     idleTimeoutMs: 0,
@@ -35,18 +64,36 @@ function createCatalogPool(env: NodeJS.ProcessEnv) {
     workerOptions: {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
       workerData: { sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-") },
-      env,
+      env: fixture.env,
     },
   });
-}
-
-function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatalogWorkerTask {
+  const request = (value: PreparedModelCatalogWorkerInput, rejectDiscovery = false) =>
+    pool.run(
+      {
+        value,
+        request: {
+          kind: "catalog",
+          syntheticAuth: [],
+          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
+        },
+      },
+      {
+        timeoutMs: 30_000,
+        ...(rejectDiscovery
+          ? { onRequest: async () => ({ input: false, timeoutMs: 30_000 }) }
+          : {}),
+      },
+    );
   return {
-    value,
-    request: {
-      kind: "catalog",
-      syntheticAuth: [],
-      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
+    input,
+    request,
+    [Symbol.asyncDispose]: () => pool.close(),
+    async run(value: PreparedModelCatalogWorkerInput) {
+      const result = await request(value);
+      if (result.status !== "ok" || result.kind !== "catalog") {
+        throw new Error(JSON.stringify(result));
+      }
+      return result;
     },
   };
 }
@@ -95,61 +142,36 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   manifest.configSchema = revisionSchema;
   fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-  const metadata = loadPluginMetadataSnapshot({
-    config: fixture.config,
-    env: fixture.env,
-    workspaceDir: fixture.workspaceDir,
-  });
-  const inputs = Array.from({ length: 4 }, (_, revision) => {
-    const config = {
-      ...fixture.config,
-      plugins: {
-        ...fixture.config.plugins,
-        entries: { [PROVIDER_ID]: { enabled: true, config: { revision } } },
-      },
-      models: {
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: `https://revision-${revision}.invalid/v1`,
-            api: "openai-completions" as const,
-            models: [],
-          },
+  await using runner = createCatalogRunner(fixture, fixture.config, (revision) => ({
+    models: {
+      providers: {
+        [PROVIDER_ID]: {
+          baseUrl: `https://revision-${revision}.invalid/v1`,
+          api: "openai-completions" as const,
+          models: [],
         },
       },
-    };
-    return createPreparedModelCatalogWorkerInput({
-      agentFacts: makeCatalogAgentFacts(catalogInput(fixture, { config })),
-      pluginMetadataSnapshot: metadata,
-    });
-  });
-  const pool = createCatalogPool(fixture.env);
-  try {
-    const hashes = new Map<number, string>();
-    const count = Number(process.env.OPENCLAW_CATALOG_HEAP_ITERATIONS ?? 12);
-    for (let index = 0; index < count; index++) {
-      const revision = index % inputs.length;
-      const result = await pool.run(catalogTask(inputs[revision]!), { timeoutMs: 30_000 });
-      if (result.status !== "ok" || result.kind !== "catalog") {
-        throw new Error(JSON.stringify(result));
-      }
-      const hash = createHash("sha256")
-        .update(JSON.stringify(result.snapshot.entries))
-        .digest("hex");
-      if (hashes.has(revision)) {
-        expect(hash).toBe(hashes.get(revision));
-      }
-      hashes.set(revision, hash);
+    },
+  }));
+  const inputs = Array.from({ length: 4 }, (_, revision) => runner.input(revision));
+  const hashes = new Map<number, string>();
+  const count = Number(process.env.OPENCLAW_CATALOG_HEAP_ITERATIONS ?? 12);
+  for (let index = 0; index < count; index++) {
+    const revision = index % inputs.length;
+    const result = await runner.run(inputs[revision]!);
+    const hash = createHash("sha256").update(JSON.stringify(result.snapshot.entries)).digest("hex");
+    if (hashes.has(revision)) {
+      expect(hash).toBe(hashes.get(revision));
     }
-    // Reuse the last generation after its predecessor's retirement has completed.
-    await pool.run(catalogTask(inputs[(count - 1) % inputs.length]!), { timeoutMs: 30_000 });
-    const retained = JSON.parse(fs.readFileSync(fixture.marker, "utf8")) as {
-      callbacks: number;
-      controlCollected: boolean;
-    };
-    expect(retained).toMatchObject({ controlCollected: true, callbacks: 1 });
-  } finally {
-    await pool.close();
+    hashes.set(revision, hash);
   }
+  // Reuse the last generation after its predecessor's retirement has completed.
+  await runner.request(inputs[(count - 1) % inputs.length]!);
+  const retained = JSON.parse(fs.readFileSync(fixture.marker, "utf8")) as {
+    callbacks: number;
+    controlCollected: boolean;
+  };
+  expect(retained).toMatchObject({ controlCollected: true, callbacks: 1 });
 }, 300_000);
 
 const NATIVE_ESM_BUFFER_BYTES = 4 * 1024 * 1024;
@@ -220,51 +242,18 @@ export function register(api) {
     ...fixture.config,
     plugins: { ...fixture.config.plugins, load: { paths: [entry] } },
   };
-  const metadataByWorkspace = new Map<string, PluginMetadataSnapshot>();
-  const metadataForWorkspace = (workspaceDir: string) => {
-    let metadata = metadataByWorkspace.get(workspaceDir);
-    if (!metadata) {
-      metadata = loadPluginMetadataSnapshot({ config, env: fixture.env, workspaceDir });
-      metadataByWorkspace.set(workspaceDir, metadata);
-    }
-    return metadata;
-  };
-  const input = (revision: number, workspaceDir = fixture.workspaceDir) =>
-    createPreparedModelCatalogWorkerInput({
-      agentFacts: makeCatalogAgentFacts(
-        catalogInput(fixture, {
-          workspaceDir,
-          config: {
-            ...config,
-            plugins: {
-              ...config.plugins,
-              entries: { [PLUGIN_ID]: { enabled: true, config: { revision } } },
-            },
-          },
-        }),
-      ),
-      pluginMetadataSnapshot: metadataForWorkspace(workspaceDir),
-    });
-  const pool = createCatalogPool(fixture.env);
-  const request = (revision: number, workspaceDir?: string, rejectDiscovery = false) =>
-    pool.run(catalogTask(input(revision, workspaceDir)), {
-      timeoutMs: 30_000,
-      ...(rejectDiscovery ? { onRequest: async () => ({ input: false, timeoutMs: 30_000 }) } : {}),
-    });
+  const runner = createCatalogRunner(fixture, config);
   return {
-    [Symbol.asyncDispose]: () => pool.close(),
+    [Symbol.asyncDispose]: () => runner[Symbol.asyncDispose](),
     async rejectRefresh(revision: number) {
-      const result = await request(revision, undefined, true);
+      const result = await runner.request(runner.input(revision), true);
       if (result.status !== "failed") {
         throw new Error(JSON.stringify(result));
       }
       expect(result.error).toBe("prepared model catalog request retired before discovery");
     },
     async run(revision: number, workspaceDir?: string) {
-      const result = await request(revision, workspaceDir);
-      if (result.status !== "ok" || result.kind !== "catalog") {
-        throw new Error(JSON.stringify(result));
-      }
+      const result = await runner.run(runner.input(revision, workspaceDir));
       const sample = JSON.parse(
         fs.readFileSync(fixture.marker, "utf8").trim().split("\n").at(-1)!,
       ) as NativeCatalogSample;

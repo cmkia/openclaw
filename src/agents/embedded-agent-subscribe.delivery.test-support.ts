@@ -9,6 +9,14 @@ type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId
 };
 type BlockReply = NonNullable<Options["onBlockReply"]>;
 
+export function textStreamEvent(
+  type: "thinking_end" | "text_delta" | "text_end",
+  text: string,
+  fields: { contentIndex?: number; partial?: unknown } = {},
+) {
+  return { type, ...fields, ...(type === "text_delta" ? { delta: text } : { content: text }) };
+}
+
 export function createDeliveryHarness(options: Options = {}) {
   const onBlockReply = vi.fn<BlockReply>();
   const h = createSubscribedSessionHarness({
@@ -33,12 +41,7 @@ export function createDeliveryHarness(options: Options = {}) {
       type: "thinking_end" | "text_delta" | "text_end",
       text: string,
       contentIndex?: number,
-    ) =>
-      update(message, {
-        type,
-        contentIndex,
-        ...(type === "text_delta" ? { delta: text } : { content: text }),
-      }),
+    ) => update(message, textStreamEvent(type, text, { contentIndex })),
     flush: async (expected: readonly string[], history = false, calls?: number) => {
       await h.subscription.waitForPendingEvents();
       expect(texts()).toEqual(expected);
