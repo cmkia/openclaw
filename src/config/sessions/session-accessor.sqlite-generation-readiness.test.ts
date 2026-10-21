@@ -23,6 +23,62 @@ const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
 
+type Scope = { agentId: string; storePath: string; sessionKey: string };
+type Entry = Parameters<typeof replaceSessionEntrySync>[1];
+
+function replace(scope: Scope, entry: Entry) {
+  return applySessionEntryExactReplacements({
+    ...scope,
+    sessionKeys: [scope.sessionKey],
+    requireWriteSuccess: true,
+    update: () => ({ result: undefined, replacements: [{ sessionKey: scope.sessionKey, entry }] }),
+  });
+}
+
+function holdPublication(signal: AbortSignal) {
+  const committed = createDeferred();
+  const release = createDeferred();
+  const onAbort = () => release.resolve();
+  signal.addEventListener("abort", onAbort, { once: true });
+  delivery.afterResult = async () => {
+    committed.resolve();
+    await release.promise;
+  };
+  return {
+    committed,
+    release,
+    close() {
+      release.resolve();
+      delivery.afterResult = undefined;
+      signal.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+function memoryProvider(scope: Scope, audience: Parameters<typeof assertMemoryAudienceCurrent>[0]) {
+  const health = vi.fn(async () => ({ status: "ready" as const }));
+  const provider = bindMemoryProvider(
+    {
+      capabilities: {
+        sources: ["memory"],
+        pagination: false,
+        candidates: [],
+        projectFilter: false,
+      },
+      health,
+      search: async () => ({ hits: [] }),
+      get: async () => ({ status: "not_found" }),
+      close: async () => {},
+    },
+    "test",
+    {
+      authority: { kind: "session", sessionKey: scope.sessionKey, sandboxed: false, audience },
+      assertCurrent: () => {},
+    },
+  );
+  return { health, provider };
+}
+
 it.for(["assignment", "metadata"] as const)(
   "checks absent ID selection during held $0 publication",
   async (change, { signal }) => {
@@ -49,31 +105,14 @@ it.for(["assignment", "metadata"] as const)(
       });
       expect(selected.entry).toBeUndefined();
       selected.source();
-      const committed = createDeferred();
-      const release = createDeferred();
-      const onAbort = () => release.resolve();
-      signal.addEventListener("abort", onAbort, { once: true });
-      delivery.afterResult = async () => {
-        committed.resolve();
-        await release.promise;
-      };
-      const pending = applySessionEntryExactReplacements({
-        ...scope,
-        sessionKeys: [scope.sessionKey],
-        requireWriteSuccess: true,
-        update: () => ({
-          result: undefined,
-          replacements: [
-            {
-              sessionKey: scope.sessionKey,
-              entry:
-                change === "assignment"
-                  ? { sessionId, lifecycleRevision: "created-lifecycle", updatedAt: 2 }
-                  : { ...original, label: "Harmless metadata", updatedAt: 2 },
-            },
-          ],
-        }),
-      });
+      const held = holdPublication(signal);
+      const { committed, release } = held;
+      const pending = replace(
+        scope,
+        change === "assignment"
+          ? { sessionId, lifecycleRevision: "created-lifecycle", updatedAt: 2 }
+          : { ...original, label: "Harmless metadata", updatedAt: 2 },
+      );
       try {
         await withinTest(
           awaitGateBeforeSettlement(committed.promise, pending, "ID write did not commit"),
@@ -92,10 +131,8 @@ it.for(["assignment", "metadata"] as const)(
           selected.source();
         }
       } finally {
-        release.resolve();
-        delivery.afterResult = undefined;
+        held.close();
         await Promise.allSettled([pending]);
-        signal.removeEventListener("abort", onAbort);
         selected.release();
       }
     });
@@ -126,28 +163,9 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
           setting === "permissionMode" ? ("read-only" as const) : original.permissionMode,
         toolOverrides: setting === "toolOverrides" ? { webSearch: false } : original.toolOverrides,
       };
-      const committed = createDeferred();
-      const release = createDeferred();
-      const onAbort = () => release.resolve();
-      signal.addEventListener("abort", onAbort, { once: true });
-      delivery.afterResult = async () => {
-        committed.resolve();
-        await release.promise;
-      };
-      const write = applySessionEntryExactReplacements({
-        ...scope,
-        sessionKeys: [scope.sessionKey],
-        requireWriteSuccess: true,
-        update: () => ({
-          result: undefined,
-          replacements: [
-            {
-              sessionKey: scope.sessionKey,
-              entry: { ...original, ...settings, lifecycleRunId: "completion-wake" },
-            },
-          ],
-        }),
-      });
+      const held = holdPublication(signal);
+      const { committed, release } = held;
+      const write = replace(scope, { ...original, ...settings, lifecycleRunId: "completion-wake" });
       try {
         await withinTest(
           awaitGateBeforeSettlement(committed.promise, write, "policy write did not commit"),
@@ -167,10 +185,8 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
         generation.assertCurrent();
         expect(generation.readSessionSettings()).toEqual(settings);
       } finally {
-        release.resolve();
-        delivery.afterResult = undefined;
+        held.close();
         await Promise.allSettled([write]);
-        signal.removeEventListener("abort", onAbort);
         generation.release();
       }
     });
@@ -203,55 +219,19 @@ it.for(["metadata", "replacement"] as const)(
       if (grant.status !== "granted") {
         throw new Error(grant.reason);
       }
-      const health = vi.fn(async () => ({ status: "ready" as const }));
-      const provider = bindMemoryProvider(
-        {
-          capabilities: {
-            sources: ["memory"],
-            pagination: false,
-            candidates: [],
-            projectFilter: false,
-          },
-          health,
-          search: async () => ({ hits: [] }),
-          get: async () => ({ status: "not_found" }),
-          close: async () => {},
-        },
-        "test",
-        {
-          authority: {
-            kind: "session",
-            sessionKey: scope.sessionKey,
-            sandboxed: false,
-            audience: grant.audience,
-          },
-          assertCurrent: () => {},
-        },
-      );
+      const { health, provider } = memoryProvider(scope, grant.audience);
       const writes: Promise<unknown>[] = [];
       const readiness: Promise<unknown>[] = [];
       let releaseReply = () => {};
       const onAbort = () => releaseReply();
       signal.addEventListener("abort", onAbort, { once: true });
-      const replace = (label: string) =>
-        applySessionEntryExactReplacements({
-          ...scope,
-          sessionKeys: [scope.sessionKey],
-          requireWriteSuccess: true,
-          update: () => ({
-            result: undefined,
-            replacements: [
-              {
-                sessionKey: scope.sessionKey,
-                entry: {
-                  ...original,
-                  label,
-                  lifecycleRevision:
-                    kind === "replacement" ? "replacement-lifecycle" : original.lifecycleRevision,
-                },
-              },
-            ],
-          }),
+      const replaceLabel = (label: string) =>
+        replace(scope, {
+          ...original,
+          label,
+          updatedAt: 2,
+          lifecycleRevision:
+            kind === "replacement" ? "replacement-lifecycle" : original.lifecycleRevision,
         });
       try {
         for (const round of kind === "metadata" ? [0, 1] : [0]) {
@@ -262,7 +242,7 @@ it.for(["metadata", "replacement"] as const)(
             committed.resolve();
             await release.promise;
           };
-          const write = replace(`metadata-${round}`);
+          const write = replaceLabel(`metadata-${round}`);
           writes.push(write);
           await withinTest(
             awaitGateBeforeSettlement(
@@ -323,6 +303,7 @@ it.for(["metadata", "replacement"] as const)(
           }
           expect(generation.prepareRead()).toBeUndefined();
           if (kind === "replacement") {
+            expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow("no longer current");
             expect(await providerRead).toBeInstanceOf(Error);
             expect(health).toHaveBeenCalledTimes(priorCalls);
             expect(generation.assertCurrent).toThrow(
@@ -332,6 +313,7 @@ it.for(["metadata", "replacement"] as const)(
             await expect(providerRead).resolves.toEqual({ status: "ready" });
             expect(health).toHaveBeenCalledTimes(priorCalls + 1);
             generation.assertCurrent();
+            assertMemoryAudienceCurrent(grant.audience);
           }
         }
         delivery.afterResult = undefined;
@@ -341,7 +323,7 @@ it.for(["metadata", "replacement"] as const)(
           await runOpenClawAgentWriteAdmission(
             { agentId: scope.agentId, path: scope.storePath },
             () => {
-              successor = replace("queued-successor");
+              successor = replaceLabel("queued-successor");
               writes.push(successor);
               expect(generation.prepareRead()).toBeUndefined();
               generation.assertCurrent();
@@ -403,59 +385,15 @@ it.for(["metadata", "reset"] as const)(
       if (grant.status !== "granted") {
         throw new Error(grant.reason);
       }
-      const health = vi.fn(async () => ({ status: "ready" as const }));
-      const provider = bindMemoryProvider(
-        {
-          capabilities: {
-            sources: ["memory"],
-            pagination: false,
-            candidates: [],
-            projectFilter: false,
-          },
-          health,
-          search: async () => ({ hits: [] }),
-          get: async () => ({ status: "not_found" }),
-          close: async () => {},
-        },
-        "test",
-        {
-          authority: {
-            kind: "session",
-            sessionKey: childScope.sessionKey,
-            sandboxed: false,
-            audience: grant.audience,
-          },
-          assertCurrent: () => {},
-        },
-      );
-      const committed = createDeferred();
-      const release = createDeferred();
-      const onAbort = () => release.resolve();
-      signal.addEventListener("abort", onAbort, { once: true });
-      delivery.afterResult = async () => {
-        committed.resolve();
-        await release.promise;
-      };
+      const { health, provider } = memoryProvider(childScope, grant.audience);
+      const held = holdPublication(signal);
+      const { committed, release } = held;
       // Hold the parent publication mid-flight; a reset keeps the session id but changes its revision.
-      const reset = applySessionEntryExactReplacements({
-        ...parentScope,
-        sessionKeys: [parentScope.sessionKey],
-        requireWriteSuccess: true,
-        update: () => ({
-          result: undefined,
-          replacements: [
-            {
-              sessionKey: parentScope.sessionKey,
-              entry: {
-                ...parent,
-                label: "parent-metadata",
-                lifecycleRevision:
-                  kind === "reset" ? "parent-reset-lifecycle" : parent.lifecycleRevision,
-                updatedAt: 2,
-              },
-            },
-          ],
-        }),
+      const reset = replace(parentScope, {
+        ...parent,
+        label: "parent-metadata",
+        lifecycleRevision: kind === "reset" ? "parent-reset-lifecycle" : parent.lifecycleRevision,
+        updatedAt: 2,
       });
       try {
         await withinTest(
@@ -491,96 +429,10 @@ it.for(["metadata", "reset"] as const)(
           assertMemoryAudienceCurrent(grant.audience);
         }
       } finally {
-        release.resolve();
-        delivery.afterResult = undefined;
+        held.close();
         await Promise.allSettled([reset]);
-        signal.removeEventListener("abort", onAbort);
         grant.release();
         await provider.close();
-      }
-    });
-  },
-);
-
-it.for([{ change: "metadata" }, { change: "reset" }] as const)(
-  "answers a synchronous audience check during a held $change publication",
-  async ({ change }, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:synchronous-check",
-      };
-      const original = {
-        sessionId: "d1234567-1234-1234-1234-123456789abc",
-        chatType: "direct" as const,
-        lifecycleRevision: "original-lifecycle",
-        updatedAt: 1,
-      };
-      replaceSessionEntrySync(scope, original);
-      const grant = await resolveMemoryAudienceFromEntry(
-        { ...scope, sessionId: original.sessionId, senderIsOwner: true },
-        original,
-      );
-      if (grant.status !== "granted") {
-        throw new Error(grant.reason);
-      }
-      const committed = createDeferred();
-      const release = createDeferred();
-      const onAbort = () => release.resolve();
-      signal.addEventListener("abort", onAbort, { once: true });
-      delivery.afterResult = async () => {
-        committed.resolve();
-        await release.promise;
-      };
-      // A turn's own bookkeeping writes look like this: same incarnation, new metadata.
-      const pending = applySessionEntryExactReplacements({
-        ...scope,
-        sessionKeys: [scope.sessionKey],
-        requireWriteSuccess: true,
-        update: () => ({
-          result: undefined,
-          replacements: [
-            {
-              sessionKey: scope.sessionKey,
-              entry: {
-                ...original,
-                label: "replaced",
-                lifecycleRevision:
-                  change === "reset" ? "reset-lifecycle" : original.lifecycleRevision,
-                updatedAt: 2,
-              },
-            },
-          ],
-        }),
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(committed.promise, pending, "write did not reach publication"),
-          signal,
-        );
-        // Memory plugins check currency synchronously between their own awaits.
-        if (change === "metadata") {
-          assertMemoryAudienceCurrent(grant.audience);
-        } else {
-          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow(
-            "currency is unavailable",
-          );
-        }
-        release.resolve();
-        await withinTest(pending, signal);
-        if (change === "metadata") {
-          assertMemoryAudienceCurrent(grant.audience);
-        } else {
-          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow("no longer current");
-        }
-      } finally {
-        release.resolve();
-        delivery.afterResult = undefined;
-        await Promise.allSettled([pending]);
-        signal.removeEventListener("abort", onAbort);
-        grant.release();
       }
     });
   },

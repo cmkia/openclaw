@@ -20,6 +20,11 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
+  branchMessage as message,
+  branchSummary as branch,
+  expectBranchList,
+} from "./session-accessor.sqlite-branch-fixtures.test-support.js";
+import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
 } from "./session-accessor.sqlite-branches.worker.js";
@@ -38,38 +43,6 @@ afterEach(async () => {
   tempDirs.cleanup();
   clearRuntimeConfigSnapshot();
 });
-
-function message(
-  id: string,
-  parentId: string | null,
-  content: unknown,
-  options: { role?: string; phase?: string; appendMode?: string; timestamp?: string } = {},
-): Record<string, unknown> {
-  const { role = "user", phase, ...eventFields } = options;
-  return {
-    type: "message",
-    id,
-    parentId,
-    message: { role, content, ...(phase ? { phase } : {}) },
-    ...eventFields,
-  };
-}
-
-function branch(
-  leafEntryId: string,
-  headline: string,
-  messageCount: number,
-  active = false,
-  updatedAt?: string,
-): SessionBranchSummary {
-  return {
-    leafEntryId,
-    headline,
-    messageCount,
-    active,
-    ...(updatedAt === undefined ? {} : { updatedAt }),
-  };
-}
 
 function leaf(
   id: string,
@@ -249,7 +222,7 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
 
 it.each(cases)("$name", async ({ events, branches }) => {
   const scope = await seedStoredBranchEvents(events);
-  await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches });
+  await expectBranchList(scope, branches);
   expect((await loadTranscriptEvents(scope)).slice(1)).toEqual(events);
 });
 
@@ -299,13 +272,10 @@ it("extends a selected ancestor while retaining its inactive descendants and hea
     now: 3_000,
     message: { role: "assistant", content: "hidden", phase: "commentary" },
   });
-  await expect(listSessionBranches(scope)).resolves.toEqual({
-    status: "ok",
-    branches: [
-      branch("analysis", "root headline", 3, true, "1970-01-01T00:00:03.000Z"),
-      branch("side", "side headline", 2),
-    ],
-  });
+  await expectBranchList(scope, [
+    branch("analysis", "root headline", 3, true, "1970-01-01T00:00:03.000Z"),
+    branch("side", "side headline", 2),
+  ]);
 });
 
 it("rescans when an append resolves an older opaque forward reference", async () => {
@@ -326,13 +296,10 @@ it("rescans when an append resolves an older opaque forward reference", async ()
     now: 1_000,
     message: { role: "user", content: "new headline" },
   });
-  await expect(listSessionBranches(scope)).resolves.toEqual({
-    status: "ok",
-    branches: [
-      branch("future", "new headline", 2, true, "1970-01-01T00:00:01.000Z"),
-      branch("forward", "new headline", 2),
-    ],
-  });
+  await expectBranchList(scope, [
+    branch("future", "new headline", 2, true, "1970-01-01T00:00:01.000Z"),
+    branch("forward", "new headline", 2),
+  ]);
 });
 
 it("reads only the newest usable appended headline while retaining cached history", async () => {
