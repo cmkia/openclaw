@@ -46,10 +46,27 @@ function observeDocuments(page: Page) {
 
 async function traceHeadFrames(page: Page, success: boolean) {
   await page.addInitScript((expectSuccess) => {
-    const observed = window as Window & { completedHeadFrames?: number };
+    const observed = window as Window & {
+      completedHeadFrames?: number;
+      startedHeadRequests?: number;
+      settledHeadFrames?: number;
+    };
     const originalFetch = window.fetch;
     window.fetch = async (...args) => {
-      const response = await originalFetch(...args);
+      const trackSettlement = !expectSuccess && args[1]?.method === "HEAD";
+      if (trackSettlement) {
+        observed.startedHeadRequests = (observed.startedHeadRequests ?? 0) + 1;
+      }
+      const pending = originalFetch(...args);
+      if (trackSettlement) {
+        const recordSettlement = () => {
+          requestAnimationFrame(() => {
+            observed.settledHeadFrames = (observed.settledHeadFrames ?? 0) + 1;
+          });
+        };
+        void pending.then(recordSettlement, recordSettlement);
+      }
+      const response = await pending;
       if (args[1]?.method === "HEAD" && (expectSuccess ? response.ok : response.status === 503)) {
         requestAnimationFrame(() => {
           observed.completedHeadFrames = (observed.completedHeadFrames ?? 0) + 1;
@@ -142,9 +159,22 @@ async function retryThroughReload(
 ): Promise<void> {
   const reloaded = page.waitForEvent("domcontentloaded");
   await button(error, action).click();
+  // Include the probe started by Retry, or its shared in-flight probe. A
+  // settled-request frame follows recovery's response/abort continuations.
+  const startedHeads = await page.evaluate(
+    () => (window as Window & { startedHeadRequests?: number }).startedHeadRequests ?? 0,
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as Window & { settledHeadFrames?: number }).settledHeadFrames ?? 0,
+      ),
+    )
+    .toBeGreaterThanOrEqual(startedHeads);
   // Admit recovery only after the user action: restoring before click lets
   // the automatic probe navigate away before Playwright dispatches it.
   failure.restoreDocument();
+  await page.clock.runFor(1_001);
   await reloaded;
 }
 
@@ -331,6 +361,8 @@ async function installDockedScenario(
 suite.define(() => {
   it("recovers the login gate after its chunk fails without loading it during admission", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
+      await page.clock.install();
+      await traceHeadFrames(page, false);
       const failure = await installChunkFailure(page, "ui/src/components/login-gate.ts");
       const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
       const rejectLogin = async () => {
@@ -418,6 +450,8 @@ suite.define(() => {
   for (const testCase of focusedCases) {
     it(`reloads the focused ${testCase.name} after its real hashed chunk fails`, async () => {
       await suite.withPage(pageOptions, async ({ page }) => {
+        await page.clock.install();
+        await traceHeadFrames(page, false);
         const failure = await installChunkFailure(page, testCase.modulePath);
         await installMockGateway(page, testCase.gateway);
         const documentRequests = observeDocuments(page);
@@ -445,6 +479,8 @@ suite.define(() => {
     const context = await suite.newBrowserContext(pageOptions);
     try {
       const page = await context.newPage();
+      await page.clock.install();
+      await traceHeadFrames(page, false);
       const failure = await installChunkFailure(page, "ui/src/components/command-palette.tsx");
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -636,6 +672,10 @@ suite.define(() => {
       ),
   )("recovers $name from its in-place stale-chunk error via $recovery", async (testCase) => {
     await suite.withPage(pageOptions, async ({ page }) => {
+      if (!testCase.automaticReload) {
+        await page.clock.install();
+        await traceHeadFrames(page, false);
+      }
       const failure = await installChunkFailure(page, testCase.modulePath, {
         automaticReload: testCase.automaticReload,
       });
