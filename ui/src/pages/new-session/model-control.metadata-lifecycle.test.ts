@@ -10,6 +10,7 @@ import {
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { resetWorktreeMocks } from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import { disposeWorktreeDraft } from "./draft-worktree-submission.test-support.ts";
@@ -108,17 +109,17 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   const find = (attribute: string, value?: string) => controlElement(draw(), attribute, value);
   const select = (value: string) => find("account-option", value)!.click();
   const chooseAccount = async () => {
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential"),
     );
     const container = await waitForModelControl(control, context, "main", agent);
     const picker = container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]");
     expect(picker).not.toBeNull();
     picker!.click();
-    await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
+    await waitForFast(() => expect(draw().textContent).toContain(account.label));
     select(`account:${account.authProfileId}`);
     return {
-      completion: vi.waitFor(() =>
+      completion: waitForFast(() =>
         expect(control.modelSelectionBlockedReason(agent)).not.toBe("Loading models…"),
       ),
     };
