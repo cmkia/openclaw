@@ -425,10 +425,11 @@ function NativeNotificationSection(props: {
   const status = () => nativeNotificationsStatus(props.native.permission);
   const [sending, setSending] = createOptimistic(false);
   const testPending = () => sending() || props.native.test?.state === "pending";
-  const sendTest = action(function* () {
+  const presentTest = action(function* (pending: Promise<unknown> | void) {
     setSending(true);
-    yield props.actions.onNativeNotificationsSendTest?.();
+    yield pending;
   });
+  const sendTest = () => void presentTest(props.actions.onNativeNotificationsSendTest?.());
   return (
     <NotificationSection
       title={t("configView.notifications.nativeTitle")}
@@ -447,7 +448,7 @@ function NativeNotificationSection(props: {
       >
         <NotificationActions>
           {props.native.permission === "granted" ? (
-            <button class="btn primary" disabled={testPending()} onClick={() => void sendTest()}>
+            <button class="btn primary" disabled={testPending()} onClick={sendTest}>
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
