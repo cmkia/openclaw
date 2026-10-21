@@ -1,4 +1,12 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  Loading,
+  Show,
+} from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
@@ -14,8 +22,8 @@ export function ChatPermissionCard(props: {
 }) {
   const native = useOptionalApplication()?.nativeDeviceSettings;
   const projection = native ? projectNativeDeviceSettings(native) : null;
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
+  const [busy, setBusy] = createOptimistic(false);
+  const [operation, setOperation] = createSignal<{ promise: Promise<void> }>();
   const names = (capabilities = props.request.capabilities) =>
     capabilities
       .map((id) => {
@@ -59,7 +67,7 @@ export function ChatPermissionCard(props: {
     ),
   );
   const complete = () => Boolean(local()) && remaining().length === 0;
-  const action = createMemo(() => {
+  const permissionAction = createMemo(() => {
     const snapshot = projection?.read();
     if (local()) {
       if (disabled().length > 0) {
@@ -87,26 +95,19 @@ export function ChatPermissionCard(props: {
     return { state: props.request.state, capabilities: remaining() };
   });
   const following = () =>
-    action().state === "disabled-in-openclaw"
+    permissionAction().state === "disabled-in-openclaw"
       ? remaining().filter((id) => !disabled().includes(id))
       : [];
-  const grant = async () => {
+  const grant = action(function* () {
     if (!local() || busy()) {
       return;
     }
     setBusy(true);
-    setError("");
-    try {
-      await native?.resolvePermission?.({
-        ...props.request,
-        ...action(),
-      });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    yield native?.resolvePermission?.({
+      ...props.request,
+      ...permissionAction(),
+    });
+  });
   return (
     <openclaw-chat-permission-card>
       <section
@@ -122,7 +123,11 @@ export function ChatPermissionCard(props: {
         </p>
         <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
           <p>
-            {t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${action().state}`)}
+            {t(
+              complete()
+                ? "chat.permissions.ready"
+                : `chat.permissions.states.${permissionAction().state}`,
+            )}
           </p>
           <Show when={following().length > 0}>
             <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
@@ -134,10 +139,15 @@ export function ChatPermissionCard(props: {
                 class="btn primary"
                 type="button"
                 disabled={busy()}
-                onClick={() => void grant()}
+                onClick={() => {
+                  const pending = grant();
+                  // The card can unmount before its outcome boundary observes the rejection.
+                  void pending.catch(() => {});
+                  setOperation({ promise: pending });
+                }}
               >
-                {t(`chat.permissions.actions.${action().state}`, {
-                  permissions: names(action().capabilities),
+                {t(`chat.permissions.actions.${permissionAction().state}`, {
+                  permissions: names(permissionAction().capabilities),
                 })}
               </button>
             }
@@ -154,8 +164,26 @@ export function ChatPermissionCard(props: {
             </button>
           </Show>
         </Show>
-        <Show when={error()}>
-          <p role="alert">{error()}</p>
+        <Show when={!busy() && operation()} keyed>
+          {({ promise }) => {
+            const outcome = createMemo(async () => {
+              await promise;
+              return null;
+            });
+            return (
+              <Errored
+                fallback={(error) => {
+                  const message = () => {
+                    const cause = error();
+                    return cause instanceof Error ? cause.message : String(cause);
+                  };
+                  return <p role="alert">{message()}</p>;
+                }}
+              >
+                <Loading>{outcome()}</Loading>
+              </Errored>
+            );
+          }}
         </Show>
       </section>
     </openclaw-chat-permission-card>
