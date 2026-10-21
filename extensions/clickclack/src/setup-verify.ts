@@ -128,7 +128,6 @@ function formatClickClackConnectionLog(
     case "skipped-unconfigured":
       return undefined;
   }
-  return undefined;
 }
 
 export async function verifyClickClackAccountAfterSetup(params: {
