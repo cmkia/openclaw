@@ -21,6 +21,10 @@ import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.t
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
+const captureProof =
+  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ||
+  Boolean(process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim());
+
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
   startServerBeforeBrowser: true,
@@ -139,7 +143,9 @@ suite.define(() => {
           .getByRole("button", { name: "Send message", exact: true })
           .isDisabled(),
       };
-      await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
+      if (captureProof) {
+        await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
+      }
       await page.evaluate(async () => {
         const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
           .attachmentReadProof;
@@ -162,7 +168,9 @@ suite.define(() => {
         requests: await gateway.getRequests("chat.send"),
       };
       await writeFile(path.join(proofDir, "handoff.json"), JSON.stringify(receipt, null, 2));
-      await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
+      if (captureProof) {
+        await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
+      }
       console.log(JSON.stringify({ artifactDir: proofDir, ...receipt }));
       expect(receipt.pending).toEqual({ files: 1, sendDisabled: true });
       expect(receipt.returnedDraft).toBe(draft);
@@ -280,7 +288,9 @@ suite.define(() => {
         if (scenario !== "rewind-newer-file") {
           await expect.poll(() => composer.inputValue()).toBe(expectedText);
         }
-        await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
+        if (captureProof) {
+          await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
+        }
       }
       if (scenario !== "same-draft" && scenario !== "rewind-completed") {
         await finishRead();
@@ -299,7 +309,9 @@ suite.define(() => {
         ),
         pageErrors,
       };
-      await page.screenshot({ path: path.join(proofDir, "settled-before-send.png") });
+      if (captureProof) {
+        await page.screenshot({ path: path.join(proofDir, "settled-before-send.png") });
+      }
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       const sent = request.params as {
@@ -446,7 +458,7 @@ suite.define(() => {
             visibility: document.visibilityState,
           })),
         ).toEqual({ focused: true, visibility: "visible" });
-        if (capture) {
+        if (capture && captureProof) {
           await pane.screenshot({ path: path.join(proofDir, "held-enter-before.png") });
         }
 
@@ -594,7 +606,7 @@ suite.define(() => {
             observed,
           });
           expect(pageErrors).toEqual([]);
-          if (capture) {
+          if (capture && captureProof) {
             await pane.screenshot({ path: path.join(proofDir, "held-enter-after.png") });
           }
           expect(observed.bubbles.map((row) => row.id)).toEqual([`msg:send:${followUpRunId}:0`]);
@@ -976,9 +988,11 @@ suite.define(() => {
       // 1. Stalled preparing state
       await expect.poll(() => send.isDisabled()).toBe(true);
       await page.locator(".chat-attachment-loading").waitFor();
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
-      });
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
+        });
+      }
 
       // Advance virtual clock past the 15-second read timeout
       await page.clock.runFor(15_001);
@@ -989,9 +1003,11 @@ suite.define(() => {
         .getByText("Could not attach file. Try again.", { exact: true })
         .waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
-      });
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
+        });
+      }
 
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       expect(await composer.inputValue()).toBe(draftText);
@@ -1005,9 +1021,11 @@ suite.define(() => {
       });
       expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
       await expect.poll(() => composer.inputValue()).toBe("");
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
-      });
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
+        });
+      }
 
       const aborts = await page.evaluate(
         () =>
