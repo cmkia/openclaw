@@ -4,6 +4,7 @@ import { shellViewport } from "../../app/shell-viewport.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../components/solid/text-overflow.ts";
 import "../../styles/chat/mobile-host.css";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
@@ -511,6 +512,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                 const Heading = dynamic(() => page().heading ?? (() => page().title));
                 return (
                   <div
+                    ref={createTextOverflow(() => page().title)}
                     class="chat-mobile-host__title"
                     data-details-route={page().details?.kind}
                     title={page().details?.kind === "pull-request" ? page().title : undefined}

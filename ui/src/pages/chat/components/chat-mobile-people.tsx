@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import type {
   ChatMobilePeople,
   ChatMobilePeopleMention,
@@ -18,6 +19,7 @@ type ChatMobilePeopleLabels = {
   mention: string;
   mentionPerson: (fullName: string) => string;
   morePeople: (count: number) => string;
+  shownPeople: (count: number) => string;
 };
 
 export type ChatMobilePeopleBodyProps = {
@@ -31,7 +33,12 @@ export type ChatMobilePeopleBodyProps = {
 
 function PersonName(props: { person: ChatMobilePerson }) {
   return (
-    <span class="chat-mobile-people__name" aria-label={props.person.label}>
+    <span
+      ref={createTextOverflow(() => props.person.firstName)}
+      class="chat-mobile-people__name"
+      aria-label={props.person.label}
+      title={props.person.label}
+    >
       {props.person.firstName}
     </span>
   );
@@ -42,6 +49,7 @@ function PeopleSection(props: {
   people: readonly ChatMobilePerson[];
   labels: ChatMobilePeopleLabels;
   showCount?: boolean;
+  partial?: boolean;
   onMention?: ChatMobilePeopleBodyProps["onMention"];
 }) {
   return (
@@ -49,7 +57,9 @@ function PeopleSection(props: {
       <h3>
         {props.title}
         <Show when={props.showCount}>
-          <span>{props.people.length}</span>
+          <span>
+            {props.partial ? props.labels.shownPeople(props.people.length) : props.people.length}
+          </span>
         </Show>
       </h3>
       <ul class="chat-mobile-people__list">
@@ -145,6 +155,7 @@ export function ChatMobilePeopleBody(props: ChatMobilePeopleBodyProps) {
           people={props.people.participants}
           labels={props.labels}
           showCount
+          partial={!props.people.participantsComplete}
           onMention={props.onMention}
         />
       </Show>

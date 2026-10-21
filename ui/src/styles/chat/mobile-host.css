@@ -172,14 +172,13 @@
     font-weight: 500;
     color: var(--text-strong);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     white-space: nowrap;
 
-    /* Selected PR is the sole two-line heading exception. Keep the header height. */
+    /* Keep the selected PR at two 20px lines; the measured mask replaces clamp ellipsis. */
     &[data-details-route="pull-request"] {
-      display: -webkit-box;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
+      display: block;
+      max-height: 40px;
       font-size: 16px;
       line-height: 20px;
       white-space: normal;
