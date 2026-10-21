@@ -1,6 +1,6 @@
 // The shared fixture installs registry mocks before these consumers are evaluated.
 // oxfmt-ignore
-import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { enqueueFollowupRun } from "../../../auto-reply/reply/queue.js";
@@ -546,25 +546,15 @@ it("keeps a watched registration current while the other raw owner commits", asy
   const { send } = await prepareWatchedRawChildren();
   const entered = createDeferred();
   const release = createDeferred();
-  fixture.worker.mockImplementation((context, operation, options) =>
-    runSubagentStateWorkerOperation(
-      context,
-      (scope) =>
-        operation({
-          execute: async (command, commandOptions) => {
-            if (
-              isSubagentRegistryWriteCommand(command) &&
-              command.input.values.some((row) => row.run_id === "main-3")
-            ) {
-              entered.resolve();
-              await release.promise;
-            }
-            return scope.execute(command, commandOptions);
-          },
-        }),
-      options,
-    ),
-  );
+  fixture.interceptWorkerCommand((command) => {
+    if (
+      isSubagentRegistryWriteCommand(command) &&
+      command.input.values.some((row) => row.run_id === "main-3")
+    ) {
+      entered.resolve();
+      return release.promise;
+    }
+  });
   const pending = send("main", "main-concurrent-turn");
   try {
     await awaitGateBeforeSettlement(

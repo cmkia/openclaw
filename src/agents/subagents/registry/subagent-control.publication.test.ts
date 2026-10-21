@@ -19,7 +19,6 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as killSession from "./subagent-control-session.js";
@@ -53,30 +52,40 @@ const fixture = useSubagentControlFixture();
 const runs = createControlRunFixture(() => fixture.stateDir);
 const rootKey = "agent:main:subagent:publication-root";
 const childKey = "agent:main:subagent:publication-drain";
+const readSession = (storePath: string, sessionKey = rootKey) =>
+  loadExactSessionEntryReadOnly({ storePath, sessionKey });
+const rejectedRun = {
+  execution: { status: "terminal", outcome: { status: "error", error: "admission rejected" } },
+  completion: { resultText: "admission rejected" },
+};
+
+async function writeRegistrationSession(runId: string, lifecycleRevision?: string) {
+  const target = {
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: `agent:main:subagent:${runId}`,
+    defaultSessionId: `${runId}-session`,
+    lifecycleRevision,
+  };
+  const storePath = await writeSubagentSessionEntry(target);
+  const sessionEntry = expectDefined(
+    readSession(storePath, target.sessionKey),
+    "child session",
+  ).entry;
+  return { target, storePath, sessionEntry, childSessionKey: target.sessionKey };
+}
 
 it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
   "settles an unstarted plugin registration with a %s owner",
   async (ownerState) => {
-    const childSessionKey = "agent:main:subagent:unstarted-plugin";
     const runId = "unstarted-plugin";
-    const target = {
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      defaultSessionId: "unstarted-plugin-session",
-      lifecycleRevision: "unstarted-plugin-revision",
-    };
-    const storePath = await writeSubagentSessionEntry(target);
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
+    const { target, storePath, sessionEntry, childSessionKey } = await writeRegistrationSession(
+      runId,
+      "unstarted-plugin-revision",
+    );
+    await runs.writeSession("unstarted-plugin-requester", undefined, {
       sessionKey: "agent:main:main",
-      defaultSessionId: "unstarted-plugin-requester-session",
     });
-    const sessionEntry = expectDefined(
-      loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
-      "child session",
-    ).entry;
     const context = createContext();
     let currentGateway = context;
     context.getRuntimeConfig = getRuntimeConfig;
@@ -167,10 +176,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           lifecycleRevision: "replacement-revision",
         });
       }
-      const beforeCleanup = loadExactSessionEntryReadOnly({
-        storePath,
-        sessionKey: childSessionKey,
-      });
+      const beforeCleanup = readSession(storePath, childSessionKey);
       await expectDefined(rejectAdmission, "committed rejection cleanup")("admission rejected");
       if (ownerState === "replaced Gateway") {
         await announcementEntered.promise;
@@ -179,12 +185,8 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
       }
       await fixture.settle();
       expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+        ...rejectedRun,
         requesterSessionKey: "agent:main:main",
-        execution: {
-          status: "terminal",
-          outcome: { status: "error", error: "admission rejected" },
-        },
-        completion: { resultText: "admission rejected" },
       });
       if (ownerState !== "revoked") {
         expect(fixture.announce).toHaveBeenCalledOnce();
@@ -209,13 +211,9 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(
           true,
         );
-        expect(loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })).toEqual(
-          beforeCleanup,
-        );
+        expect(readSession(storePath, childSessionKey)).toEqual(beforeCleanup);
       } else {
-        expect(
-          loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })?.entry,
-        ).toMatchObject({
+        expect(readSession(storePath, childSessionKey)?.entry).toMatchObject({
           sessionId: target.defaultSessionId,
           status: "failed",
           lastRunError: expect.anything(),
@@ -231,18 +229,12 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
 it.each(["registration", "adoption"] as const)(
   "retains committed %s cleanup when publication throws",
   async (mode) => {
-    const childSessionKey = "agent:main:subagent:rejected-publication";
     const runId = "rejected-publication";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      defaultSessionId: "rejected-publication-session",
-    });
-    const sessionBefore = expectDefined(
-      loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
-      "child session",
-    ).entry;
+    const {
+      storePath,
+      childSessionKey,
+      sessionEntry: sessionBefore,
+    } = await writeRegistrationSession(runId);
     const registration = {
       runId,
       childSessionKey,
@@ -299,14 +291,11 @@ it.each(["registration", "adoption"] as const)(
     expect(subagentRuns.has("paused-publication")).toBe(false);
     await expectDefined(rejectAdmission, "committed rejection cleanup")("admission rejected");
     expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+      ...rejectedRun,
       runId,
       taskRunId: mode === "adoption" ? "paused-publication" : runId,
-      execution: { status: "terminal", outcome: { status: "error", error: "admission rejected" } },
-      completion: { resultText: "admission rejected" },
     });
-    expect(
-      loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })?.entry,
-    ).toEqual(sessionBefore);
+    expect(readSession(storePath, childSessionKey)?.entry).toEqual(sessionBefore);
   },
 );
 
@@ -320,7 +309,7 @@ it("does not refresh session metadata when an owned abort marker is already pers
     abortedLastRun: true,
     updatedAt: 17,
   });
-  const read = () => loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry;
+  const read = () => readSession(storePath)?.entry;
   const before = read();
   expect(before?.abortedLastRun).toBe(true);
   const marker = {
@@ -491,21 +480,16 @@ it.each([
       });
     }
     const entered = createDeferred();
-    const childAdmission = await beginSessionEffect({
-      scope: storePath,
-      identities: [childKey, "publication-child-session"],
-      run: {
-        runId: "publication-child",
-        sessionKey: childKey,
-        sessionId: "publication-child-session",
-        agentId: "main",
-      },
-      assertAllowed: () => {},
-      onInterrupt: () => {
+    const childAdmission = await beginControlAdmission(
+      storePath,
+      childKey,
+      "publication-child-session",
+      () => {
         entered.resolve();
         return { runId: "publication-child" };
       },
-    });
+      "publication-child",
+    );
     const markerCleared = createDeferred();
     const releaseMarker = createDeferred();
     let markerWaits = 0;
@@ -593,9 +577,7 @@ it.each([
           pending,
           "Cancellation never reached marker cleanup",
         );
-        expect(
-          loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry.abortedLastRun,
-        ).toBe(false);
+        expect(readSession(storePath)?.entry.abortedLastRun).toBe(false);
       }
       if (priorChildKill) {
         await firstChildCleanup.promise;

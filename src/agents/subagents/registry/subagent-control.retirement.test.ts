@@ -16,10 +16,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import {
-  beginSessionEffect,
-  captureSessionTarget,
-} from "../../../sessions/session-controller.lifecycle.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
@@ -32,11 +29,18 @@ import {
   requesterWakeDriver,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
 } from "./subagent-control-native.test-support.js";
+import {
+  beginControlAdmission,
+  controlController as controller,
+  controlSessionKey as childKey,
+  createControlRunFixture,
+  enqueueControlRun,
+} from "./subagent-control.fixtures.test-support.js";
 import {
   killAllControlledSubagentRuns as killRuns,
   killSubagentRunAdmin,
@@ -68,31 +72,15 @@ import { resolveSubagentSessionStatus as status } from "./subagent-session-metri
 
 const fixture = useSubagentControlFixture();
 const { worker, gateway, wake, announce, capture, cleanup } = fixture;
-const controllerSessionKey = "agent:main:main";
-const controller = {
-  controllerSessionKey,
-  controllerAgentId: "main",
-  callerSessionKey: controllerSessionKey,
-  callerIsSubagent: false,
-  controlScope: "children" as const,
-};
-const childKey = (runId: string) => `agent:main:subagent:${runId}`;
-const identity = (runId: string) => ({
-  sessionId: `${runId}-session`,
-  lifecycleRevision: `${runId}-revision`,
-});
+const { controllerSessionKey } = controller;
+const runs = createControlRunFixture(() => fixture.stateDir);
 type Registration = Parameters<typeof registerSubagentRun>[0];
 function register(options: Pick<Registration, "runId"> & Partial<Registration>) {
-  return registerSubagentRun({
-    childSessionKey: childKey(options.runId),
-    sessionEntry: identity(options.runId),
-    task: options.runId,
-    childAgentId: "main",
-    requesterSessionKey: controllerSessionKey,
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    cleanup: "keep",
-    expectsCompletionMessage: false,
+  return runs.register(options.runId, undefined, {
+    sessionEntry: {
+      sessionId: `${options.runId}-session`,
+      lifecycleRevision: `${options.runId}-revision`,
+    },
     ...options,
   });
 }
@@ -114,14 +102,7 @@ function putSession(storePath: string, sessionKey: string, sessionId: string, re
 }
 function enqueue(runId: string, blocker?: string) {
   const start = vi.fn(async () => {});
-  enqueueSwarmRun({
-    groupId: runId,
-    runId,
-    maxConcurrent: 1,
-    activeRunIds: blocker ? [blocker] : [],
-    start,
-    onStartFailure: () => true,
-  });
+  enqueueControlRun(runId, runId, blocker ? [blocker] : [], start);
   return start;
 }
 async function registerTree(turnOwner = false, predecessor = false) {
@@ -179,22 +160,12 @@ it.each([
         clock.mockReturnValue(now + RETIRE_AFTER);
         let retirementRejected = false;
         if (transition === "retirement write rollback") {
-          worker.mockImplementation((context, operation, options) =>
-            runWorker(
-              context,
-              (scope) => {
-                const execute: typeof scope.execute = async (command) => {
-                  if (isRegistryWrite(command) && command.input.deleteRunIds.includes("ancestor")) {
-                    retirementRejected = true;
-                    throw new Error("retirement write rejected");
-                  }
-                  return scope.execute(command);
-                };
-                return operation({ ...scope, execute });
-              },
-              options,
-            ),
-          );
+          fixture.interceptWorkerCommand((command) => {
+            if (isRegistryWrite(command) && command.input.deleteRunIds.includes("ancestor")) {
+              retirementRejected = true;
+              throw new Error("retirement write rejected");
+            }
+          });
         }
         await testing.sweepOnceForTests();
         if (transition === "retirement write rollback") {
@@ -282,21 +253,16 @@ it.each([
   const ancestor = subagentRuns.get("ancestor")!;
   const child = subagentRuns.get("child")!;
   const entered = createDeferred();
-  const admission = await beginSessionEffect({
-    scope: storePath,
-    identities: [ancestorKey, "ancestor-session"],
-    run: {
-      runId: ancestor.runId,
-      sessionKey: ancestorKey,
-      sessionId: "ancestor-session",
-      agentId: "main",
-    },
-    assertAllowed: () => {},
-    onInterrupt: () => {
+  const admission = await beginControlAdmission(
+    storePath,
+    ancestorKey,
+    "ancestor-session",
+    () => {
       entered.resolve();
       return { runId: ancestor.runId };
     },
-  });
+    ancestor.runId,
+  );
   const dispatch = enqueue(child.runId, "draining-blocker");
   const cfg = getRuntimeConfig();
   const pending =

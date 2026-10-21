@@ -3,8 +3,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import * as killSession from "./subagent-control-session.js";
+import { controlController, enqueueControlRun } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -33,7 +34,7 @@ export function registerLateDescendantControlTests({
   ] as const)(
     "captures descendants registered during %s before releasing capacity (replacement=%s)",
     async (phase, replaceChild) => {
-      const owner = "agent:main:main";
+      const owner = controlController.controllerSessionKey;
       let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
@@ -86,14 +87,7 @@ export function registerLateDescendantControlTests({
       const registerChild = () => {
         const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
-        enqueueSwarmRun({
-          groupId: "late-descendants",
-          runId: "late-child",
-          activeRunIds: [parent.runId],
-          maxConcurrent: 1,
-          start,
-          onStartFailure: () => true,
-        });
+        enqueueControlRun("late-descendants", "late-child", [parent.runId], start);
         return registerSubagentRun({
           runId: "late-child",
           childSessionKey: childKey,
@@ -112,13 +106,6 @@ export function registerLateDescendantControlTests({
         });
       };
       setSubagentControlDepsForTest({});
-      const controller = {
-        controllerSessionKey: owner,
-        controllerAgentId: "main",
-        callerSessionKey: owner,
-        callerIsSubagent: false,
-        controlScope: "children" as const,
-      };
       const cfg = cfgWithSessionStore(storePath);
       if (replaceChild) {
         await registerChild();
@@ -136,7 +123,7 @@ export function registerLateDescendantControlTests({
       const reservationReleases: Promise<void>[] = [];
       const pending = killAllControlledSubagentRuns({
         cfg,
-        controller,
+        controller: controlController,
         runs: [parent],
         beforeKill:
           phase === "parent persistence"
@@ -176,14 +163,7 @@ export function registerLateDescendantControlTests({
           collect: true,
           queued: true,
         });
-        enqueueSwarmRun({
-          groupId: "other-turn",
-          runId: "other-turn-root",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: outsideStart,
-          onStartFailure: () => true,
-        });
+        enqueueControlRun("other-turn", "other-turn-root", [], outsideStart);
         proceed.resolve();
         if (phase === "admission drain") {
           admission.release();

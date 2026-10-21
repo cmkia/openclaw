@@ -5,7 +5,8 @@ import { captureSessionTarget } from "../../../sessions/session-controller.lifec
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { controlController, enqueueControlRun } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { runSubagentStateWorkerOperation } from "./subagent-control.test-support.js";
@@ -34,7 +35,7 @@ export function registerQueuedReservationFailureTests({
     "lifecycle rotation",
     "parent persistence",
   ])("releases or withdraws the exact queued reservation after %s failure", async (failure) => {
-    const controllerSessionKey = "agent:main:main";
+    const { controllerSessionKey } = controlController;
     let entry = createSubagentRunRecord({
       runId: "failure-queued",
       childSessionKey: "agent:main:subagent:failure-queued",
@@ -57,15 +58,7 @@ export function registerQueuedReservationFailureTests({
       [entry.childSessionKey]: { sessionId: "queued-session", updatedAt: 1 },
     });
     const dispatch = vi.fn(async () => {});
-    const reserve = () =>
-      enqueueSwarmRun({
-        groupId: "failure-lane",
-        runId: entry.runId,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: dispatch,
-        onStartFailure: () => true,
-      });
+    const reserve = () => enqueueControlRun("failure-lane", entry.runId, [], dispatch);
     reserve();
     let writes = 0;
     let rejectedWrite: number | undefined;
@@ -135,13 +128,7 @@ export function registerQueuedReservationFailureTests({
     try {
       const pending = killAllControlledSubagentRuns({
         cfg: cfgWithSessionStore(storePath),
-        controller: {
-          controllerSessionKey,
-          controllerAgentId: "main",
-          callerSessionKey: controllerSessionKey,
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller: controlController,
         runs: [entry],
         beforeKill: async () => {
           await Promise.resolve();
@@ -186,14 +173,7 @@ export function registerQueuedReservationFailureTests({
       if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
         expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });
         const survivor = vi.fn(async () => {});
-        enqueueSwarmRun({
-          groupId: "failure-lane",
-          runId: "survivor",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: survivor,
-          onStartFailure: () => true,
-        });
+        enqueueControlRun("failure-lane", "survivor", [], survivor);
         await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
         expect(dispatch).not.toHaveBeenCalled();
         expect(await markSubagentRunTerminated({ runId: entry.runId })).toBe(1);
