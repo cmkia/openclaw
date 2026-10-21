@@ -6,17 +6,18 @@ import type { NewSessionModelControl, NewSessionModelRenderOptions } from "./mod
 
 function ModelCatalogStatus(props: {
   read: () => ModelCatalogResult | undefined;
-  scope: object | undefined;
+  identity: object;
   children: () => Element;
 }) {
-  const scope = createMemo(() => props.scope);
+  // Re-arm on admitted retries so the owner's loading status replaces a preceding error.
+  const identity = createMemo(() => props.identity);
   const ready = createMemo(() => {
     props.read();
     return true;
   });
   return (
     <Errored fallback={() => props.children()}>
-      <Loading on={scope()} fallback={props.children()}>
+      <Loading on={identity()} fallback={props.children()}>
         {ready() ? props.children() : undefined}
       </Loading>
     </Errored>
@@ -88,7 +89,7 @@ export function NewSessionModelControlView(props: {
     <ChatModelControls
       {...controls()}
       renderModelCatalogStatus={(render) => (
-        <ModelCatalogStatus read={metadata} scope={read().scope}>
+        <ModelCatalogStatus read={metadata} identity={read()}>
           {render}
         </ModelCatalogStatus>
       )}

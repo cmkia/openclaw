@@ -10,6 +10,21 @@ import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl, type NewSessionModelRenderOptions } from "./model-control.ts";
 
+async function focusModelSearch(container: HTMLElement) {
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
+  await waitForSolid(() => expect(picker.hasAttribute("data-chat-native-picker")).toBe(true));
+  // The shared fixture also opens Effort, which closes the exclusive model menu.
+  if (!picker.open) {
+    picker.querySelector<HTMLElement>("[data-chat-model-select]")!.click();
+    flush();
+  }
+  expect(picker.open).toBe(true);
+  const input = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+  input.focus();
+  expect(document.activeElement).toBe(input);
+  return input;
+}
+
 it("keeps one mounted model view live without depending on draft revisions", async () => {
   const model = { id: "gpt-5.5", name: "GPT 5.5", provider: "openai", reasoning: true };
   const models = [model, { ...model, id: "fixture-alternative", name: "Alternative" }];
@@ -55,9 +70,16 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     const trigger = () => query("[data-chat-model-select]");
     const option = () => query('[data-chat-model-option="openai/gpt-5.5"]');
     const mountedTrigger = trigger();
-    mountedTrigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(query(".chat-controls__model-picker")?.hasAttribute("data-chat-native-picker")).toBe(
+        true,
+      ),
+    );
+    mountedTrigger?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     flush();
-    await waitForSolid(() => expect(option()).not.toBeNull());
+    expect(query(".chat-controls__model-picker")?.hasAttribute("open")).toBe(true);
+    // First open resolves the lazy picker panel before option identity can be checked.
+    await waitForSolid(() => expect(option()).not.toBeNull(), { timeout: 5_000 });
     const mountedOption = option();
     render.mockClear();
     const labels = vi.spyOn(String.prototype, "toLocaleLowerCase");
@@ -152,8 +174,7 @@ it("keeps CLI targets and a typed search live while initial model metadata is pe
     const target = () =>
       container.querySelector<HTMLButtonElement>('[data-chat-model-target="fixture-cli"]');
     await waitForSolid(() => expect(target()).not.toBeNull());
-    const input = container.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
-    input.focus();
+    const input = await focusModelSearch(container);
     input.value = "Fixture CLI";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     flush();
@@ -194,9 +215,8 @@ it("retains accepted rows and search through failed refresh, then retires them o
     const current = () =>
       container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/current"]');
     await waitForSolid(() => expect(current()).not.toBeNull());
-    const input = container.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+    const input = await focusModelSearch(container);
     const row = current();
-    input.focus();
     input.value = "current";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     flush();
