@@ -10,6 +10,8 @@ type NotificationProof = {
   userActivation: boolean;
 };
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({
   name: "Native notification loading",
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
@@ -30,7 +32,7 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport,
-          recordVideo: { dir: suite.artifactDir, size: viewport },
+          recordVideo: captureUiProof ? { dir: suite.artifactDir, size: viewport } : undefined,
         },
         async ({ context, page }) => {
           const notificationModules: string[] = [];
@@ -102,7 +104,9 @@ suite.define(() => {
           }
           await composer.fill("Check notification startup.");
           expect(notificationModules).toHaveLength(native ? 1 : 0);
-          await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });
+          }
           if (background) {
             await expect
               .poll(() =>
@@ -139,7 +143,9 @@ suite.define(() => {
           }
           expect(notificationModules).toHaveLength(native ? 1 : 0);
           expect(errors).toEqual([]);
-          await page.screenshot({ path: path.join(suite.artifactDir, "sent.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "sent.png") });
+          }
         },
       );
     },
