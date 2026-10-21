@@ -451,16 +451,23 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+Add `--activity-catalog-refresh` to request unchanged catalog renewal from a
+separate controller every third activity step. The fixture's live provider returns
+the same rows as its static catalog. Controller requests are recorded in `activity`
+and excluded from browser request counts. This isolates browser invalidation after
+explicit renewal; it does not prove which production action triggered a renewal.
 With `--open-details`, the final check reopens Details for the selected conversation
 after the activity window, then compares its session identity, label, model, status
 note, and thinking level with a fresh controller-side descriptor. It records this
-as an input-state comparison, then separately checks the rendered model in Details
-and the visible conversation header's label. The controller read is excluded
+as an input-state comparison, then separately checks the visible conversation
+header's label. The controller read is excluded
 from browser request counts; compare activity requests only between
 `activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
 event's session key, reason, timestamp, and revision to distinguish event-driven
 reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
 then omit it for paired timing.
+Failed attempts retain the available browser probe under `failure`, including
+failures in the final Details assertions; they are diagnostics, not accepted samples.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -1869,6 +1876,23 @@ counter hooks, and is not isolated bytes allocated by one assertion. Use matched
 instrumentation and the same paired host procedure for comparisons. The tiny
 fixture proves the path, not deployment capacity or production recheck rates.
 
+## State and agent database path resolution
+
+Measure the real path owners without opening a database:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/state-path-resolution-measure.ts \
+  --iterations 100000 --rounds 5
+```
+
+The JSON-lines output separates warm roots, alternating roots, explicit agent
+paths, and cold unique roots. Timing and allocation are separate passes; V8
+sampling includes objects collected by major and minor GC. A third, untimed pass
+counts exported `path.resolve` and `path.join` calls. These are owner-level
+operation counts, not Gateway calls per turn. Run both revisions with identical
+arguments, interleave samples, and compare with the `chat.send` allocation
+workload below before drawing an end-to-end conclusion.
+
 ## Allocated bytes per RPC or turn
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
@@ -1920,6 +1944,11 @@ main isolate. Each sample's `workloadCpuProfile` includes the full
 hottest functions, and sampled time under `broadcastInternal`. This differs from
 `--cpu-profile`, which captures stream admission/release and optional recap
 phases; the two flags cannot be combined.
+
+Add `--presence-deltas` when measuring presence delivery preparation; without this
+capability, clients receive legacy presence snapshots and bypass delta preparation.
+The option uses the synthetic trusted-proxy Control UI clients so their connections
+participate in presence; default backend probes are excluded from the roster.
 
 Run full CPU attribution in a separate matched pass, replacing `--allocations`
 with `--workload-cpu-profile`. The new mode rejects `--allocations`, `--trace-gc`,
@@ -2108,3 +2137,25 @@ Run at least five pairs. The retained append-normalized case should eliminate
 repeated nested-argument hashing; sealed history should remain at zero warm hash
 bytes, and mutable SDK content must still be inspected. Diagnostic output and
 in-place mutation coverage live in `prompt-cache-observability.history.test.ts`.
+
+## WebSocket event diagnostic accounting
+
+`ws-event-diagnostics-measure.ts` exercises the real recording and diagnostic
+dispatch owners with 250 batches of 1,000 synthetic accepted frames, plus wire-byte
+observations. It includes plain, presence, subscribed/roster session, and unknown
+event labels. Run on the approved benchmark host:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/ws-event-diagnostics-measure.ts
+```
+
+The JSON result separates cold and warmed sampled allocation bytes per frame,
+including collected objects, for the entire process and the recording/flush owner.
+CPU is measured in a separate unprofiled pass; the inactive-interest pass verifies
+recording is skipped. Delivered frame and histogram counts are checked. Compare
+at least five interleaved baseline/candidate samples, then confirm real transport
+behavior with `transcript-broadcast-measure.ts --scenario transcript-broadcast
+--clients 30 --allocations --diagnostics --active-work-diagnostics --trace-gc`
+and the memory-soak scenario. Compare promotion per turn, minor and major GC
+time, and event-loop and turn latency tails as well as sampled allocation;
+allocation reduction alone is insufficient.
