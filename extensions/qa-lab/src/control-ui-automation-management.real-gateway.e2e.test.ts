@@ -101,6 +101,11 @@ function startGateway(
     controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
     mutateConfig: (cfg) => {
       if (transport) {
+        // This authority fixture observes final replies, not Telegram progress edits.
+        cfg.channels = {
+          ...cfg.channels,
+          telegram: { ...cfg.channels?.telegram, streaming: { mode: "off" } },
+        };
         // Admission includes a non-owner; automation authority still belongs to configured owners.
         cfg.commands = { ...cfg.commands, ownerAllowFrom: ["telegram:100001", "telegram:100002"] };
         cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
