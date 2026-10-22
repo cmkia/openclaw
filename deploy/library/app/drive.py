@@ -1,11 +1,50 @@
 import hashlib
+import re
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from psycopg.types.json import Jsonb
 
 from . import db
 from .config import DRIVE_BROKER_URL, MAX_BYTES, secret
+
+
+class DriveUnavailableError(RuntimeError):
+    pass
+
+
+UNAVAILABLE_MESSAGE = ('The private Google Drive connection is temporarily unavailable. Retry synchronization; '
+                       'if it persists, ask the operator to check the central connection. Keep sharing restricted.')
+
+
+def parse_link(url: str) -> tuple[str, str] | None:
+    """Identify Drive resources without fetching a sharing page or using its login cookies."""
+    parts = urlsplit(url)
+    if parts.hostname not in ('drive.google.com', 'docs.google.com'):
+        return None
+    if parts.scheme != 'https' or parts.username or parts.password or parts.port not in (None, 443):
+        raise ValueError('Use a standard HTTPS Google Drive link for the connected private folder')
+    kind = 'file'
+    path = parts.path.rstrip('/')
+    if parts.hostname == 'drive.google.com':
+        folder = re.fullmatch(r'/drive(?:/u/\d+)?/folders/([^/]+)', path)
+        file = re.fullmatch(r'/file/d/([^/]+)(?:/.*)?', path)
+        if folder:
+            kind, identifier = 'folder', folder[1]
+        elif file:
+            identifier = file[1]
+        elif path in ('/open', '/uc'):
+            ids = parse_qs(parts.query).get('id', [])
+            identifier = ids[0] if len(ids) == 1 else ''
+        else:
+            identifier = ''
+    else:
+        file = re.fullmatch(r'/(?:document|spreadsheets|presentation)/d/([^/]+)(?:/.*)?', path)
+        identifier = file[1] if file else ''
+    if not re.fullmatch(r'[A-Za-z0-9_-]{5,200}', identifier):
+        raise ValueError('Unsupported Google Drive link; use a file link or the configured folder link')
+    return kind, identifier
 
 
 def client() -> httpx.Client:
@@ -30,16 +69,26 @@ def status() -> dict:
         return {'authorized': False, 'status': 'broker_unavailable_or_pending_authorization'}
 
 
-def synchronize(job_id=None, lease_owner: str | None = None) -> dict:
-    with client() as broker:
-        response = broker.get('/v1/files')
-        response.raise_for_status()
-        inventory = response.json()
+def synchronize(job_id=None, lease_owner: str | None = None, *, requested_file_id: str | None = None,
+                title: str = '', edition: str = '') -> dict:
+    try:
+        with client() as broker:
+            response = broker.get('/v1/files')
+            response.raise_for_status()
+            inventory = response.json()
+    except httpx.HTTPError:
+        raise DriveUnavailableError(UNAVAILABLE_MESSAGE) from None
     if inventory.get('complete') is not True:
         raise ValueError('Drive inventory is incomplete; availability was not changed')
     files = inventory.get('files', [])
-    active_keys = []
+    active_keys = ['drive:' + item['id'] for item in files]
+    if requested_file_id:
+        files = [item for item in files if item['id'] == requested_file_id]
+        if not files:
+            raise ValueError('The Drive file is outside the authorized client folder or unavailable to its connected account. '
+                             'Place it in the authorized folder and synchronize; keep sharing restricted.')
     queued = 0
+    selected = None
     with db.connect() as conn:
         # Single-writer sync prevents duplicate jobs across overlapping user requests.
         conn.execute('SELECT pg_advisory_xact_lock(7348216002)')
@@ -50,29 +99,64 @@ def synchronize(job_id=None, lease_owner: str | None = None) -> dict:
                 raise RuntimeError('Job lease expired before Drive publication')
         for item in files:
             key = 'drive:' + item['id']
-            active_keys.append(key)
             version = str(item.get('version') or item.get('modified_time') or '')
             previous = conn.execute('SELECT * FROM library_sources WHERE source_key=%s', (key,)).fetchone()
             if previous and previous['version'] == version:
                 conn.execute('UPDATE library_sources SET active=true,updated_at=now() WHERE source_key=%s', (key,))
+                if requested_file_id:
+                    document = conn.execute('SELECT status FROM library_documents WHERE id=%s', (previous['document_id'],)).fetchone()
+                    latest = conn.execute("SELECT id FROM library_jobs WHERE document_id=%s AND kind='convert' ORDER BY created_at DESC LIMIT 1",
+                                          (previous['document_id'],)).fetchone()
+                    selected = {'job_id': latest['id'] if latest else None, 'document_id': previous['document_id'],
+                                'status': document['status'], 'duplicate': True}
                 continue
             if previous:
                 conn.execute('UPDATE library_sources SET active=false,updated_at=now() WHERE source_key=%s', (key,))
-            inflight = conn.execute("""SELECT id FROM library_jobs WHERE kind='drive_file'
+            inflight = conn.execute("""SELECT id,status,document_id FROM library_jobs WHERE kind='drive_file'
               AND payload->>'source_key'=%s AND payload->>'version'=%s AND status IN ('queued','processing')""",
                                     (key, version)).fetchone()
             if not inflight:
-                conn.execute("INSERT INTO library_jobs(kind,payload) VALUES('drive_file',%s)",
+                inflight = conn.execute("INSERT INTO library_jobs(kind,payload) VALUES('drive_file',%s) RETURNING id,status,document_id",
                              (Jsonb({'file_id': item['id'], 'source_key': key, 'version': version,
-                                     'title': item['name'], 'filename': item['name'], 'metadata': item}),))
+                                     'title': title if requested_file_id and title else item['name'],
+                                     'edition': edition if requested_file_id else '',
+                                     'filename': item['name'], 'metadata': item}),)).fetchone()
                 queued += 1
+                duplicate = False
+            else:
+                duplicate = True
+            if requested_file_id:
+                selected = {**inflight, 'job_id': inflight['id'], 'duplicate': duplicate}
+                selected.pop('id')
         # A changed or deleted source stops serving stale evidence immediately after a complete listing.
         conn.execute("UPDATE library_sources SET active=false,updated_at=now() WHERE provider='drive' AND NOT(source_key=ANY(%s::text[]))",
                      (active_keys,))
-        conn.execute("""INSERT INTO library_settings(key,value) VALUES('drive_last_sync',%s)
-          ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()""",
-                     (Jsonb({'file_count': len(files), 'jobs_queued': queued}),))
-    return {'file_count': len(files), 'jobs_queued': queued, 'complete': True}
+        if not requested_file_id:
+            conn.execute("""INSERT INTO library_settings(key,value) VALUES('drive_last_sync',%s)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()""",
+                         (Jsonb({'file_count': len(files), 'jobs_queued': queued}),))
+    return {'file_count': len(files), 'jobs_queued': queued, 'complete': True, **(selected or {})}
+
+
+def import_link(url: str, title: str, edition: str = '') -> dict:
+    target = parse_link(url)
+    if target is None:
+        raise ValueError('Expected a Google Drive link')
+    kind, identifier = target
+    if kind == 'folder':
+        state = status()
+        if not state.get('authorized'):
+            raise DriveUnavailableError(UNAVAILABLE_MESSAGE)
+        if identifier != state.get('folder_id'):
+            raise ValueError('This is not the configured authorized client folder. Use that folder and keep sharing restricted.')
+        from .library import enqueue
+        job = enqueue('drive_sync', {})
+        result = {'job_id': job['id'], 'status': job['status'], 'document_id': None, 'duplicate': False}
+    else:
+        result = synchronize(requested_file_id=identifier, title=title, edition=edition)
+    return {**result, 'route': 'authorized_drive', 'sharing': 'keep_restricted',
+            'instruction': 'Use this private Drive connection. Do not request public link sharing. '
+                           'Poll the returned job and report its actual import status.'}
 
 
 def download(file_id: str, target: Path, expected_version: str | None = None) -> dict:

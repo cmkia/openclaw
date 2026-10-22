@@ -8,9 +8,12 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import httpx
 
 from .config import MAX_BYTES
+from .drive import parse_link
 
 
 def pinned_url(url: str) -> tuple[str, str, str]:
+    if parse_link(url) is not None:
+        raise ValueError('Google Drive links require the authorized private folder importer; keep sharing restricted')
     parts = urlsplit(url)
     if parts.scheme not in ('https', 'http') or not parts.hostname or parts.username or parts.password:
         raise ValueError('Only public HTTP(S) URLs without credentials are accepted')

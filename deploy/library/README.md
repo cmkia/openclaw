@@ -160,6 +160,35 @@ the library and report ingestion jobs. Synchronization is on demand; this
 deployment does not install a polling schedule. The current original-file limit
 is 512 MiB. Chat attachment limits are a separate transport contract.
 
+Pasting a Google Drive file link into `biblioteca_importar_url` uses the same
+authorized folder API, including files in its subfolders. Files remain
+Restricted; no browser login or public sharing is required. A link to the
+assigned root folder queues synchronization. Links outside that scope are
+rejected before queueing, and ordinary public document URLs retain their public
+download path. Poll the returned job and document status before reporting that
+an import is complete. A broker or Google connection failure returns an
+actionable HTTP 503 response, distinct from an out-of-scope link. Retry through
+the private connection; if the failure persists, the operator should check that
+connection. Changing file sharing is not a recovery step.
+
+For an opt-in live routing regression, run
+`python3 tests/drive_link_contract.py --config /private/proof-config.json` against
+an approved tenant with a private synthetic fixture. The script creates import
+jobs, including a full folder synchronization, so use a tenant whose current
+folder contents are approved for ingestion. The protected configuration holds
+`base_url`, `key_file`, `private_file_url` and `assigned_folder_url`; the report
+contains check results without credentials or resource URLs.
+
+The offline `tests/drive_unavailable_contract.py` regression exercises file and
+folder imports through the authenticated ASGI app with a loopback broker that
+returns HTTP 503. Run it in the library image with `--network none`; it needs no
+Google credentials, PostgreSQL or model downloads.
+
+If conversion fails after an original was saved, inspect Docling task history
+for out-of-memory exits before retrying. Size its memory from the real book,
+then retry the failed conversion job through the API. The saved original and
+persisted Docling task identifier are reused; another Drive download is unnecessary.
+
 Select the book, edition and chapter before preparing a weekly class. Ask for
 the chapter coverage manifest, read every section through its final page, and
 retain evidence IDs and physical page references. An inferred chapter structure
