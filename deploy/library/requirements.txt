@@ -1,0 +1,7 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+httpx==0.28.1
+psycopg[binary]==3.2.9
+mcp==1.25.0
+sentence-transformers==5.1.2
+gliner==0.2.29

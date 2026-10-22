@@ -1,0 +1,203 @@
+version: "3.8"
+
+# Additive overlay: deploy into the existing tenant stack without --prune.
+services:
+  library-db:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    environment:
+      POSTGRES_DB: library
+      POSTGRES_USER: library
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - source: database_password
+        target: database_password
+        uid: "999"
+        gid: "999"
+        mode: 0400
+    volumes:
+      - database:/var/lib/postgresql/data
+    networks:
+      - library
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U library -d library"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 1m
+    stop_grace_period: 90s
+    deploy:
+      replicas: 1
+      labels:
+        - traefik.enable=false
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME}
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          memory: 256M
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 10s
+
+  library-api:
+    image: ${LIBRARY_IMAGE}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    environment: &library_environment
+      DATABASE_URL_FILE: /run/secrets/database_url
+      LIBRARY_API_KEY_FILE: /run/secrets/library_api_key
+      DOCLING_API_KEY_FILE: /run/secrets/docling_api_key
+      DOCLING_URL: ${DOCLING_URL}
+      DRIVE_BROKER_URL: ${DRIVE_BROKER_URL}
+      DRIVE_BROKER_API_KEY_FILE: /run/secrets/drive_broker_key
+      LIBRARY_PUBLIC_BASE_URL: ${LIBRARY_PUBLIC_BASE_URL}
+      DATA_DIR: /data
+      HF_HOME: /models
+      EMBEDDINGS_ENABLED: "true"
+      EMBEDDING_MODEL: intfloat/multilingual-e5-small
+      GLINER_ENABLED: ${GLINER_ENABLED:-false}
+      GLINER_MODEL: Ihor/gliner-biomed-small-v1.0
+      GLINER_REVISION: 9892e7cd16b9a4aa33572b8b80271cd178f1059a
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      TZ: America/Sao_Paulo
+    secrets: &library_secrets
+      - source: database_url
+        target: database_url
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: library_api_key
+        target: library_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: docling_api_key
+        target: docling_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: drive_broker_key
+        target: drive_broker_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    volumes: &library_volumes
+      - originals:/data
+      - models:/models
+    networks:
+      library:
+      proxy:
+        aliases:
+          - openclaw-${TENANT}-library
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      start_period: 5m
+      retries: 5
+    stop_grace_period: 90s
+    deploy:
+      replicas: 1
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=${PROXY_NETWORK}
+        - traefik.http.routers.oc-library-${TENANT}.rule=(${LIBRARY_HOST_RULE}) && PathPrefix(`/library/download/`)
+        - traefik.http.routers.oc-library-${TENANT}.priority=2000
+        - traefik.http.routers.oc-library-${TENANT}.entrypoints=websecure
+        - traefik.http.routers.oc-library-${TENANT}.tls.certresolver=${CERT_RESOLVER}
+        - traefik.http.routers.oc-library-${TENANT}.service=oc-library-${TENANT}
+        - traefik.http.routers.oc-library-${TENANT}.middlewares=oc-library-${TENANT}-strip
+        - traefik.http.middlewares.oc-library-${TENANT}-strip.stripprefix.prefixes=/library
+        - traefik.http.services.oc-library-${TENANT}.loadbalancer.server.port=8080
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME}
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1536M
+        reservations:
+          memory: 256M
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 10s
+
+  library-worker:
+    image: ${LIBRARY_IMAGE}
+    command: ["python", "-m", "app.worker"]
+    environment: *library_environment
+    secrets: *library_secrets
+    volumes: *library_volumes
+    networks:
+      - library
+      - proxy
+    stop_grace_period: 2m
+    deploy:
+      replicas: 1
+      labels:
+        - traefik.enable=false
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME}
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2560M
+        reservations:
+          memory: 512M
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 10s
+
+volumes:
+  database:
+    external: true
+    name: openclaw-${TENANT}-library-postgres
+  originals:
+    external: true
+    name: openclaw-${TENANT}-library-data
+  models:
+    external: true
+    name: openclaw-${TENANT}-library-models
+
+networks:
+  library:
+    external: true
+    name: openclaw-${TENANT}-library-private
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK}
+
+secrets:
+  database_password:
+    external: true
+    name: openclaw-${TENANT}-library-db-password-v1
+  database_url:
+    external: true
+    name: openclaw-${TENANT}-library-database-url-v1
+  library_api_key:
+    external: true
+    name: openclaw-${TENANT}-library-api-key-v1
+  docling_api_key:
+    external: true
+    name: ${DOCLING_SECRET}
+  drive_broker_key:
+    external: true
+    name: ${DRIVE_BROKER_SECRET}

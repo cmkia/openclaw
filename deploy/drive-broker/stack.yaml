@@ -1,0 +1,78 @@
+version: "3.8"
+services:
+  broker:
+    image: ${BROKER_IMAGE:?Set the pinned broker image}
+    environment:
+      CENTRAL_ROOT_FOLDER_ID: ${CENTRAL_ROOT_FOLDER_ID:?Set the central Drive root folder}
+      BROKER_CLIENTS_FILE: /run/configs/clients.json
+      GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials
+      MAX_DOWNLOAD_BYTES: "536870912"
+    configs:
+      - source: clients
+        target: /run/configs/clients.json
+        uid: "10001"
+        gid: "10001"
+        mode: 0444
+    secrets:
+      - source: google_credentials
+        target: google_credentials
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: erika_broker_key
+        target: erika_broker_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    networks:
+      proxy:
+        aliases:
+          - cmkia-drive-broker
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 1
+      labels:
+        traefik.enable: "false"
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME:?Set the deployment node}
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          memory: 64M
+      update_config:
+        order: stop-first
+        failure_action: rollback
+        monitor: 3m
+      restart_policy:
+        condition: any
+        delay: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+configs:
+  clients:
+    external: true
+    name: cmkia-drive-client-grants-v1
+secrets:
+  google_credentials:
+    external: true
+    name: ${GOOGLE_CREDENTIALS_SECRET:?Set the central Google credential secret}
+  erika_broker_key:
+    external: true
+    name: openclaw-erika-drive-broker-key-v1
+networks:
+  proxy:
+    external: true
+    name: traefik-proxy

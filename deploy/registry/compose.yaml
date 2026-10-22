@@ -1,0 +1,19 @@
+name: cmkia-image-registry
+services:
+  registry:
+    image: registry:3@sha256:be9a7062dd7e3316e5c0368e42740dc991a9ceb5d382317675a8738db0112af0
+    container_name: cmkia-image-registry
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:15002:5000"
+    volumes:
+      - images:/var/lib/registry
+    mem_limit: 128m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  images:

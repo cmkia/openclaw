@@ -3,8 +3,16 @@
 Run one Docker Swarm stack per customer. Each stack has its own state volume
 (SQLite databases, conversations, memory, workspace, uploads, generated images,
 channel credentials and configuration), auth volume, Gateway token and OmniRoute
-API key. Only the reverse proxy and OmniRoute service are shared. Customer data
+API key. The base deployment shares the reverse proxy and OmniRoute service. Customer data
 does not use a shared OpenClaw database, Redis instance or workspace.
+
+The optional [academic library](../library/README.md) adds tenant-owned
+PostgreSQL/pgvector, original documents, processing jobs and local embedding
+models. Its [central Drive broker](../drive-broker/README.md) shares only the
+operator's read-only Google authorization; server-owned customer folder grants
+and separate keys constrain access. Curated study notes stay in the tenant's
+native wiki. These services require their own deployment and live validation;
+the base provisioner does not silently install them.
 
 The deployment uses the official stable `2026.10.5` image pinned by digest in
 `provision.py`. The fork adds deployment configuration; it does not rebuild or
