@@ -1,0 +1,18 @@
+{
+  "name": "openclaw-private-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@remotion/bundler": "4.0.538",
+    "@remotion/cli": "4.0.538",
+    "@remotion/renderer": "4.0.538",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.538",
+    "zod": "4.6.5"
+  }
+}

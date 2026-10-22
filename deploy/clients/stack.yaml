@@ -10,6 +10,8 @@ services:
       - |
         export OPENCLAW_GATEWAY_TOKEN="$$(cat /run/secrets/gateway_token)"
         export OMNIROUTE_API_KEY="$$(cat /run/secrets/omniroute_key)"
+        export LIBRARY_MCP_AUTHORIZATION="Bearer $$(cat /run/secrets/library_api_key)"
+        export REMOTION_MCP_AUTHORIZATION="Bearer $$(cat /run/secrets/remotion_api_key)"
         exec node dist/index.js gateway --bind lan --port 18789
     environment:
       HOME: /home/node
@@ -24,6 +26,7 @@ services:
     volumes:
       - state:/home/node/.openclaw
       - auth:/home/node/.config/openclaw
+      - workspace:/home/node/.openclaw/workspace
     secrets:
       - source: gateway_token
         target: gateway_token
@@ -35,8 +38,19 @@ services:
         uid: "1000"
         gid: "1000"
         mode: 0400
+      - source: library_api_key
+        target: library_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: remotion_api_key
+        target: remotion_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
     networks:
       - proxy
+      - capabilities
     cap_drop:
       - ALL
     healthcheck:
@@ -91,6 +105,9 @@ volumes:
   auth:
     external: true
     name: openclaw-${TENANT}-auth
+  workspace:
+    external: true
+    name: openclaw-${TENANT}-workspace
 
 secrets:
   gateway_token:
@@ -99,8 +116,17 @@ secrets:
   omniroute_key:
     external: true
     name: openclaw-${TENANT}-omniroute-key-v1
+  library_api_key:
+    external: true
+    name: openclaw-${TENANT}-library-api-key-v1
+  remotion_api_key:
+    external: true
+    name: openclaw-${TENANT}-remotion-api-key-v1
 
 networks:
   proxy:
     external: true
     name: ${PROXY_NETWORK}
+  capabilities:
+    external: true
+    name: openclaw-${TENANT}-capabilities

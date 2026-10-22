@@ -1,18 +1,38 @@
-# Deploy isolated OpenClaw assistants with OmniRoute
+# Deploy the standard isolated OpenClaw stack
 
 Run one Docker Swarm stack per customer. Each stack has its own state volume
-(SQLite databases, conversations, memory, workspace, uploads, generated images,
-channel credentials and configuration), auth volume, Gateway token and OmniRoute
-API key. The base deployment shares the reverse proxy and OmniRoute service. Customer data
+(SQLite databases, conversations, memory, uploads, channel credentials and
+configuration), workspace volume, auth volume, Gateway token and OmniRoute
+API key. The deployment shares the reverse proxy and OmniRoute service. Customer data
 does not use a shared OpenClaw database, Redis instance or workspace.
 
-The optional [academic library](../library/README.md) adds tenant-owned
-PostgreSQL/pgvector, original documents, processing jobs and local embedding
-models. Its [central Drive broker](../drive-broker/README.md) shares only the
+The standard contains seven services, based on the existing document-processing
+deployment and extended with private browser and video capabilities:
+
+- `gateway`: OpenClaw, already connected to the library and Remotion through MCP.
+- `docling`: authenticated CPU document conversion, with persistent model cache
+  and scratch storage. Its reviewed image and processing settings come from the
+  existing deployment; names and keys are generated independently per tenant.
+- `library-db`, `library-api` and `library-worker`: the
+  [academic library](../library/README.md), with PostgreSQL/pgvector, original
+  documents, processing jobs and local embedding models.
+- `browser`: [persistent private Chromium](../browser/README.md), selected as
+  the Gateway's default browser profile through `http://browser:9222`.
+- `remotion`: [private video rendering](../remotion/README.md), exposing
+  composition discovery and H.264 MP4 rendering to the agent through MCP.
+
+The [central Drive broker](../drive-broker/README.md) shares only the
 operator's read-only Google authorization; server-owned customer folder grants
 and separate keys constrain access. Curated study notes stay in the tenant's
-native wiki. These services require their own deployment and live validation;
-the base provisioner does not silently install them.
+native wiki. The broker remains a separately managed service. Each new customer
+needs its own folder grant and broker secret before provisioning. An unconnected
+Google account remains visibly pending; installed containers do not prove Drive
+authorization. Biomedical entity extraction remains disabled by default.
+
+`provision.py` prepares the library through its existing deployment owner, then
+merges the Gateway, Docling, library and capability definitions into one protected
+`stack.yaml`. Future redeployments use that complete file. The source Gateway
+template alone is not a complete stack.
 
 The deployment uses the official stable `2026.10.5` image pinned by digest in
 `provision.py`. The fork adds deployment configuration; it does not rebuild or
@@ -48,6 +68,14 @@ checks below before changing that pin.
   capable** setting for manually added models. A successful text request does
   not prove a combo accepts images. After generation, OpenClaw can send the
   generated image back through the chat combo to deliver its completion.
+- Build the library, browser and Remotion images from their deployment directories,
+  publish them to the server's registry, and supply their immutable digests.
+  The Remotion image locks its npm dependencies independently of OpenClaw and
+  installs its rendering browser during the build. It does not reuse the
+  customer's signed-in browser. See its README for runtime and licensing details.
+- Allow room for all seven services. Initial memory reservations total about
+  3.25 GiB per tenant; limits total about 16.5 GiB. Model loading and large-document
+  processing must be measured before admitting more tenants on the same server.
 
 Memory files and SQLite indexes stay local to each tenant. This template sets
 `memory.search.provider` to `none` to use keyword search (FTS5), keeping memory
@@ -58,7 +86,16 @@ grant unrestricted model access to work around an embedding authorization error.
 
 ## Provision a customer
 
-Copy this directory to a protected release directory on the manager. Supply the
+Copy the complete `deploy` directory to a protected release directory on the manager
+and run from `deploy/clients`. Build the three local images first, for example:
+
+```bash
+docker build -t registry.example.com/openclaw-library:<release> ../library
+docker build -t registry.example.com/openclaw-browser:<release> ../browser
+docker build -t registry.example.com/openclaw-remotion:<release> ../remotion
+```
+
+Push those tags to the registry and record their `@sha256:` references. Supply the
 administrator password through the invocation environment, without putting it in
 shell history or this repository. The script authenticates through OmniRoute's
 management API; it never writes OmniRoute's database directly.
@@ -74,6 +111,10 @@ python3 provision.py \
   --omniroute-url https://route.example.com \
   --chat-model '<CHAT_PROVIDER>/<CHAT_MODEL>' \
   --image-model '<IMAGE_PROVIDER>/<IMAGE_BACKEND_MODEL>' \
+  --library-image 'registry.example.com/openclaw-library:<release>@sha256:<digest>' \
+  --browser-image 'registry.example.com/openclaw-browser:<release>@sha256:<digest>' \
+  --remotion-image 'registry.example.com/openclaw-remotion:<release>@sha256:<digest>' \
+  --broker-secret 'openclaw-example-drive-broker-key-v1' \
   --proxy-cidr '<TRAEFIK_OVERLAY_CIDR>'
 unset OMNIROUTE_ADMIN_PASSWORD
 ```
@@ -89,7 +130,7 @@ list without an explicit restricted mode can normalize the key to allow-all.
 
 The protected operator directory `/opt/openclaw/clients/example` records the
 combo IDs, key ID, stack definition, deployment variables and recovery copies of
-the two secrets. It contains live secrets: do not commit or share that directory.
+the tenant secrets. It contains live secrets: do not commit or share that directory.
 The administrator password is not saved. Running services read customer-specific
 Docker secrets; they have no Docker socket or host filesystem mount.
 
@@ -100,7 +141,7 @@ resuming manually. Do not delete customer volumes to make initialization pass.
 An unused `bootstrap.env` left by a failed initialization is secret and must stay
 inside the protected directory until recovery is complete.
 
-The single replica is pinned to the manager hostname because its volumes are
+Every persistent service's single replica is pinned to the manager hostname because its volumes are
 local. Updates stop the old process before starting the new one, so two Gateways
 never write the same SQLite databases concurrently. A multi-node migration needs
 an explicit stopped backup and restore on the destination node.
@@ -146,6 +187,17 @@ accounts need their connection selection verified separately for chat and images
    and different Docker secrets. Check that no host ports or Docker socket are
    exposed. The proxy overlay is shared transport; each Gateway still requires
    its own authentication and device pairing.
+8. Check that all seven services have one healthy running task. Run
+   `sh cli.sh example mcp probe biblioteca` and `sh cli.sh example mcp probe remotion`
+   to prove authenticated tool discovery. A healthy service alone is insufficient.
+9. Run `sh cli.sh example browser --browser-profile private open https://example.com`
+   and inspect its snapshot. Confirm the browser service has no public ports and
+   joins only `openclaw-example-capabilities`. Verify a persistent session survives
+   a controlled browser restart without involving another customer's profile.
+10. Write a small Remotion project into the agent workspace, call `get_compositions`
+    then `render_media`, and open the resulting MP4 from that same workspace.
+    An incorrect MCP Bearer key must be rejected. Verify that Remotion cannot
+    mount the Gateway state/auth volumes or the persistent browser profile.
 
 Run native maintenance commands from the deployment source directory on the
 node holding the customer's volumes. The helper loads only that customer's
@@ -159,11 +211,15 @@ sh cli.sh example config validate
 
 ## Update and back up a customer
 
-Keep a stopped, consistent backup of **both** volumes, the Docker secrets and
+Keep a stopped, consistent backup of the state, auth, workspace and browser-profile
+volumes, the Docker secrets and
 the protected deployment directory before upgrades. Back up live SQLite only
 through its supported backup mechanism, or stop the Gateway first; copying a
 live database without its WAL can lose transactions. Protect backup retention
 and restore permissions per customer. This template does not schedule backups.
+Use the library's backup helper for PostgreSQL and document storage. Docling
+scratch files and caches have separate lifecycles; do not delete them during a
+running conversion. Protect the browser profile as customer credentials.
 
 Redeploy an existing customer from its protected directory, preserving volumes,
 secrets, stable combo names and node placement:
@@ -176,10 +232,25 @@ set +a
 docker stack deploy --resolve-image never -c stack.yaml "openclaw-$TENANT"
 ```
 
-For a runtime upgrade, first update the reviewed image pin and the customer's
-`OPENCLAW_IMAGE`, pull that exact digest and run the validation above. Swarm
+The saved stack is fully rendered: its service `image` fields own the deployed
+versions. Changing `deployment.env` alone does not update them. For an image
+upgrade, back up and edit the corresponding service's immutable `image` in the
+complete protected `stack.yaml`, update the matching recorded image value in
+`deployment.env` (or `library/deployment.json`), pull the exact digest, redeploy
+that complete stack and run the validation above. Update the source pin for
+future customers separately. Keep future library changes in this complete stack;
+the additive library deployment workflow is for older separate installations.
+Swarm
 rollback restores a service specification, not a database schema or volume;
 restore the stopped backup if the old runtime cannot read migrated state.
+
+This provisioner initializes new customers only. It never retrofits or restarts
+existing stacks. In older installations the workspace lives inside the state
+volume, and Docling volume names can differ. Adopting the standard requires a
+controlled stopped backup, preserving the existing workspace and profile data,
+then an explicit migration of mounts, secret references and connections. Mounting
+an empty workspace volume over an existing workspace would hide customer files.
+Keep the existing canonical deployment until that migration is verified.
 
 ## Reproduce the local Docker fixes
 

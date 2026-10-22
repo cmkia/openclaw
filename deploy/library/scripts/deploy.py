@@ -90,7 +90,7 @@ def main():
     if run(["docker", "info", "--format", "{{.Swarm.ControlAvailable}}"]) != "true":
         parser.error("Docker must be a Swarm manager")
     stack = f"openclaw-{args.tenant}"
-    if not exists("service", f"{stack}_gateway"):
+    if not args.prepare_only and not exists("service", f"{stack}_gateway"):
         parser.error("the tenant Gateway must already exist")
     for name in (args.docling_secret, args.broker_secret):
         if not exists("secret", name):

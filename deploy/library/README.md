@@ -5,6 +5,11 @@ background ingestion worker to an existing customer stack. OpenClaw continues to
 own its conversations, SQLite databases, workspace and wiki. Docling remains an
 independent container in that stack. The library does not replace OpenClaw memory.
 
+New customers receive these services through the
+[standard client provisioner](../clients/README.md), which also installs Docling,
+private Chromium and Remotion and configures the Gateway's MCP connections.
+The additive workflow below remains available for existing stacks.
+
 The stack file is an **additive overlay**. Deploy it without `--prune`: it contains
 only the three new library services, so pruning would remove the existing Gateway
 and Docling services. The deployment script never changes either service.
@@ -110,6 +115,9 @@ to leave enrichment disabled; it does not block basic retrieval.
 
 `--prepare-only` creates the protected resources and rendered stack
 without starting services. It still creates volumes, secrets and the network.
+It also supports preparation before a new Gateway exists, allowing the standard
+provisioner to submit the complete stack once. Ordinary additive deployment
+continues to require an existing Gateway.
 
 The script creates three library Docker secrets: database password, database DSN
 and library API key. Recovery copies are mode 0600 under

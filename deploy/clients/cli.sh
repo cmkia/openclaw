@@ -14,5 +14,11 @@ fi
 exec docker exec -i "$container" /bin/sh -ec '
   export OPENCLAW_GATEWAY_TOKEN="$(cat /run/secrets/gateway_token)"
   export OMNIROUTE_API_KEY="$(cat /run/secrets/omniroute_key)"
+  if [ -r /run/secrets/library_api_key ]; then
+    export LIBRARY_MCP_AUTHORIZATION="Bearer $(cat /run/secrets/library_api_key)"
+  fi
+  if [ -r /run/secrets/remotion_api_key ]; then
+    export REMOTION_MCP_AUTHORIZATION="Bearer $(cat /run/secrets/remotion_api_key)"
+  fi
   exec node dist/index.js "$@"
 ' -- "$@"

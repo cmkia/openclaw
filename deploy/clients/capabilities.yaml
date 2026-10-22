@@ -1,0 +1,113 @@
+version: "3.8"
+
+services:
+  library-api:
+    networks:
+      capabilities:
+  library-worker:
+    networks:
+      capabilities:
+
+  browser:
+    image: ${BROWSER_IMAGE}
+    volumes:
+      - browser-profile:/home/node/.config/chromium
+    networks:
+      - capabilities
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "--silent",
+          "--max-time",
+          "5",
+          "http://127.0.0.1:9222/json/version",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 1m
+      retries: 5
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME}
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1536M
+        reservations:
+          memory: 256M
+      labels:
+        - traefik.enable=false
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 10s
+
+  remotion:
+    image: ${REMOTION_IMAGE}
+    init: true
+    environment:
+      WORKSPACE_DIR: /home/node/.openclaw/workspace
+      REMOTION_API_KEY_FILE: /run/secrets/remotion_api_key
+      TZ: America/Sao_Paulo
+    # Only the workspace is shared; Gateway credentials and databases are absent.
+    volumes:
+      - workspace:/home/node/.openclaw/workspace
+    secrets:
+      - source: remotion_api_key
+        target: remotion_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    networks:
+      - capabilities
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        ["CMD", "curl", "--fail", "--silent", "--max-time", "5", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 1m
+      retries: 5
+    stop_grace_period: 2m
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME}
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3G
+        reservations:
+          memory: 512M
+      labels:
+        - traefik.enable=false
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 10s
+
+volumes:
+  browser-profile:
+    external: true
+    name: openclaw-${TENANT}-browser-profile
+
+networks:
+  capabilities:
+    external: true
+    name: openclaw-${TENANT}-capabilities
