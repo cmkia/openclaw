@@ -208,6 +208,50 @@ and curate it. Wiki notes remain derived material awaiting human review. The
 library supplies evidence and chapter coverage; a presentation export pipeline
 and validation with the resident's actual textbooks are separate next steps.
 
+## Publish the book's reading maps in the wiki
+
+Ingestion populates the library index. It does not create wiki pages. Native
+`wiki ingest` creates a source, and `wiki compile` builds indexes from existing
+pages; neither operation writes a chapter synthesis. The Memory Wiki tab shows
+syntheses, concepts and entities rather than raw source imports.
+
+After conversion reaches `ready` or `pending_review`, the manager can use
+Python 3.10 or newer to publish the book's catalog and chapter maps through the
+native wiki owner:
+
+```bash
+python3 deploy/library/scripts/project_wiki.py \
+  --tenant example --document-id '<DOCUMENT_UUID>'
+# Inspect the generated plan and Markdown under the tenant's private library directory.
+python3 deploy/library/scripts/project_wiki.py \
+  --tenant example --document-id '<DOCUMENT_UUID>' --apply
+```
+
+Run from a checkout containing `deploy/clients/cli.sh`. An installed copy can
+select that same canonical helper with `--cli-helper /path/to/cli.sh`; the helper
+receives the tenant explicitly. The Gateway must have the memory-wiki plugin
+enabled. `--agent` defaults to `main`; `--workspace` selects a nonstandard
+workspace path when needed. No database or Gateway restart is required.
+
+The script reads the authenticated library API, prepares one source outline,
+chapter maps, a book index and a library catalog. Maps contain extracted section
+names, physical page ranges, coverage gaps and provenance. They remain marked
+`review`. They are navigation material; preparing study notes still requires
+reading and checking the chapter. An optional protected `--provenance-file`
+can attach a matching prior source/version observation without claiming that
+the Drive version was checked again.
+
+Existing source and study pages are preserved on reruns. New books are merged
+into the managed catalog through native mutations, preserving its metadata and
+human notes. At completion the script calls Gateway `wiki.compile`, then checks
+`wiki.overview` against the published page IDs. This refreshes the live dashboard
+snapshot that a separate CLI process's compile may leave cached.
+
+Publication is on demand; this command does not install a background schedule.
+Run it for each completed book, then use the enabled wiki tools for cited study
+notes. PostgreSQL remains the owner of original evidence and retrieval; the
+native wiki remains the owner of reading maps and notes.
+
 ## Back up and recover
 
 Back up before changing schema or image versions. The backup helper pauses only
