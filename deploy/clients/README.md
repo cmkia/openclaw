@@ -34,6 +34,12 @@ merges the Gateway, Docling, library and capability definitions into one protect
 `stack.yaml`. Future redeployments use that complete file. The source Gateway
 template alone is not a complete stack.
 
+An optional [private Ads report adapter](../ads-broker/README.md) connects an
+existing tenant to the authorized n8n report collector. It keeps provider
+credentials in their existing owner and exposes only scoped read-only MCP
+tools. It is provisioned separately and does not grant new customers access
+to another customer's advertising accounts.
+
 The deployment uses the official stable `2026.10.5` image pinned by digest in
 `provision.py`. The fork adds deployment configuration; it does not rebuild or
 modify the OpenClaw runtime. Review the upstream release and repeat the live

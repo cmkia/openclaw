@@ -12,6 +12,9 @@ services:
         export OMNIROUTE_API_KEY="$$(cat /run/secrets/omniroute_key)"
         export LIBRARY_MCP_AUTHORIZATION="Bearer $$(cat /run/secrets/library_api_key)"
         export REMOTION_MCP_AUTHORIZATION="Bearer $$(cat /run/secrets/remotion_api_key)"
+        if [ -r /run/secrets/ads_api_key ]; then
+          export ADS_MCP_AUTHORIZATION="Bearer $$(cat /run/secrets/ads_api_key)"
+        fi
         exec node dist/index.js gateway --bind lan --port 18789
     environment:
       HOME: /home/node

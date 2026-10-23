@@ -23,5 +23,8 @@ exec docker exec -i "$container" /bin/sh -ec '
   if [ -r /run/secrets/presentations_api_key ]; then
     export PRESENTATIONS_MCP_AUTHORIZATION="Bearer $(cat /run/secrets/presentations_api_key)"
   fi
+  if [ -r /run/secrets/ads_api_key ]; then
+    export ADS_MCP_AUTHORIZATION="Bearer $(cat /run/secrets/ads_api_key)"
+  fi
   exec node dist/index.js "$@"
 ' -- "$@"
