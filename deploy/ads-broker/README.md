@@ -9,6 +9,12 @@ This optional tenant service exposes three read-only MCP tools:
 - `ads_relatorio`: read daily campaign, ad or Google keyword reports, with a
   selected client, platform and inclusive ISO date range of at most 93 days.
 
+Deployment also installs the tenant workspace skill `ads-relatorios`. It teaches
+natural campaign questions, including "como esta a campanha da Aloha?", to discover
+these tools and read live reports before concluding that access is unavailable.
+It contains no credentials, account IDs or saved campaign results. It is eligible
+only when this tenant's Ads MCP integration is enabled.
+
 The existing agency n8n report workflow remains the owner of Meta/Google
 credentials, OAuth renewal, provider queries and normalization. The adapter
 calls only `POST /webhook/agency-report-read-v1` on its configured HTTPS host.
@@ -103,6 +109,19 @@ only when this response includes the whole report. Follow `next_offset` for
 remaining rows and honor `pagination_limited` by shortening the period.
 
 ## Verification and recovery
+
+To add or repair the skill on an already connected tenant, without rotating
+credentials, changing config or restarting any service, run:
+
+```bash
+python3 deploy/ads-broker/deploy.py --tenant example --skill-only
+```
+
+The installer resolves the Gateway's actual workspace mount, preserves other
+skills and files, and privately backs up a previous skill before replacement.
+The native skills watcher refreshes file-backed skills on the next agent turn.
+Validate a natural campaign question through a Gateway-backed chat turn; an
+isolated `agent exec` prompt that names the tools cannot establish chat discovery.
 
 Run the deterministic MCP boundary contract in the image, without network:
 
