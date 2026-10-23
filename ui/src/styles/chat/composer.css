@@ -3317,13 +3317,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
     stroke-width: var(--chat-mobile-row-icon-stroke);
   }
 
-  /* Input selection remains a desktop affordance. Mobile gives the two voice
-     jobs explicit controls instead: Mic dictates and the trailing action starts
-     Talk, so a third disclosure target would only spend scarce row width. */
-  .agent-chat__input--mobile-toolbar .chat-talk-input-picker {
-    display: none;
-  }
-
   .agent-chat__input--mobile-toolbar
     .agent-chat__composer-footer
     .chat-controls__provider-settings

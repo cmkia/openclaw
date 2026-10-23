@@ -29,5 +29,8 @@ exec docker exec -i "$container" /bin/sh -ec '
   if [ -r /run/secrets/calendar_keyring_password ]; then
     export GOG_KEYRING_PASSWORD="$(cat /run/secrets/calendar_keyring_password)"
   fi
+  if [ -r /run/secrets/local_speech_api_key ]; then
+    export LOCAL_WHISPER_API_KEY="$(cat /run/secrets/local_speech_api_key)"
+  fi
   exec node dist/index.js "$@"
 ' -- "$@"

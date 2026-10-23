@@ -430,6 +430,11 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
   const devicePicker = state.microphonePicker;
   devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
+  const dictationOnly =
+    !props.realtimeTalkActive &&
+    props.composerHoldToRecord !== false &&
+    devicePicker.realtimeStatus === "unavailable" &&
+    devicePicker.dictationStatus === "ready";
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
@@ -607,11 +612,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
     onSend: (event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
-    onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
+    onToggleVoice:
+      props.onToggleRealtimeTalk && !dictationOnly ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     dictation,
-    onDictationPointerDown: handleDictationStart,
+    onDictationPointerDown: dictationOnly ? undefined : handleDictationStart,
     onDirectDictationStart: handleDictationStart,
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),

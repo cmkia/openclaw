@@ -13,7 +13,8 @@ import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
-const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
+// Include the captured audio RPC backlog before the provider's final drain.
+const FINAL_TRANSCRIPT_MAX_WAIT_MS = 60_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
@@ -409,6 +410,10 @@ export class ComposerDictationController {
     return this.phase === "stopping";
   }
 
+  get awaitingFinal(): boolean {
+    return this.pendingCommitSession !== null;
+  }
+
   get locksComposer(): boolean {
     return this.phase !== "idle";
   }
@@ -668,12 +673,14 @@ export class ComposerDictationController {
     // The composer unlocks immediately, while this exact stopped session keeps
     // ownership of its bounded final accumulator until a new session supersedes it.
     this.pendingCommitSession = session;
+    this.options.onStateChange();
     return session
       .finish(true)
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
         if (ownsPendingCommit) {
           this.pendingCommitSession = null;
+          this.options.onStateChange();
         }
         if (!ownsPendingCommit || !lateTranscript || !wasActive || this.disposed) {
           return false;
@@ -684,6 +691,7 @@ export class ComposerDictationController {
       .catch(() => {
         if (this.pendingCommitSession === session) {
           this.pendingCommitSession = null;
+          this.options.onStateChange();
         }
         return false;
       });
@@ -695,8 +703,13 @@ export class ComposerDictationController {
   }
 
   private retirePendingCommit(): void {
-    this.pendingCommitSession?.cancelPendingFinal();
+    const session = this.pendingCommitSession;
+    if (!session) {
+      return;
+    }
     this.pendingCommitSession = null;
+    session.cancelPendingFinal();
+    this.options.onStateChange();
   }
 
   private clearPointerGesture(): void {

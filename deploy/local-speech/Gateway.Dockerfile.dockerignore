@@ -1,0 +1,11 @@
+**
+!deploy/
+!deploy/local-speech/
+!deploy/local-speech/plugin/
+!deploy/local-speech/plugin/**
+!dist/
+!dist/control-ui/
+!dist/control-ui/**
+**/node_modules
+**/.env
+**/.env.*

@@ -1,0 +1,38 @@
+{
+  "id": "local-whisper",
+  "name": "Local Whisper Dictation",
+  "description": "Private CPU transcription through the tenant's Speaches service",
+  "categories": ["media"],
+  "enabledByDefault": false,
+  "activation": { "onStartup": true },
+  "contracts": { "realtimeTranscriptionProviders": ["local-whisper"] },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "apiKey", "expected": "string", "ownerKind": "capability" }]
+    }
+  },
+  "uiHints": {
+    "apiKey": { "label": "Private speech service credential", "sensitive": true },
+    "baseUrl": { "label": "Private Speaches API URL" }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["baseUrl", "model", "apiKey"],
+    "properties": {
+      "baseUrl": { "type": "string", "pattern": "^https?://", "minLength": 1 },
+      "model": { "type": "string", "minLength": 1 },
+      "language": { "type": "string", "pattern": "^[a-z]{2,3}$" },
+      "apiKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "provider", "id"],
+        "properties": {
+          "source": { "enum": ["env", "store", "file", "exec"] },
+          "provider": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

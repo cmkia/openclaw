@@ -324,6 +324,7 @@ describe("ComposerDictationController", () => {
 
     expect(controller.active).toBe(false);
     expect(controller.locksComposer).toBe(false);
+    expect(controller.awaitingFinal).toBe(true);
     expect(onCommit).not.toHaveBeenCalled();
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
@@ -331,6 +332,7 @@ describe("ComposerDictationController", () => {
     try {
       expect(controller.startDirect()).toBe(true);
       await waitForFast(() => expect(sessionsCreated).toBe(2));
+      expect(controller.awaitingFinal).toBe(false);
       emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
       expect(controller.transcript).toBe("new preview");
       emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "stale preview" });
@@ -591,7 +593,7 @@ describe("ComposerDictationController", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     await expect(empty).resolves.toBe(false);
     withoutTranscript.controller.dispose();
   });
@@ -671,7 +673,7 @@ describe("ComposerDictationController", () => {
     await startHold(target);
 
     const finished = controller.finishActive();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     await expect(finished).resolves.toBe(false);
     expect(controller.locksComposer).toBe(false);

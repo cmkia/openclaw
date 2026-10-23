@@ -424,7 +424,7 @@ describe("renderChatComposer controls", () => {
     vi.stubGlobal("AudioContext", DictationAudioContext);
     const request = vi.fn(async (method: string) => {
       if (method === "talk.catalog") {
-        return { transcription: { ready: true } };
+        return { realtime: { ready: true }, transcription: { ready: true } };
       }
       if (method === "talk.session.create") {
         return {

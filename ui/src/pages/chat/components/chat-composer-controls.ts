@@ -426,7 +426,7 @@ export function renderComposerDictationSendAction(
 }
 
 export function renderComposerDictationStatus(dictation?: ComposerDictationController) {
-  if (!dictation?.active) {
+  if (!dictation || (!dictation.active && !dictation.awaitingFinal)) {
     return nothing;
   }
   if (dictation.connecting) {
@@ -435,11 +435,12 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
       detail: t("chat.composer.microphoneAccessPending"),
     });
   }
-  const listening = !dictation.finalizing;
+  const finalizing = dictation.finalizing || dictation.awaitingFinal;
+  const listening = !finalizing;
   return html`
     <div class="agent-chat__composer-status-stack">
       <div
-        class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+        class=${`agent-chat__dictation-status${finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
       >
         <span
           class="agent-chat__dictation-phase${
@@ -447,7 +448,7 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
           }"
         >
           ${
-            dictation.finalizing
+            finalizing
               ? t("chat.composer.dictationFinalizing")
               : t("chat.composer.dictationListening")
           }
@@ -544,6 +545,8 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // Dictation edits the draft; only Talk-only controls depend on turn activity.
   const voiceButton = renderComposerVoiceButton({
     ...props,
+    idleLabel:
+      props.dictation && !props.onToggleVoice ? t("chat.composer.dictationCapability") : undefined,
     disabled: !props.dictation && (props.sending || props.isBusy),
   });
   // Either voice route keeps the microphone ahead of the primary action.

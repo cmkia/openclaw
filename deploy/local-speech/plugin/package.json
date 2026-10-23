@@ -1,0 +1,13 @@
+{
+  "name": "@app-openclaw/local-whisper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Private local Whisper dictation through Speaches",
+  "peerDependencies": { "openclaw": "2026.10.5" },
+  "openclaw": {
+    "extensions": ["./index.mjs"],
+    "install": { "minHostVersion": ">=2026.10.5" },
+    "compat": { "pluginApi": ">=2026.10.5" }
+  }
+}
