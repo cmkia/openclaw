@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "title": "Radiobiologia — piloto de apresentação",
+  "author": "Erika",
+  "slides": [
+    {
+      "layout": "cover",
+      "title": "Radiobiologia em slides",
+      "subtitle": "Piloto de composição e editabilidade",
+      "body": "Roteiro, fontes e revisão visual",
+      "image": {
+        "path": "skills/apresentacoes-erika/assets/reference-cover.png",
+        "alt": "Exemplo fornecido de capa escura com ilustração biomédica conceitual.",
+        "provenance": {
+          "kind": "source",
+          "description": "Render de uma apresentação fornecida, reutilizado somente para testar a incorporação de imagem. Contém uma ilustração conceitual; não é imagem clínica. Substituir por uma ilustração própria em uso real.",
+          "source": "Sistemas_Modelos_Tumorais_Capitulo21_FINAL.pptx, slide 1"
+        }
+      },
+      "notes": "Este piloto testa os oito layouts do motor. Os conceitos são paráfrases dos itens 2 e 3 do roteiro fornecido. Os dados da tabela e do gráfico são sintéticos e servem exclusivamente à validação de edição e apresentação. A imagem é uma referência visual antiga, não uma nova geração Magnific.",
+      "citations": [
+        {"source": "Roteiro_Capitulo23.pdf, fornecido pela usuária", "locator": "Itens 2 e 3 do roteiro"}
+      ]
+    },
+    {
+      "layout": "section",
+      "title": "Entre as frações",
+      "subtitle": "Mecanismos descritos no roteiro",
+      "body": "Reparo, repopulação, reoxigenação e redistribuição",
+      "notes": "A ordem desta demonstração foi criada para testar os layouts. Em uma solicitação real, a ordem e a contagem definidas pela usuária prevalecem. O roteiro descreve quatro mecanismos relevantes à resposta entre as frações; este slide não propõe um esquema de tratamento.",
+      "citations": [
+        {"source": "Roteiro_Capitulo23.pdf, fornecido pela usuária", "locator": "Itens 2 e 3: os quatro Rs"}
+      ]
+    },
+    {
+      "layout": "bullets",
+      "title": "O que muda entre as frações?",
+      "bullets": [
+        "Reparo de dano subletal no DNA",
+        "Proliferação de clonógenos sobreviventes",
+        "Mudanças na oxigenação tumoral",
+        "Progressão das células no ciclo"
+      ],
+      "notes": "Paráfrase dos itens 2 e 3 do roteiro. A importância relativa dos mecanismos depende do tecido e do contexto. Estes itens são material acadêmico para revisão; não constituem uma recomendação individual de fracionamento.",
+      "citations": [
+        {"source": "Roteiro_Capitulo23.pdf, fornecido pela usuária", "locator": "Itens 2 e 3: fundamentos do fracionamento"}
+      ]
+    },
+    {
+      "layout": "image",
+      "title": "Referência visual da Erika",
+      "body": "Hierarquia, contraste e espaço em branco",
+      "image": {
+        "path": "skills/apresentacoes-erika/assets/reference-comparison.png",
+        "alt": "Referência visual de slide com duas colunas e fundo biomédico escuro.",
+        "provenance": {
+          "kind": "source",
+          "description": "Slide rasterizado fornecido como referência de composição. Uso neste piloto limitado à validação de imagem incorporada; não usar uma captura como substituta de texto editável em apresentações finais.",
+          "source": "Tempo_Dose_Fracionamento_Capitulo23.pptx, slide 2"
+        }
+      },
+      "notes": "Este slide demonstra somente a incorporação de imagem. A produção deve construir o conteúdo com texto, tabela e gráfico nativos. A imagem de referência não é fonte científica independente nem evidência clínica. Em um piloto com Magnific, registrar o modelo, o prompt e o identificador da nova criação.",
+      "citations": [
+        {"source": "Tempo_Dose_Fracionamento_Capitulo23.pptx, fornecido pela usuária", "locator": "Slide 2, referência visual"}
+      ]
+    },
+    {
+      "layout": "comparison",
+      "title": "Dois mecanismos distintos",
+      "left": {
+        "title": "Reparo",
+        "bullets": ["Recuperação do dano subletal", "Importância dependente do tecido"]
+      },
+      "right": {
+        "title": "Repopulação",
+        "bullets": ["Proliferação de sobreviventes", "Pode afetar tecidos normais e tumor"]
+      },
+      "notes": "O roteiro descreve reparo como recuperação do dano subletal entre frações e repopulação como proliferação de células clonogênicas sobreviventes. A comparação usa conceitos distintos sem quantificar efeitos nem sugerir uma conduta clínica.",
+      "citations": [
+        {"source": "Roteiro_Capitulo23.pdf, fornecido pela usuária", "locator": "Item 2: reparo e repopulação"}
+      ]
+    },
+    {
+      "layout": "table",
+      "title": "Tabela editável de demonstração",
+      "subtitle": "Dados ilustrativos — não clínicos",
+      "table": {
+        "headers": ["Grupo fictício", "Valor", "Finalidade"],
+        "rows": [
+          ["A", "10", "Teste de célula"],
+          ["B", "20", "Teste de célula"],
+          ["C", "30", "Teste de célula"]
+        ]
+      },
+      "notes": "Dados inteiramente sintéticos. A, B e C não são pacientes, grupos de um estudo ou esquemas de tratamento. Os valores 10, 20 e 30 não são doses, taxas de resposta nem resultados clínicos. Esta tabela existe para verificar editabilidade e legibilidade.",
+      "citations": [
+        {"source": "Fixture sintética do piloto do renderer", "locator": "Tabela: grupos A, B e C; valores arbitrários 10, 20 e 30"}
+      ]
+    },
+    {
+      "layout": "chart",
+      "title": "Gráfico editável de demonstração",
+      "subtitle": "Dados ilustrativos — não clínicos",
+      "chart": {
+        "type": "bar",
+        "categories": ["A", "B", "C"],
+        "series": [{"name": "Valor sintético", "values": [10, 20, 30]}],
+        "dataKind": "illustrative",
+        "source": "Fixture sintética do piloto; números arbitrários, sem interpretação clínica",
+        "xTitle": "Grupo fictício",
+        "yTitle": "Valor arbitrário",
+        "unit": "u.a."
+      },
+      "notes": "Gráfico de teste com dados sintéticos. Não representa curva de sobrevivência, resposta tumoral, efeito de dose, ensaio ou população clínica. Deve permanecer editável no PowerPoint, com a fonte e o caráter ilustrativo explícitos.",
+      "citations": [
+        {"source": "Fixture sintética do piloto do renderer", "locator": "Gráfico: série arbitrária [10, 20, 30]"}
+      ]
+    },
+    {
+      "layout": "conclusion",
+      "title": "Conteúdo fiel e forma revisável",
+      "body": "Preservar o roteiro e suas fontes.\nManter texto e dados editáveis.\nDistinguir ilustração de evidência.\nInspecionar cada slide antes da entrega.",
+      "notes": "Conclusão operacional deste piloto de design e ferramentas. Ela não acrescenta uma conclusão médica ao roteiro. Para uso em aula, conferir o conteúdo científico com as fontes originais e remover slides de demonstração que não pertençam ao roteiro da usuária.",
+      "citations": [
+        {"source": "Skill apresentacoes-erika", "locator": "Fluxo de produção e revisão do piloto"}
+      ]
+    }
+  ]
+}

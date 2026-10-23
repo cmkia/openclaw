@@ -1,0 +1,6 @@
+node_modules
+tests
+skill
+README.md
+deploy.py
+*.log
