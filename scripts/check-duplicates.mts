@@ -12,6 +12,7 @@ const targets = [
   "src",
   "extensions",
   "examples",
+  "deploy",
   "scripts",
   "packages",
   "ui",

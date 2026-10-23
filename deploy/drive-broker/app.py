@@ -1,4 +1,4 @@
-"""Read-only Google Drive access with server-owned folder grants per client."""
+"""Read-only Google Drive access with server-owned grants per client."""
 
 import hmac
 import json
@@ -27,8 +27,28 @@ WORKSPACE = {
 MAX_FILES = int(os.getenv("MAX_INVENTORY_FILES", "20000"))
 MAX_BYTES = int(os.getenv("MAX_DOWNLOAD_BYTES", str(512 * 1024 * 1024)))
 ROOT = os.environ["CENTRAL_ROOT_FOLDER_ID"]
+
+
+def file_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", value):
+        raise HTTPException(400, "Invalid Drive file identifier")
+    return value
+
+
 clients = json.loads(Path(os.environ["BROKER_CLIENTS_FILE"]).read_text())
+if not isinstance(clients, dict) or not clients:
+    raise RuntimeError("Broker grants must be a nonempty client object")
 for client in clients.values():
+    if not isinstance(client, dict):
+        raise RuntimeError("Broker client grant must be an object")
+    scope = client.setdefault("access_scope", "folder")
+    if scope == "folder":
+        try:
+            file_id(client.get("folder_id"))
+        except HTTPException:
+            raise RuntimeError("Folder grants require a valid folder_id") from None
+    elif scope != "drive" or "folder_id" in client:
+        raise RuntimeError("Use access_scope folder with folder_id, or drive without folder_id")
     client["key"] = Path(client["api_key_file"]).read_text().strip()
     if len(client["key"]) < 32:
         raise RuntimeError("Broker client key must be at least 32 characters")
@@ -48,12 +68,6 @@ def client_for(authorization: str = Header(default="")):
         if token and hmac.compare_digest(token.encode("utf-8"), client["key"].encode("utf-8")):
             return {**client, "client_id": name}
     raise HTTPException(401, "Invalid broker credential")
-
-
-def file_id(value):
-    if not re.fullmatch(r"[A-Za-z0-9_-]{5,200}", value):
-        raise HTTPException(400, "Invalid Drive file identifier")
-    return value
 
 
 def google(path="", params=None, stream=False):
@@ -79,7 +93,7 @@ def google(path="", params=None, stream=False):
         if "exportSizeLimitExceeded" in reasons:
             raise HTTPException(413, "Google Workspace export exceeds Google's 10 MB export limit")
         if code in (401, 403):
-            raise HTTPException(503, "Drive API permission denied; check API enablement and folder sharing")
+            raise HTTPException(503, "Drive API permission denied; check API enablement and account access")
         if code == 404:
             raise HTTPException(404, "Drive item unavailable")
         raise HTTPException(502, "Google Drive did not complete the request")
@@ -114,7 +128,7 @@ def inside(item, ancestor):
 
 
 def ensure_client_root(client):
-    if not inside(client["folder_id"], ROOT):
+    if client["access_scope"] == "folder" and not inside(client["folder_id"], ROOT):
         raise HTTPException(403, "Client folder is outside the central project folder")
 
 
@@ -125,19 +139,69 @@ def health():
 
 @app.get("/v1/status")
 def status(client=Depends(client_for)):
+    grant = {"access_scope": client["access_scope"], "read_only": True, "folder_id": client.get("folder_id")}
     try:
         ensure_client_root(client)
+        if client["access_scope"] == "drive":
+            with google(params={
+                "q": "trashed = false", "corpora": "user", "spaces": "drive",
+                "fields": "files/id", "pageSize": 1,
+                "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
+            }):
+                pass
     except HTTPException as error:
-        return {"authorized": False, "folder_id": client["folder_id"], "reason": error.detail}
+        return {"authorized": False, **grant, "reason": error.detail}
     return {
-        "authorized": True, "folder_id": client["folder_id"],
+        "authorized": True, **grant,
         "account": getattr(credentials, "service_account_email", os.getenv("DRIVE_OWNER_ACCOUNT", "central-authorized-account")),
         "client_id": client["client_id"],
     }
 
 
-@app.get("/v1/files")
-def files(client=Depends(client_for)):
+def inventory_item(item):
+    mime = item["mimeType"]
+    exported = mime in WORKSPACE
+    return {
+        "id": item["id"], "name": item["name"] + (".pdf" if exported else ""),
+        "mime_type": "application/pdf" if exported else mime,
+        "original_mime_type": mime, "size": item.get("size"),
+        "modified_time": item.get("modifiedTime"), "version": item.get("version"),
+        "parents": item.get("parents", []), "web_view_link": item.get("webViewLink"),
+    }
+
+
+def drive_files():
+    output = []
+    scanned = 0
+    page = None
+    seen_pages = set()
+    while True:
+        params = {
+            "q": "trashed = false", "corpora": "allDrives", "spaces": "drive",
+            "fields": "nextPageToken,incompleteSearch,files(id,name,mimeType,size,modifiedTime,version,parents,webViewLink)",
+            "pageSize": 1000, "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
+        }
+        if page:
+            params["pageToken"] = page
+        with google(params=params) as response:
+            batch = response.json()
+        if batch.get("incompleteSearch"):
+            raise HTTPException(503, "Drive returned an incomplete inventory")
+        for item in batch.get("files", []):
+            scanned += 1
+            if scanned > MAX_FILES:
+                raise HTTPException(413, "Drive inventory exceeds configured limit; no complete inventory published")
+            if item["mimeType"] not in (FOLDER, SHORTCUT):
+                output.append(inventory_item(item))
+        page = batch.get("nextPageToken")
+        if not page:
+            return output
+        if page in seen_pages:
+            raise HTTPException(503, "Drive repeated an inventory page; no complete inventory published")
+        seen_pages.add(page)
+
+
+def folder_files(client):
     ensure_client_root(client)
     todo = [client["folder_id"]]
     visited = set()
@@ -174,35 +238,48 @@ def files(client=Depends(client_for)):
                 if mime == FOLDER:
                     todo.append(item["id"])
                 elif mime != SHORTCUT:
-                    exported = mime in WORKSPACE
-                    output.append({
-                        "id": item["id"], "name": item["name"] + (".pdf" if exported else ""),
-                        "mime_type": "application/pdf" if exported else mime,
-                        "original_mime_type": mime, "size": item.get("size"),
-                        "modified_time": item.get("modifiedTime"), "version": item.get("version"),
-                        "parents": item.get("parents", []), "web_view_link": item.get("webViewLink"),
-                    })
+                    output.append(inventory_item(item))
             page = batch.get("nextPageToken")
             if not page:
                 break
     ensure_client_root(client)
-    return {"files": output, "complete": True, "folder_id": client["folder_id"]}
+    return output
 
 
-@app.get("/v1/files/{item}/download")
-def download(item: str, client=Depends(client_for)):
+@app.get("/v1/files")
+def files(client=Depends(client_for)):
+    output = drive_files() if client["access_scope"] == "drive" else folder_files(client)
+    return {"files": output, "complete": True, "folder_id": client.get("folder_id"),
+            "access_scope": client["access_scope"], "read_only": True}
+
+
+def document_metadata(item, client):
     file_id(item)
     ensure_client_root(client)
-    if not inside(item, client["folder_id"]):
+    if client["access_scope"] == "folder" and not inside(item, client["folder_id"]):
         raise HTTPException(403, "File is outside this client's folder")
     info = metadata(item)
     ensure_client_root(client)
+    if client["access_scope"] == "folder" and not inside(item, client["folder_id"]):
+        raise HTTPException(403, "File moved outside this client's folder")
     if info.get("trashed") or info["mimeType"] in (FOLDER, SHORTCUT):
         raise HTTPException(400, "Item is not a downloadable document")
     if info.get("size") and int(info["size"]) > MAX_BYTES:
         raise HTTPException(413, "Document exceeds configured byte limit")
     if not info.get("capabilities", {}).get("canDownload", False):
         raise HTTPException(403, "Drive does not permit downloading this item")
+    return info
+
+
+@app.get("/v1/files/{item}")
+def file(item: str, client=Depends(client_for)):
+    info = document_metadata(item, client)
+    return {"file": inventory_item(info), "access_scope": client["access_scope"], "read_only": True}
+
+
+@app.get("/v1/files/{item}/download")
+def download(item: str, client=Depends(client_for)):
+    info = document_metadata(item, client)
     exported = info["mimeType"] in WORKSPACE
     response = google(
         "/" + item + ("/export" if exported else ""),
@@ -220,7 +297,7 @@ def download(item: str, client=Depends(client_for)):
         if current.get("trashed") or not current.get("capabilities", {}).get("canDownload", False):
             raise HTTPException(403, "Document is no longer available for download")
         ensure_client_root(client)
-        if not inside(item, client["folder_id"]):
+        if client["access_scope"] == "folder" and not inside(item, client["folder_id"]):
             raise HTTPException(403, "File moved outside this client's folder")
     except Exception:
         response.close()

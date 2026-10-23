@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise REST availability errors against an authenticated broker HTTP fixture.
+"""Exercise REST Drive availability and grant reporting against a broker HTTP fixture.
 
 Run in the library image with --network none. Google credentials, PostgreSQL and
 models are unnecessary: both import paths fail before database access.
@@ -23,6 +23,8 @@ async def main() -> dict:
     key = secrets.token_hex(32)
     broker_key = secrets.token_hex(32)
     requests = []
+    whole_drive = False
+    failure_status = 503
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -30,7 +32,13 @@ async def main() -> dict:
                 self.send_error(401)
                 return
             requests.append(self.path)
-            self.send_response(503)
+            if whole_drive and self.path == '/v1/status':
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"authorized":true,"access_scope":"drive","read_only":true,"folder_id":null}')
+                return
+            self.send_response(failure_status)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(b'{"detail":"Synthetic upstream service unavailable"}')
@@ -73,14 +81,38 @@ async def main() -> dict:
                 assert 'temporarily unavailable' in detail, f'{label} error must explain availability'
                 assert 'restricted' in detail, f'{label} error must preserve private sharing'
                 assert 'anyone with the link' not in detail, f'{label} error must not ask for public sharing'
-        assert requests == ['/v1/files', '/v1/status'], (
-            'Both cases must reach the authenticated external broker fixture'
-        )
+            assert requests == ['/v1/files/synthetic_unavailable_file', '/v1/status'], (
+                'Both cases must reach the authenticated external broker fixture'
+            )
+            for failure_status, explanation in ((403, 'authorized scope'), (404, 'authorized scope'),
+                                                (400, 'supported downloadable document'), (413, 'size limit')):
+                response = await client.post('/v1/import/url', json={
+                    'url': 'https://drive.google.com/file/d/synthetic_unavailable_file/view',
+                    'title': 'Synthetic inaccessible Drive file',
+                })
+                assert response.status_code == 400, 'A rejected file must explain the next action instead of retrying'
+                detail = response.json()['detail'].lower()
+                assert explanation in detail and 'restricted' in detail
+            whole_drive = True
+            response = await client.get('/v1/drive/status')
+            assert response.status_code == 200
+            state = response.json()
+            assert state['authorized'] is True and state['access_scope'] == 'drive' and state['read_only'] is True
+            response = await client.post('/v1/import/url', json={
+                'url': 'https://drive.google.com/drive/folders/synthetic_unavailable_folder',
+                'title': 'Synthetic whole-Drive folder import',
+            })
+            assert response.status_code == 400, 'A folder link must not queue an entire-Drive synchronization'
+            assert 'file link' in response.json()['detail']
         return {
             'passed': True,
             'checks': [
                 'private_file_broker_unavailable_is_actionable_503',
                 'private_folder_broker_unavailable_is_actionable_503',
+                'inaccessible_private_file_is_actionable_400',
+                'unsupported_and_oversized_file_are_actionable_400',
+                'whole_drive_readonly_grant_reported',
+                'whole_drive_folder_link_does_not_queue_mass_import',
             ],
             'wall_seconds': round(time.monotonic() - started, 3),
         }

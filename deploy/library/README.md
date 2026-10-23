@@ -27,7 +27,8 @@ and Docling services. The deployment script never changes either service.
   index. It shares the tenant's original/extraction volume and model cache with
   the API. The worker's job state persists in PostgreSQL.
 - The Google Drive broker is a separate integration. Its customer-specific key
-  limits access to the configured folder; the library receives no general Drive
+  limits access to the operator-authorized folder or, with an explicit grant,
+  the entire connected Drive. The library receives no general Drive
   OAuth credential. A pending OAuth connection must be reported as pending rather
   than as a successful synchronization.
 
@@ -163,21 +164,32 @@ database in PostgreSQL.
 
 ## Use the library
 
-Put large books in the assigned Drive folder, then ask OpenClaw to synchronize
+Check `biblioteca_status` for the authorized Drive scope. Put large books in the
+assigned folder, or use files accessible to the connected account when the operator
+has explicitly granted the entire Drive. Then ask OpenClaw to synchronize
 the library and report ingestion jobs. Synchronization is on demand; this
 deployment does not install a polling schedule. The current original-file limit
 is 512 MiB. Chat attachment limits are a separate transport contract.
 
 Pasting a Google Drive file link into `biblioteca_importar_url` uses the same
-authorized folder API, including files in its subfolders. Files remain
+authorized Drive API, including files in authorized subfolders. Files remain
 Restricted; no browser login or public sharing is required. A link to the
 assigned root folder queues synchronization. Links outside that scope are
 rejected before queueing, and ordinary public document URLs retain their public
 download path. Poll the returned job and document status before reporting that
-an import is complete. A broker or Google connection failure returns an
+an import is complete. An entire-Drive grant permits individual file links anywhere
+in the connected account's accessible inventory. For that grant, folder links return
+instructions to use a file link or explicitly request an entire-Drive synchronization;
+they never silently trigger a mass import. Granting access alone queues no jobs.
+A broker or Google connection failure returns an
 actionable HTTP 503 response, distinct from an out-of-scope link. Retry through
 the private connection; if the failure persists, the operator should check that
 connection. Changing file sharing is not a recovery step.
+
+Individual file links use direct authorized metadata lookup, so they continue to
+work when the connected Drive exceeds the broker's full-inventory limit (20,000
+items by default). A partial selection never retires unrelated library sources.
+Full synchronization still requires a complete inventory within that limit.
 
 For an opt-in live routing regression, run
 `python3 tests/drive_link_contract.py --config /private/proof-config.json` against
@@ -191,6 +203,12 @@ The offline `tests/drive_unavailable_contract.py` regression exercises file and
 folder imports through the authenticated ASGI app with a loopback broker that
 returns HTTP 503. Run it in the library image with `--network none`; it needs no
 Google credentials, PostgreSQL or model downloads.
+
+`tests/drive_selection_contract.py` verifies individual imports and full-inventory
+reconciliation through the REST API, an authenticated local broker fixture and
+real PostgreSQL. Point `DATABASE_URL` at a dedicated database named
+`library_scope_test_<suffix>`; other database names are refused. It creates and
+removes its own schema and uses no Google credentials or downloaded models.
 
 If conversion fails after an original was saved, inspect Docling task history
 for out-of-memory exits before retrying. Size its memory from the real book,

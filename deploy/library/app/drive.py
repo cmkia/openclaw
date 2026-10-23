@@ -24,7 +24,7 @@ def parse_link(url: str) -> tuple[str, str] | None:
     if parts.hostname not in ('drive.google.com', 'docs.google.com'):
         return None
     if parts.scheme != 'https' or parts.username or parts.password or parts.port not in (None, 443):
-        raise ValueError('Use a standard HTTPS Google Drive link for the connected private folder')
+        raise ValueError('Use a standard HTTPS Google Drive link for the connected private Drive')
     kind = 'file'
     path = parts.path.rstrip('/')
     if parts.hostname == 'drive.google.com':
@@ -64,7 +64,7 @@ def status() -> dict:
             response.raise_for_status()
             data = response.json()
         # Admin authorization URLs and OAuth credentials never enter agent results.
-        return {key: data[key] for key in ('authorized','folder_id','account','status') if key in data}
+        return {key: data[key] for key in ('authorized','folder_id','account','status','access_scope','read_only') if key in data}
     except httpx.HTTPError:
         return {'authorized': False, 'status': 'broker_unavailable_or_pending_authorization'}
 
@@ -73,20 +73,23 @@ def synchronize(job_id=None, lease_owner: str | None = None, *, requested_file_i
                 title: str = '', edition: str = '') -> dict:
     try:
         with client() as broker:
-            response = broker.get('/v1/files')
+            response = broker.get(f'/v1/files/{requested_file_id}' if requested_file_id else '/v1/files')
+            if requested_file_id and response.status_code in (403, 404):
+                raise ValueError('The Drive file is outside the authorized scope or unavailable to its connected account. '
+                                 'Check the connected account and its authorized scope; keep sharing restricted.')
+            if requested_file_id and response.status_code == 400:
+                raise ValueError('The Drive link does not identify a supported downloadable document. '
+                                 'Use a direct file link, not a folder or shortcut; keep sharing restricted.')
+            if requested_file_id and response.status_code == 413:
+                raise ValueError('The Drive file exceeds the authorized broker import size limit. '
+                                 'Choose a smaller supported document; keep sharing restricted.')
             response.raise_for_status()
             inventory = response.json()
     except httpx.HTTPError:
         raise DriveUnavailableError(UNAVAILABLE_MESSAGE) from None
-    if inventory.get('complete') is not True:
+    if not requested_file_id and inventory.get('complete') is not True:
         raise ValueError('Drive inventory is incomplete; availability was not changed')
-    files = inventory.get('files', [])
-    active_keys = ['drive:' + item['id'] for item in files]
-    if requested_file_id:
-        files = [item for item in files if item['id'] == requested_file_id]
-        if not files:
-            raise ValueError('The Drive file is outside the authorized client folder or unavailable to its connected account. '
-                             'Place it in the authorized folder and synchronize; keep sharing restricted.')
+    files = [inventory['file']] if requested_file_id else inventory.get('files', [])
     queued = 0
     selected = None
     with db.connect() as conn:
@@ -128,14 +131,16 @@ def synchronize(job_id=None, lease_owner: str | None = None, *, requested_file_i
             if requested_file_id:
                 selected = {**inflight, 'job_id': inflight['id'], 'duplicate': duplicate}
                 selected.pop('id')
-        # A changed or deleted source stops serving stale evidence immediately after a complete listing.
-        conn.execute("UPDATE library_sources SET active=false,updated_at=now() WHERE provider='drive' AND NOT(source_key=ANY(%s::text[]))",
-                     (active_keys,))
         if not requested_file_id:
+            # Only a complete inventory can retire sources missing from the Drive.
+            active_keys = ['drive:' + item['id'] for item in files]
+            conn.execute("UPDATE library_sources SET active=false,updated_at=now() WHERE provider='drive' AND NOT(source_key=ANY(%s::text[]))",
+                         (active_keys,))
             conn.execute("""INSERT INTO library_settings(key,value) VALUES('drive_last_sync',%s)
               ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()""",
                          (Jsonb({'file_count': len(files), 'jobs_queued': queued}),))
-    return {'file_count': len(files), 'jobs_queued': queued, 'complete': True, **(selected or {})}
+    return {'file_count': len(files), 'jobs_queued': queued,
+            **({'complete': True} if not requested_file_id else {}), **(selected or {})}
 
 
 def import_link(url: str, title: str, edition: str = '') -> dict:
@@ -147,6 +152,9 @@ def import_link(url: str, title: str, edition: str = '') -> dict:
         state = status()
         if not state.get('authorized'):
             raise DriveUnavailableError(UNAVAILABLE_MESSAGE)
+        if state.get('access_scope') == 'drive':
+            raise ValueError('This connection authorizes the entire Drive. Use a file link to import one document, '
+                             'or explicitly synchronize Drive to import the entire authorized inventory. Keep sharing restricted.')
         if identifier != state.get('folder_id'):
             raise ValueError('This is not the configured authorized client folder. Use that folder and keep sharing restricted.')
         from .library import enqueue
