@@ -26,5 +26,8 @@ exec docker exec -i "$container" /bin/sh -ec '
   if [ -r /run/secrets/ads_api_key ]; then
     export ADS_MCP_AUTHORIZATION="Bearer $(cat /run/secrets/ads_api_key)"
   fi
+  if [ -r /run/secrets/calendar_keyring_password ]; then
+    export GOG_KEYRING_PASSWORD="$(cat /run/secrets/calendar_keyring_password)"
+  fi
   exec node dist/index.js "$@"
 ' -- "$@"

@@ -40,10 +40,15 @@ credentials in their existing owner and exposes only scoped read-only MCP
 tools. It is provisioned separately and does not grant new customers access
 to another customer's advertising accounts.
 
-The deployment uses the official stable `2026.10.5` image pinned by digest in
-`provision.py`. The fork adds deployment configuration; it does not rebuild or
-modify the OpenClaw runtime. Review the upstream release and repeat the live
-checks below before changing that pin.
+An optional [Google Calendar integration](../google-calendar/README.md) installs
+the existing `gog` CLI and a Calendar-focused workspace skill. Its separate,
+encrypted token store needs Google consent for Calendar; Drive and Ads access
+does not grant it. Each tenant selects its own account and default calendar.
+
+The base deployment uses the official stable `2026.10.5` image pinned by digest
+in `provision.py`. The Calendar image extends that same runtime with a verified
+`gog` binary; it does not rebuild OpenClaw. Review the upstream release and repeat
+the live checks below before changing the base pin.
 
 ## Requirements
 
